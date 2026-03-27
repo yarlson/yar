@@ -1,0 +1,147 @@
+package checker
+
+import (
+	"strings"
+	"testing"
+
+	"yar/internal/parser"
+)
+
+func TestCheckErrorSugarValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn divide(a i32, b i32) !i32 {
+	if b == 0 {
+		return error.DivideByZero
+	}
+	return a / b
+}
+
+fn write_file(path str, data str) !void {
+	return
+}
+
+fn log_error(err error) void {
+	return
+}
+
+fn main() !i32 {
+	x := divide(10, 2)?
+	write_file("out.txt", "ok")?
+	y := divide(10, 2) or |err| {
+		log_error(err)
+		return 0
+	}
+	return x + y
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckErrorSugarInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "propagate non error",
+			src: `
+package main
+
+fn main() i32 {
+	x := 1?
+	return x
+}
+`,
+			substr: "? requires an errorable expression or error value",
+		},
+		{
+			name: "handle non error",
+			src: `
+package main
+
+fn main() i32 {
+	x := 1 or |err| {
+		return 0
+	}
+	return x
+}
+`,
+			substr: "or requires an errorable expression or error value",
+		},
+		{
+			name: "propagate in non error function",
+			src: `
+package main
+
+fn divide(a i32, b i32) !i32 {
+	return a / b
+}
+
+fn main() i32 {
+	x := divide(10, 2)?
+	return x
+}
+`,
+			substr: "cannot use ? in a function that cannot return an error",
+		},
+		{
+			name: "handler name escapes scope",
+			src: `
+package main
+
+fn divide(a i32, b i32) !i32 {
+	return a / b
+}
+
+fn main() i32 {
+	x := divide(10, 2) or |err| {
+		return 0
+	}
+	print_int(err)
+	return x
+}
+`,
+			substr: "unknown local \"err\"",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}

@@ -6,7 +6,7 @@
 - an LLVM IR backend
 - a tiny C runtime for builtins
 
-Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`, `let`, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, direct error propagation with `return`, and `error.Name`.
+Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`/`error`, `:=` declarations, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, plain `error` values, `?` propagation sugar, `or |err| { ... }` local error handling, and `error.Name`.
 
 ## Status
 
@@ -16,6 +16,7 @@ This is v0 work. The compiler can already:
 - emit LLVM IR text
 - link an executable with `clang`
 - run the produced binary
+- lower `?` and `or |err| { ... }` into explicit error checks and control flow
 
 ## Requirements
 
@@ -102,12 +103,15 @@ This builds to a temporary executable and runs it immediately.
 ```yar
 package main
 
-fn divide(a i32, b i32) i32 {
+fn divide(a i32, b i32) !i32 {
+    if b == 0 {
+        return error.DivideByZero
+    }
     return a / b
 }
 
-fn main() i32 {
-    let x = divide(10, 2)
+fn main() !i32 {
+    x := divide(10, 2)?
     print_int(x)
     print("\n")
     return 0
@@ -144,6 +148,30 @@ clang -Wno-override-module hello.ll runtime.c -o hello
 
 That is effectively what `yar build` automates.
 
+## Error Handling
+
+`yar` keeps errors as explicit values. There are no exceptions or hidden unwinding semantics.
+
+- `!T` means a function returns either a `T` or an error code.
+- `error` is a plain builtin type for named errors and handler bindings.
+- `?` means "propagate this error from the current function".
+- `or |err| { ... }` means "handle this error here".
+
+Examples:
+
+```yar
+x := divide(10, 2)?
+
+write_file(path, data)?
+
+x := divide(10, 2) or |err| {
+    print("divide failed\n")
+    return 0
+}
+```
+
+These forms are syntax sugar. The compiler lowers them into explicit temporaries, error checks, branches, and returns.
+
 ## How Builtins Work
 
 The current builtins are:
@@ -164,13 +192,14 @@ Those functions are implemented in the runtime C source.
 
 - [cmd/yar/main.go](cmd/yar/main.go): CLI entrypoint
 - [internal/compiler/compiler.go](internal/compiler/compiler.go): compile, build, and run orchestration
+- [internal/lexer/lexer.go](internal/lexer/lexer.go): tokenization
 - [internal/parser/parser.go](internal/parser/parser.go): parser
 - [internal/checker/checker.go](internal/checker/checker.go): semantic analysis and type checking
 - [internal/codegen/llvm.go](internal/codegen/llvm.go): LLVM IR generation
 - [internal/runtime/runtime_source.txt](internal/runtime/runtime_source.txt): tiny runtime source used during linking
 - [testdata/hello.yar](testdata/hello.yar): hello world example
 - [testdata/add.yar](testdata/add.yar): arithmetic example
-- [testdata/divide.yar](testdata/divide.yar): arithmetic example
+- [testdata/divide.yar](testdata/divide.yar): error propagation example
 
 ## Verify The Repository
 

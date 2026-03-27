@@ -189,6 +189,8 @@ func (g *Generator) llvmType(typ checker.Type) string {
 		return "i64"
 	case checker.TypeStr:
 		return "%yar.str"
+	case checker.TypeError:
+		return "i32"
 	default:
 		panic("unsupported type: " + typ)
 	}
@@ -326,8 +328,18 @@ func (f *functionEmitter) emit() string {
 }
 
 func (f *functionEmitter) genBlock(block *ast.BlockStmt) {
+	f.genBlockWithErrorBinding(block, "", "")
+}
+
+func (f *functionEmitter) genBlockWithErrorBinding(block *ast.BlockStmt, name, code string) {
 	f.pushScope()
 	defer f.popScope()
+	if name != "" {
+		slot := f.newTemp("slot")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", slot)
+		fmt.Fprintf(&f.builder, "  store i32 %s, ptr %%%s\n", code, slot)
+		f.bindLocal(name, localSlot{typ: checker.TypeError, ptr: "%" + slot})
+	}
 	for _, stmt := range block.Stmts {
 		if f.terminated {
 			return
@@ -412,6 +424,13 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 		return
 	}
 
+	if errLit, ok := stmt.Value.(*ast.ErrorLiteral); ok {
+		code := f.g.info.ErrorCodes[errLit.Name]
+		fmt.Fprintf(&f.builder, "  ret i32 %d\n", code)
+		f.terminated = true
+		return
+	}
+
 	value := f.genExpression(stmt.Value)
 	fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.llvmType(value.typ), value.ref)
 	f.terminated = true
@@ -444,6 +463,10 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.emitStringValue(e.Value)
 	case *ast.GroupExpr:
 		return f.genExpression(e.Inner)
+	case *ast.PropagateExpr:
+		return f.genPropagate(e)
+	case *ast.HandleExpr:
+		return f.genHandle(e)
 	case *ast.BinaryExpr:
 		return f.genBinary(e)
 	case *ast.CallExpr:
@@ -451,6 +474,108 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
 	}
+}
+
+func (f *functionEmitter) genPropagate(expr *ast.PropagateExpr) exprValue {
+	innerType := f.exprInfo(expr.Inner)
+	if innerType.Errorable {
+		result := f.genExpression(expr.Inner)
+		errFlag := f.newTemp("propagate.is_err")
+		errLabel := f.newLabel("propagate.err")
+		okLabel := f.newLabel("propagate.ok")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", errFlag, f.g.resultTypeName(innerType.Base), result.ref)
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, okLabel)
+		f.terminated = true
+
+		errCode := f.newTemp("propagate.err_code")
+		f.emitLabel(errLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(innerType.Base), result.ref)
+		f.emitPropagatedError("%" + errCode)
+
+		f.emitLabel(okLabel)
+		if innerType.Base == checker.TypeVoid {
+			return exprValue{typ: checker.TypeVoid}
+		}
+		success := f.newTemp("propagate.value")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", success, f.g.resultTypeName(innerType.Base), result.ref)
+		return exprValue{ref: "%" + success, typ: innerType.Base}
+	}
+
+	errValue := f.genExpression(expr.Inner)
+	isErr := f.newTemp("propagate.is_err")
+	errLabel := f.newLabel("propagate.err")
+	okLabel := f.newLabel("propagate.ok")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %s, 0\n", isErr, errValue.ref)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isErr, errLabel, okLabel)
+	f.terminated = true
+
+	f.emitLabel(errLabel)
+	f.emitPropagatedError(errValue.ref)
+
+	f.emitLabel(okLabel)
+	return exprValue{typ: checker.TypeVoid}
+}
+
+func (f *functionEmitter) genHandle(expr *ast.HandleExpr) exprValue {
+	innerType := f.exprInfo(expr.Inner)
+	if innerType.Errorable {
+		result := f.genExpression(expr.Inner)
+		errFlag := f.newTemp("handle.is_err")
+		errLabel := f.newLabel("handle.err")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", errFlag, f.g.resultTypeName(innerType.Base), result.ref)
+		if innerType.Base != checker.TypeVoid {
+			okLabel := f.newLabel("handle.ok")
+			fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, okLabel)
+			f.terminated = true
+
+			errCode := f.newTemp("handle.err_code")
+			f.emitLabel(errLabel)
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(innerType.Base), result.ref)
+			f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, "%"+errCode)
+			if !f.terminated {
+				panic("value handler must terminate")
+			}
+
+			f.emitLabel(okLabel)
+			success := f.newTemp("handle.value")
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", success, f.g.resultTypeName(innerType.Base), result.ref)
+			return exprValue{ref: "%" + success, typ: innerType.Base}
+		}
+
+		continueLabel := f.newLabel("handle.cont")
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, continueLabel)
+		f.terminated = true
+
+		errCode := f.newTemp("handle.err_code")
+		f.emitLabel(errLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(innerType.Base), result.ref)
+		f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, "%"+errCode)
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", continueLabel)
+			f.terminated = true
+		}
+
+		f.emitLabel(continueLabel)
+		return exprValue{typ: checker.TypeVoid}
+	}
+
+	errValue := f.genExpression(expr.Inner)
+	isErr := f.newTemp("handle.is_err")
+	errLabel := f.newLabel("handle.err")
+	continueLabel := f.newLabel("handle.cont")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %s, 0\n", isErr, errValue.ref)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isErr, errLabel, continueLabel)
+	f.terminated = true
+
+	f.emitLabel(errLabel)
+	f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, errValue.ref)
+	if !f.terminated {
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", continueLabel)
+		f.terminated = true
+	}
+
+	f.emitLabel(continueLabel)
+	return exprValue{typ: checker.TypeVoid}
 }
 
 func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
@@ -604,6 +729,8 @@ func zeroValue(typ checker.Type) string {
 		return "0"
 	case checker.TypeI64:
 		return "0"
+	case checker.TypeError:
+		return "0"
 	case checker.TypeStr:
 		return "zeroinitializer"
 	default:
@@ -612,11 +739,15 @@ func zeroValue(typ checker.Type) string {
 }
 
 func (f *functionEmitter) exprType(expr ast.Expression) checker.Type {
+	return f.exprInfo(expr).Base
+}
+
+func (f *functionEmitter) exprInfo(expr ast.Expression) checker.ExprType {
 	exprType, ok := f.g.info.ExprTypes[expr]
 	if !ok {
-		return checker.TypeInvalid
+		return checker.ExprType{Base: checker.TypeInvalid}
 	}
-	return exprType.Base
+	return exprType
 }
 
 func (f *functionEmitter) newTemp(prefix string) string {
@@ -655,4 +786,19 @@ func (f *functionEmitter) lookupLocal(name string) (localSlot, bool) {
 		}
 	}
 	return localSlot{}, false
+}
+
+func (f *functionEmitter) emitPropagatedError(code string) {
+	if f.sig.Errorable {
+		result := f.emitErrorCodeResult(f.sig.Return, code)
+		fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), result)
+		f.terminated = true
+		return
+	}
+	if f.sig.Return == checker.TypeError {
+		fmt.Fprintf(&f.builder, "  ret i32 %s\n", code)
+		f.terminated = true
+		return
+	}
+	panic("propagation requires an error-capable return")
 }

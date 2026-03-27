@@ -10,7 +10,7 @@
 - `internal/compiler` orchestrates parse, semantic check, IR generation, external linking, and process execution.
 - `internal/parser` and `internal/lexer` turn source text into an AST and diagnostics.
 - `internal/checker` owns semantic validation, local scope tracking, type inference for integer literals, builtin signatures, and error-code assignment.
-- `internal/codegen` lowers the checked AST into textual LLVM IR and synthesizes the native `main` wrapper.
+- `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, and synthesizes the native `main` wrapper.
 - `internal/runtime` embeds the small C runtime source that provides builtin I/O and panic behavior during linking.
 
 ## Core Flow
@@ -24,8 +24,8 @@
 
 - The repository contains one deployable unit: the `yar` CLI compiler.
 - Programs are single-file `package main` sources with top-level function declarations.
-- The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, and `noreturn`.
-- The language supports `let`, assignment, `if`, `return`, function calls, integer and boolean comparisons, string literals, explicit `error.Name` returns, and direct propagation of matching errorable calls with `return`.
+- The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, and `error`.
+- The language supports `:=` declarations, assignment, `if`, `return`, function calls, integer and boolean comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
 - Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, and `panic(str)`.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
@@ -34,7 +34,8 @@
 - Parse and type-check source programs and surface source-positioned diagnostics.
 - Emit textual LLVM IR without building a native executable.
 - Build and run native executables backed by an embedded runtime C source.
-- Propagate matching errorable returns explicitly with `return`.
+- Propagate errors with direct `return` or postfix `?`.
+- Handle errors locally with `or |err| { ... }`.
 - Support integer arithmetic and comparisons across `i32`, `i64`, and inferred integer literals.
 
 ## Tech Stack

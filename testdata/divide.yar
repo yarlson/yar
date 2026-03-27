@@ -5,7 +5,7 @@ fn divide(a i32, b i32) i32 {
 }
 
 fn main() i32 {
-    let x = divide(10, 2)
+    x := divide(10, 2)
     print_int(x)
     print("\n")
     return 0

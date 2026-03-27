@@ -208,3 +208,28 @@ func (e *GroupExpr) Pos() token.Position {
 }
 
 func (*GroupExpr) exprNode() {}
+
+type PropagateExpr struct {
+	Inner       Expression
+	QuestionPos token.Position
+}
+
+func (e *PropagateExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*PropagateExpr) exprNode() {}
+
+type HandleExpr struct {
+	Inner   Expression
+	OrPos   token.Position
+	ErrName string
+	ErrPos  token.Position
+	Handler *BlockStmt
+}
+
+func (e *HandleExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*HandleExpr) exprNode() {}

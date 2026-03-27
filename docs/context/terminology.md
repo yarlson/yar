@@ -10,9 +10,15 @@ diagnostic — A source-positioned parse or semantic problem returned alongside 
 
 errorable function — A function declared with `!` before its return type, such as `!i32` or `!void`.
 
+error value — A value of builtin type `error`, typically introduced by returning `error.Name` or by the binder in an `or |err| { ... }` handler.
+
 error code — The integer representation assigned to each distinct returned `error.Name` value during code generation.
 
 result type — The generated LLVM struct used to represent an errorable return, carrying an error flag, an error code, and optionally a success value.
+
+propagation sugar — Postfix `?`, which checks an error-producing expression and returns from the current function when the error is non-nil.
+
+handler sugar — `or |err| { ... }`, which checks an error-producing expression and runs a local handler block when the error is non-nil.
 
 direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
 

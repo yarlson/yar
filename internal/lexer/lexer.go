@@ -53,6 +53,13 @@ func (l *Lexer) Lex() []token.Token {
 		default:
 			l.advanceWidth(width)
 			switch r {
+			case ':':
+				if l.matchRune('=') {
+					tokens = append(tokens, token.Token{Kind: token.ColonAssign, Text: ":=", Pos: pos})
+				} else {
+					l.diag.Add(pos, "unexpected character %q", r)
+					tokens = append(tokens, token.Token{Kind: token.Illegal, Text: string(r), Pos: pos})
+				}
 			case '=':
 				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.EqualEqual, Text: "==", Pos: pos})
@@ -65,6 +72,8 @@ func (l *Lexer) Lex() []token.Token {
 				} else {
 					tokens = append(tokens, token.Token{Kind: token.Bang, Text: "!", Pos: pos})
 				}
+			case '?':
+				tokens = append(tokens, token.Token{Kind: token.Question, Text: "?", Pos: pos})
 			case ',':
 				tokens = append(tokens, token.Token{Kind: token.Comma, Text: ",", Pos: pos})
 			case '.':
@@ -77,6 +86,8 @@ func (l *Lexer) Lex() []token.Token {
 				tokens = append(tokens, token.Token{Kind: token.LBrace, Text: "{", Pos: pos})
 			case '}':
 				tokens = append(tokens, token.Token{Kind: token.RBrace, Text: "}", Pos: pos})
+			case '|':
+				tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
 			case '+':
 				tokens = append(tokens, token.Token{Kind: token.Plus, Text: "+", Pos: pos})
 			case '-':
@@ -193,11 +204,15 @@ func (l *Lexer) lexString(pos token.Position) string {
 }
 
 func (l *Lexer) matchEquals() bool {
+	return l.matchRune('=')
+}
+
+func (l *Lexer) matchRune(want rune) bool {
 	if l.offset >= len(l.src) {
 		return false
 	}
 	r, width := utf8.DecodeRuneInString(l.src[l.offset:])
-	if r != '=' {
+	if r != want {
 		return false
 	}
 	l.advanceWidth(width)
@@ -242,6 +257,8 @@ func lookupKeyword(text string) token.Kind {
 		return token.Fn
 	case "let":
 		return token.Let
+	case "or":
+		return token.Or
 	case "if":
 		return token.If
 	case "return":

@@ -10,7 +10,7 @@
 
 - [domains/compiler-pipeline.md](domains/compiler-pipeline.md) — Internal stage boundaries and package responsibilities.
 - [domains/language-slice.md](domains/language-slice.md) — Supported source-level constructs, types, and semantic limits.
-- [domains/error-model.md](domains/error-model.md) — Errorable returns, direct propagation, and unhandled-error behavior.
+- [domains/error-model.md](domains/error-model.md) — Error values, propagation sugar, local handling sugar, and unhandled-error behavior.
 
 ## Flows
 

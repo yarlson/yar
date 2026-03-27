@@ -13,13 +13,16 @@ const (
 	String
 
 	Assign
+	ColonAssign
 	Bang
+	Question
 	Comma
 	Dot
 	LParen
 	RParen
 	LBrace
 	RBrace
+	Pipe
 	Plus
 	Minus
 	Star
@@ -34,6 +37,7 @@ const (
 	Package
 	Fn
 	Let
+	Or
 	If
 	Return
 	True
@@ -55,8 +59,12 @@ func (k Kind) String() string {
 		return "string"
 	case Assign:
 		return "="
+	case ColonAssign:
+		return ":="
 	case Bang:
 		return "!"
+	case Question:
+		return "?"
 	case Comma:
 		return ","
 	case Dot:
@@ -69,6 +77,8 @@ func (k Kind) String() string {
 		return "{"
 	case RBrace:
 		return "}"
+	case Pipe:
+		return "|"
 	case Plus:
 		return "+"
 	case Minus:
@@ -95,6 +105,8 @@ func (k Kind) String() string {
 		return "fn"
 	case Let:
 		return "let"
+	case Or:
+		return "or"
 	case If:
 		return "if"
 	case Return:

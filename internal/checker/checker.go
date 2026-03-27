@@ -118,6 +118,9 @@ func (c *Checker) checkProgram(program *ast.Program) {
 		if sig.Return == TypeNoReturn && sig.Errorable {
 			c.diag.Add(fn.Return.Pos, "noreturn functions cannot also be errorable")
 		}
+		if sig.Return == TypeError && sig.Errorable {
+			c.diag.Add(fn.Return.Pos, "error functions cannot also be errorable")
+		}
 		for _, param := range fn.Params {
 			sig.Params = append(sig.Params, c.resolveTypeRef(param.Type))
 		}
@@ -207,7 +210,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			return
 		}
 		if value.Base == TypeInvalid || value.Base == TypeVoid || value.Base == TypeNoReturn {
-			c.diag.Add(s.Value.Pos(), "let binding requires a value")
+			c.diag.Add(s.Value.Pos(), "declaration requires a value")
 			return
 		}
 		if value.Base == TypeUntypedInt {
@@ -282,8 +285,8 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 	}
 
 	if errLit, ok := stmt.Value.(*ast.ErrorLiteral); ok {
-		if !sig.Errorable {
-			c.diag.Add(errLit.Pos(), "cannot return %s from non-errorable function", formatErrorName(errLit.Name))
+		if !sig.Errorable && sig.Return != TypeError {
+			c.diag.Add(errLit.Pos(), "cannot return %s from function returning %s", formatErrorName(errLit.Name), sig.Return)
 			return
 		}
 		c.useErrorName(errLit.Name)
@@ -342,6 +345,10 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		et := c.checkExpression(e.Inner)
 		c.info.ExprTypes[expr] = et
 		return et
+	case *ast.PropagateExpr:
+		return c.checkPropagate(expr, e)
+	case *ast.HandleExpr:
+		return c.checkHandle(expr, e)
 	case *ast.BinaryExpr:
 		return c.checkBinary(expr, e)
 	case *ast.CallExpr:
@@ -434,7 +441,7 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 
 func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch Type(ref.Name) {
-	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr:
+	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr, TypeError:
 		return Type(ref.Name)
 	default:
 		c.diag.Add(ref.Pos, "unknown type %q", ref.Name)
@@ -495,6 +502,58 @@ func (c *Checker) stmtDefinitelyTerminates(stmt ast.Statement) bool {
 		return ok && exprType.Base == TypeNoReturn
 	default:
 		return false
+	}
+}
+
+func (c *Checker) checkPropagate(expr ast.Expression, propagate *ast.PropagateExpr) ExprType {
+	inner := c.checkExpression(propagate.Inner)
+	if inner.Errorable {
+		if !c.currentCanPropagateError() {
+			c.diag.Add(propagate.QuestionPos, "cannot use ? in a function that cannot return an error")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: inner.Base}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if inner.Base == TypeError {
+		if !c.currentCanPropagateError() {
+			c.diag.Add(propagate.QuestionPos, "cannot use ? in a function that cannot return an error")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeVoid}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	c.diag.Add(propagate.QuestionPos, "? requires an errorable expression or error value")
+	return ExprType{Base: TypeInvalid}
+}
+
+func (c *Checker) checkHandle(expr ast.Expression, handle *ast.HandleExpr) ExprType {
+	inner := c.checkExpression(handle.Inner)
+	switch {
+	case inner.Errorable && inner.Base != TypeVoid:
+		c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
+		if !c.blockDefinitelyTerminates(handle.Handler) {
+			c.diag.Add(handle.OrPos, "or handler for a value result must terminate control flow")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: inner.Base}
+		c.info.ExprTypes[expr] = et
+		return et
+	case inner.Errorable:
+		c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
+		et := ExprType{Base: TypeVoid}
+		c.info.ExprTypes[expr] = et
+		return et
+	case inner.Base == TypeError:
+		c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
+		et := ExprType{Base: TypeVoid}
+		c.info.ExprTypes[expr] = et
+		return et
+	default:
+		c.diag.Add(handle.OrPos, "or requires an errorable expression or error value")
+		return ExprType{Base: TypeInvalid}
 	}
 }
 
@@ -605,4 +664,20 @@ func (c *Checker) defaultUntypedIntegerType(expr ast.Expression) Type {
 	default:
 		return TypeInvalid
 	}
+}
+
+func (c *Checker) checkBlockWithErrorBinding(block *ast.BlockStmt, name string) {
+	c.pushScope()
+	defer c.popScope()
+	c.bindLocal(name, TypeError)
+	for _, stmt := range block.Stmts {
+		c.checkStatement(stmt)
+	}
+}
+
+func (c *Checker) currentCanPropagateError() bool {
+	if c.current == nil {
+		return false
+	}
+	return c.current.signature.Errorable || c.current.signature.Return == TypeError
 }

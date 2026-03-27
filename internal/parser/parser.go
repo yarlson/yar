@@ -91,7 +91,12 @@ func (p *Parser) parseFunction() *ast.FunctionDecl {
 }
 
 func (p *Parser) parseTypeRef() ast.TypeRef {
-	tok := p.expect(token.Ident, "expected type name")
+	tok := p.current()
+	if tok.Kind != token.Ident && tok.Kind != token.Error {
+		tok = p.expect(token.Ident, "expected type name")
+		return ast.TypeRef{Name: tok.Text, Pos: tok.Pos}
+	}
+	p.advance()
 	return ast.TypeRef{Name: tok.Text, Pos: tok.Pos}
 }
 
@@ -111,7 +116,9 @@ func (p *Parser) parseBlock() *ast.BlockStmt {
 func (p *Parser) parseStatement() ast.Statement {
 	switch p.current().Kind {
 	case token.Let:
-		return p.parseLet()
+		p.errorCurrent("use ':=' for local declarations; 'let' is no longer supported")
+		p.advance()
+		return nil
 	case token.If:
 		return p.parseIf()
 	case token.Return:
@@ -119,6 +126,9 @@ func (p *Parser) parseStatement() ast.Statement {
 	case token.LBrace:
 		return p.parseBlock()
 	case token.Ident:
+		if p.peek().Kind == token.ColonAssign {
+			return p.parseShortDecl()
+		}
 		if p.peek().Kind == token.Assign {
 			return p.parseAssign()
 		}
@@ -132,13 +142,12 @@ func (p *Parser) parseStatement() ast.Statement {
 	}
 }
 
-func (p *Parser) parseLet() ast.Statement {
-	letTok := p.expect(token.Let, "expected let")
+func (p *Parser) parseShortDecl() ast.Statement {
 	nameTok := p.expect(token.Ident, "expected local name")
-	p.expect(token.Assign, "expected '=' in let statement")
+	p.expect(token.ColonAssign, "expected ':=' in declaration")
 	value := p.parseExpression()
 	return &ast.LetStmt{
-		LetPos:  letTok.Pos,
+		LetPos:  nameTok.Pos,
 		Name:    nameTok.Text,
 		NamePos: nameTok.Pos,
 		Value:   value,
@@ -179,7 +188,27 @@ func (p *Parser) parseReturn() ast.Statement {
 }
 
 func (p *Parser) parseExpression() ast.Expression {
-	return p.parseEquality()
+	return p.parseHandle()
+}
+
+func (p *Parser) parseHandle() ast.Expression {
+	expr := p.parseEquality()
+	if !p.at(token.Or) {
+		return expr
+	}
+
+	orTok := p.expect(token.Or, "expected or")
+	p.expect(token.Pipe, "expected '|' after or")
+	errTok := p.expect(token.Ident, "expected handler error name")
+	p.expect(token.Pipe, "expected '|' after handler error name")
+	handler := p.parseBlock()
+	return &ast.HandleExpr{
+		Inner:   expr,
+		OrPos:   orTok.Pos,
+		ErrName: errTok.Text,
+		ErrPos:  errTok.Pos,
+		Handler: handler,
+	}
 }
 
 func (p *Parser) parseEquality() ast.Expression {
@@ -231,16 +260,28 @@ func (p *Parser) parseAdditive() ast.Expression {
 }
 
 func (p *Parser) parseMultiplicative() ast.Expression {
-	expr := p.parsePrimary()
+	expr := p.parsePostfix()
 	for p.at(token.Star) || p.at(token.Slash) {
 		op := p.current()
 		p.advance()
-		right := p.parsePrimary()
+		right := p.parsePostfix()
 		expr = &ast.BinaryExpr{
 			Left:     expr,
 			Operator: op.Kind,
 			OpPos:    op.Pos,
 			Right:    right,
+		}
+	}
+	return expr
+}
+
+func (p *Parser) parsePostfix() ast.Expression {
+	expr := p.parsePrimary()
+	for p.at(token.Question) {
+		questionTok := p.expect(token.Question, "expected '?'")
+		expr = &ast.PropagateExpr{
+			Inner:       expr,
+			QuestionPos: questionTok.Pos,
 		}
 	}
 	return expr
