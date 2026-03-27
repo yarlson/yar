@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"unicode"
 	"unicode/utf8"
-
 	"yar/internal/diag"
 	"yar/internal/token"
 )
@@ -191,14 +190,6 @@ func (l *Lexer) match(expected rune) bool {
 	}
 	l.advanceWidth(width)
 	return true
-}
-
-func (l *Lexer) peekRune() rune {
-	if l.offset >= len(l.src) {
-		return utf8.RuneError
-	}
-	r, _ := utf8.DecodeRuneInString(l.src[l.offset:])
-	return r
 }
 
 func (l *Lexer) peekNextRune(currentWidth int) rune {

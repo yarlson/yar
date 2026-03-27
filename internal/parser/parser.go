@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-
 	"yar/internal/ast"
 	"yar/internal/diag"
 	"yar/internal/lexer"
@@ -22,9 +21,11 @@ func Parse(src string) (*ast.Program, []diag.Diagnostic) {
 	p := &Parser{tokens: tokens}
 	prog := p.parseProgram()
 
-	var diagnostics []diag.Diagnostic
-	diagnostics = append(diagnostics, lex.Diagnostics()...)
-	diagnostics = append(diagnostics, p.diag.Items()...)
+	lexDiagnostics := lex.Diagnostics()
+	parserDiagnostics := p.diag.Items()
+	diagnostics := make([]diag.Diagnostic, 0, len(lexDiagnostics)+len(parserDiagnostics))
+	diagnostics = append(diagnostics, lexDiagnostics...)
+	diagnostics = append(diagnostics, parserDiagnostics...)
 	return prog, diagnostics
 }
 

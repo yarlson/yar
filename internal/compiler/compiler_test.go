@@ -3,6 +3,7 @@ package compiler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,7 +81,8 @@ func TestUnhandledErrorMain(t *testing.T) {
 		t.Fatal("expected non-zero exit status")
 	}
 
-	exitErr, ok := err.(*exec.ExitError)
+	exitErr := &exec.ExitError{}
+	ok := errors.As(err, &exitErr)
 	if !ok {
 		t.Fatalf("expected ExitError, got %T", err)
 	}

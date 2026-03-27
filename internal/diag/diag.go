@@ -3,17 +3,12 @@ package diag
 import (
 	"fmt"
 	"strings"
-
 	"yar/internal/token"
 )
 
 type Diagnostic struct {
 	Pos     token.Position
 	Message string
-}
-
-func (d Diagnostic) Error() string {
-	return fmt.Sprintf("%s: %s", d.Pos, d.Message)
 }
 
 type List struct {

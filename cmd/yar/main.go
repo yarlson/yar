@@ -5,8 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
-
 	"yar/internal/compiler"
 	"yar/internal/diag"
 )
@@ -38,7 +38,7 @@ func run() int {
 }
 
 func runCheck(path string) int {
-	src, err := os.ReadFile(path)
+	src, err := readSourceFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -56,7 +56,7 @@ func runCheck(path string) int {
 }
 
 func runEmitIR(path string) int {
-	src, err := os.ReadFile(path)
+	src, err := readSourceFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -87,7 +87,7 @@ func runBuild(args []string) int {
 			output = args[i+1]
 			i++
 		default:
-			if len(args[i]) > 0 && args[i][0] == '-' {
+			if args[i] != "" && args[i][0] == '-' {
 				fmt.Fprintf(os.Stderr, "unknown build flag %q\n", args[i])
 				return 2
 			}
@@ -102,7 +102,7 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: yar build <file> [-o output]")
 		return 2
 	}
-	src, err := os.ReadFile(path)
+	src, err := readSourceFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -127,7 +127,7 @@ func runBuild(args []string) int {
 }
 
 func runRun(path string) int {
-	src, err := os.ReadFile(path)
+	src, err := readSourceFile(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -158,4 +158,13 @@ func printDiagnostics(path string, diagnostics []diag.Diagnostic) {
 		b.WriteByte('\n')
 	}
 	_, _ = os.Stderr.Write(b.Bytes())
+}
+
+func readSourceFile(path string) ([]byte, error) {
+	cleanPath := filepath.Clean(path)
+	if cleanPath == "." {
+		return nil, fmt.Errorf("source path must name a file")
+	}
+
+	return os.ReadFile(cleanPath)
 }

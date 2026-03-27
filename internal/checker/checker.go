@@ -3,7 +3,6 @@ package checker
 import (
 	"fmt"
 	"sort"
-
 	"yar/internal/ast"
 	"yar/internal/diag"
 	"yar/internal/token"

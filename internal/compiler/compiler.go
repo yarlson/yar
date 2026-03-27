@@ -7,11 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
 	"yar/internal/checker"
 	"yar/internal/codegen"
 	"yar/internal/diag"
 	"yar/internal/parser"
+
 	yarRuntime "yar/internal/runtime"
 )
 
@@ -42,7 +42,7 @@ func Compile(src string) (*Unit, []diag.Diagnostic, error) {
 	}, nil, nil
 }
 
-func Build(ctx context.Context, src string, outputPath string) error {
+func Build(ctx context.Context, src, outputPath string) error {
 	unit, diags, err := Compile(src)
 	if err != nil {
 		return err
@@ -59,10 +59,11 @@ func Build(ctx context.Context, src string, outputPath string) error {
 
 	irPath := filepath.Join(tmpDir, "main.ll")
 	runtimePath := filepath.Join(tmpDir, "runtime.c")
-	if err := os.WriteFile(irPath, []byte(unit.IR), 0o644); err != nil {
+	//nolint:gosec // irPath is derived from an internal temporary directory, not user input.
+	if err := os.WriteFile(irPath, []byte(unit.IR), 0o600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(runtimePath, []byte(yarRuntime.Source()), 0o644); err != nil {
+	if err := os.WriteFile(runtimePath, []byte(yarRuntime.Source()), 0o600); err != nil {
 		return err
 	}
 

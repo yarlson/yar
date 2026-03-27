@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
 	"yar/internal/ast"
 	"yar/internal/checker"
 	"yar/internal/token"
@@ -41,7 +40,7 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	b.WriteString("source_filename = \"yar\"\n\n")
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
 
-	var resultTypes []string
+	resultTypes := make([]string, 0, len(g.usedResultType))
 	for typ := range g.usedResultType {
 		resultTypes = append(resultTypes, string(typ))
 	}
@@ -61,11 +60,7 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 			continue
 		}
 		emitter := newFunctionEmitter(g, fn, sig)
-		def, err := emitter.emit()
-		if err != nil {
-			return "", err
-		}
-		functionIR = append(functionIR, def)
+		functionIR = append(functionIR, emitter.emit())
 	}
 
 	wrapper, err := g.emitMainWrapper()
@@ -214,11 +209,11 @@ func (g *Generator) stringConstant(value string) string {
 	return name
 }
 
-func (g *Generator) stringPointer(global, temp string) (string, int) {
+func (g *Generator) stringPointer(global, temp string) (instruction string, length int) {
 	value := findValueByGlobal(g.stringNames, global)
-	length := len([]byte(value))
-	line := fmt.Sprintf("%%%s = getelementptr inbounds [%d x i8], ptr @%s, i64 0, i64 0", temp, length+1, global)
-	return line, length
+	length = len([]byte(value))
+	instruction = fmt.Sprintf("%%%s = getelementptr inbounds [%d x i8], ptr @%s, i64 0, i64 0", temp, length+1, global)
+	return instruction, length
 }
 
 func findValueByGlobal(index map[string]string, global string) string {
@@ -280,13 +275,13 @@ func newFunctionEmitter(g *Generator, fn *ast.FunctionDecl, sig checker.Signatur
 	}
 }
 
-func (f *functionEmitter) emit() (string, error) {
+func (f *functionEmitter) emit() string {
 	retType := f.g.llvmType(f.sig.Return)
 	if f.sig.Errorable {
 		retType = f.g.resultTypeName(f.sig.Return)
 	}
 
-	var params []string
+	params := make([]string, 0, len(f.fn.Params))
 	for i, param := range f.fn.Params {
 		params = append(params, fmt.Sprintf("%s %%arg%d", f.g.llvmType(f.sig.Params[i]), i))
 		_ = param
@@ -313,7 +308,7 @@ func (f *functionEmitter) emit() (string, error) {
 		}
 	}
 	f.builder.WriteString("}\n")
-	return f.builder.String(), nil
+	return f.builder.String()
 }
 
 func (f *functionEmitter) genBlock(block *ast.BlockStmt) {
