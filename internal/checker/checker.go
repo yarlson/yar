@@ -203,7 +203,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 	case *ast.LetStmt:
 		value := c.checkExpression(s.Value)
 		if value.Errorable {
-			c.diag.Add(s.Value.Pos(), "errorable value must be handled with catch")
+			c.diag.Add(s.Value.Pos(), "errorable value cannot be bound to a local")
 			return
 		}
 		if value.Base == TypeInvalid || value.Base == TypeVoid || value.Base == TypeNoReturn {
@@ -232,7 +232,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		}
 		value := c.checkExpression(s.Value)
 		if value.Errorable {
-			c.diag.Add(s.Value.Pos(), "errorable value must be handled with catch")
+			c.diag.Add(s.Value.Pos(), "errorable value cannot be assigned directly")
 			return
 		}
 		if value.Base == TypeNoReturn {
@@ -257,7 +257,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 	case *ast.ExprStmt:
 		exprType := c.checkExpression(s.Expr)
 		if exprType.Errorable {
-			c.diag.Add(s.Expr.Pos(), "errorable value must be handled with catch")
+			c.diag.Add(s.Expr.Pos(), "errorable value cannot be used as a statement")
 		}
 	default:
 		c.diag.Add(stmt.Pos(), "unsupported statement")
@@ -293,7 +293,10 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 
 	value := c.checkExpression(stmt.Value)
 	if value.Errorable {
-		c.diag.Add(stmt.Value.Pos(), "return cannot use an unhandled errorable value")
+		if sig.Errorable && value.Base == sig.Return {
+			return
+		}
+		c.diag.Add(stmt.Value.Pos(), "return cannot use an errorable value directly")
 		return
 	}
 	if value.Base == TypeNoReturn {
@@ -353,7 +356,7 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		for i, arg := range e.Args {
 			argType := c.checkExpression(arg)
 			if argType.Errorable {
-				c.diag.Add(arg.Pos(), "errorable value must be handled with catch before passing it")
+				c.diag.Add(arg.Pos(), "errorable value cannot be passed as an argument")
 				continue
 			}
 			if argType.Base == TypeNoReturn {
@@ -366,32 +369,6 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 			}
 		}
 		et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
-		c.info.ExprTypes[expr] = et
-		return et
-	case *ast.CatchExpr:
-		targetType := c.checkExpression(e.Target)
-		if !targetType.Errorable {
-			c.diag.Add(e.Target.Pos(), "catch can only handle an errorable expression")
-			return ExprType{Base: TypeInvalid}
-		}
-		c.checkBlock(e.Block)
-		if !c.blockDefinitelyTerminates(e.Block) {
-			c.diag.Add(e.CatchPos, "catch block must return or terminate on all paths")
-		}
-		et := ExprType{Base: targetType.Base}
-		c.info.ExprTypes[expr] = et
-		return et
-	case *ast.TryExpr:
-		if !c.current.signature.Errorable {
-			c.diag.Add(e.TryPos, "try can only be used inside an errorable function")
-			return ExprType{Base: TypeInvalid}
-		}
-		targetType := c.checkExpression(e.Target)
-		if !targetType.Errorable {
-			c.diag.Add(e.Target.Pos(), "try can only be used with an errorable expression")
-			return ExprType{Base: TypeInvalid}
-		}
-		et := ExprType{Base: targetType.Base}
 		c.info.ExprTypes[expr] = et
 		return et
 	default:

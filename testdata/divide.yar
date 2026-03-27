@@ -1,18 +1,11 @@
 package main
 
-fn divide(a i32, b i32) !i32 {
-    if b == 0 {
-        return error.DivByZero
-    }
+fn divide(a i32, b i32) i32 {
     return a / b
 }
 
 fn main() i32 {
-    let x = divide(10, 2) catch {
-        print("division failed\n")
-        return 1
-    }
-
+    let x = divide(10, 2)
     print_int(x)
     print("\n")
     return 0

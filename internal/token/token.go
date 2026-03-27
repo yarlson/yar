@@ -39,7 +39,6 @@ const (
 	True
 	False
 	Error
-	Try
 )
 
 func (k Kind) String() string {
@@ -106,8 +105,6 @@ func (k Kind) String() string {
 		return "false"
 	case Error:
 		return "error"
-	case Try:
-		return "try"
 	default:
 		return fmt.Sprintf("token(%d)", k)
 	}

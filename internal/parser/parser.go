@@ -179,25 +179,7 @@ func (p *Parser) parseReturn() ast.Statement {
 }
 
 func (p *Parser) parseExpression() ast.Expression {
-	return p.parseCatch()
-}
-
-func (p *Parser) parseCatch() ast.Expression {
-	expr := p.parseEquality()
-	if expr == nil {
-		return nil
-	}
-	if !p.at(token.Ident) || p.current().Text != "catch" {
-		return expr
-	}
-	catchTok := p.current()
-	p.advance()
-	block := p.parseBlock()
-	return &ast.CatchExpr{
-		Target:   expr,
-		CatchPos: catchTok.Pos,
-		Block:    block,
-	}
+	return p.parseEquality()
 }
 
 func (p *Parser) parseEquality() ast.Expression {
@@ -267,12 +249,6 @@ func (p *Parser) parseMultiplicative() ast.Expression {
 func (p *Parser) parsePrimary() ast.Expression {
 	tok := p.current()
 	switch tok.Kind {
-	case token.Try:
-		p.advance()
-		return &ast.TryExpr{
-			TryPos: tok.Pos,
-			Target: p.parsePrimary(),
-		}
 	case token.Ident:
 		p.advance()
 		if p.at(token.LParen) {

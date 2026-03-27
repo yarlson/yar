@@ -6,9 +6,8 @@
 - Source programs must declare `package main`.
 - A user-defined `main` function is required, and it must return `i32` or `!i32`.
 - Local variables are introduced with `let`, scoped by blocks, and may be reassigned only after declaration.
-- Errorable values cannot be used implicitly. They must be handled with `catch` or propagated with `try` before assignment, argument passing, arithmetic, conditionals, or ordinary returns.
-- `catch` is only valid on an errorable expression, and its block must terminate on every path.
-- `try` is only valid inside an errorable function and only on an errorable expression.
+- Errorable values cannot be bound, assigned, passed as arguments, used in conditions, or used in arithmetic.
+- Errorable values may only leave a function through an explicit `return` from a function with the same errorable result type.
 - Error names are collected across the program, sorted lexicographically, and then mapped to integer codes for the generated IR and native `main` wrapper.
 - Builtins are compiler-owned contracts, not user-overridable functions.
 - The runtime C source is embedded in the Go binary and materialized into a temporary file during native builds.

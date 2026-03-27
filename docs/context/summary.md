@@ -25,7 +25,7 @@
 - The repository contains one deployable unit: the `yar` CLI compiler.
 - Programs are single-file `package main` sources with top-level function declarations.
 - The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, and `noreturn`.
-- The language supports `let`, assignment, `if`, `return`, function calls, integer and boolean comparisons, string literals, explicit `error.Name` returns, `catch`, and `try`.
+- The language supports `let`, assignment, `if`, `return`, function calls, integer and boolean comparisons, string literals, explicit `error.Name` returns, and direct propagation of matching errorable calls with `return`.
 - Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, and `panic(str)`.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
@@ -34,7 +34,7 @@
 - Parse and type-check source programs and surface source-positioned diagnostics.
 - Emit textual LLVM IR without building a native executable.
 - Build and run native executables backed by an embedded runtime C source.
-- Propagate or handle errorable returns through `!T`, `try`, and `catch`.
+- Propagate matching errorable returns explicitly with `return`.
 - Support integer arithmetic and comparisons across `i32`, `i64`, and inferred integer literals.
 
 ## Tech Stack
@@ -43,4 +43,4 @@
 - Textual LLVM IR generation
 - External `clang` invocation for compile and link
 - Embedded C runtime source for builtin functions
-- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `try`, and `i64` programs
+- Go tests that validate compilation, executable output, panic behavior, unhandled errors, and `i64` programs

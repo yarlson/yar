@@ -14,9 +14,7 @@ error code — The integer representation assigned to each distinct returned `er
 
 result type — The generated LLVM struct used to represent an errorable return, carrying an error flag, an error code, and optionally a success value.
 
-catch — An expression form that unwraps an errorable expression and requires its block to terminate on every path.
-
-try — An expression form that unwraps an errorable expression inside another errorable function and propagates the error code on failure.
+direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
 
 builtin — A function signature hard-coded in the checker and lowered specially in code generation: `print`, `print_int`, or `panic`.
 

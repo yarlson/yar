@@ -6,7 +6,7 @@
 - an LLVM IR backend
 - a tiny C runtime for builtins
 
-Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`, `let`, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, `error.Name`, `catch`, and `try`.
+Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`, `let`, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, direct error propagation with `return`, and `error.Name`.
 
 ## Status
 
@@ -102,19 +102,12 @@ This builds to a temporary executable and runs it immediately.
 ```yar
 package main
 
-fn divide(a i32, b i32) !i32 {
-    if b == 0 {
-        return error.DivByZero
-    }
+fn divide(a i32, b i32) i32 {
     return a / b
 }
 
 fn main() i32 {
-    let x = divide(10, 2) catch {
-        print("division failed\n")
-        return 1
-    }
-
+    let x = divide(10, 2)
     print_int(x)
     print("\n")
     return 0
@@ -177,7 +170,7 @@ Those functions are implemented in the runtime C source.
 - [internal/runtime/runtime_source.txt](internal/runtime/runtime_source.txt): tiny runtime source used during linking
 - [testdata/hello.yar](testdata/hello.yar): hello world example
 - [testdata/add.yar](testdata/add.yar): arithmetic example
-- [testdata/divide.yar](testdata/divide.yar): error handling example
+- [testdata/divide.yar](testdata/divide.yar): arithmetic example
 
 ## Verify The Repository
 

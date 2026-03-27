@@ -186,29 +186,6 @@ func (e *CallExpr) Pos() token.Position {
 
 func (*CallExpr) exprNode() {}
 
-type CatchExpr struct {
-	Target   Expression
-	CatchPos token.Position
-	Block    *BlockStmt
-}
-
-func (e *CatchExpr) Pos() token.Position {
-	return e.Target.Pos()
-}
-
-func (*CatchExpr) exprNode() {}
-
-type TryExpr struct {
-	TryPos token.Position
-	Target Expression
-}
-
-func (e *TryExpr) Pos() token.Position {
-	return e.TryPos
-}
-
-func (*TryExpr) exprNode() {}
-
 type BinaryExpr struct {
 	Left     Expression
 	Operator token.Kind

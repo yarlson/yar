@@ -395,6 +395,11 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 		}
 
 		value := f.genExpression(stmt.Value)
+		if exprType, ok := f.g.info.ExprTypes[stmt.Value]; ok && exprType.Errorable {
+			fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), value.ref)
+			f.terminated = true
+			return
+		}
 		result := f.emitSuccessResult(f.sig.Return, value.ref)
 		fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), result)
 		f.terminated = true
@@ -413,9 +418,8 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 }
 
 type exprValue struct {
-	ref       string
-	typ       checker.Type
-	errorable bool
+	ref string
+	typ checker.Type
 }
 
 func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
@@ -444,10 +448,6 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.genBinary(e)
 	case *ast.CallExpr:
 		return f.genCall(e)
-	case *ast.CatchExpr:
-		return f.genCatch(e)
-	case *ast.TryExpr:
-		return f.genTry(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
 	}
@@ -542,60 +542,9 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	tmp := f.newTemp("call")
 	fmt.Fprintf(&f.builder, "  %%%s = call %s %s(%s)\n", tmp, callType, f.g.functionName(expr.Name), strings.Join(llvmArgs, ", "))
 	return exprValue{
-		ref:       "%" + tmp,
-		typ:       sig.Return,
-		errorable: sig.Errorable,
+		ref: "%" + tmp,
+		typ: sig.Return,
 	}
-}
-
-func (f *functionEmitter) genCatch(expr *ast.CatchExpr) exprValue {
-	target := f.genExpression(expr.Target)
-	catchLabel := f.newLabel("catch")
-	okLabel := f.newLabel("catch.ok")
-	isErr := f.newTemp("iserr")
-	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", isErr, f.g.resultTypeName(target.typ), target.ref)
-	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isErr, catchLabel, okLabel)
-	f.terminated = true
-
-	f.emitLabel(catchLabel)
-	f.genBlock(expr.Block)
-	if !f.terminated {
-		f.builder.WriteString("  unreachable\n")
-		f.terminated = true
-	}
-
-	f.emitLabel(okLabel)
-	if target.typ == checker.TypeVoid {
-		return exprValue{typ: checker.TypeVoid}
-	}
-	value := f.newTemp("ok")
-	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", value, f.g.resultTypeName(target.typ), target.ref)
-	return exprValue{ref: "%" + value, typ: target.typ}
-}
-
-func (f *functionEmitter) genTry(expr *ast.TryExpr) exprValue {
-	target := f.genExpression(expr.Target)
-	errLabel := f.newLabel("try.err")
-	okLabel := f.newLabel("try.ok")
-	isErr := f.newTemp("iserr")
-	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", isErr, f.g.resultTypeName(target.typ), target.ref)
-	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isErr, errLabel, okLabel)
-	f.terminated = true
-
-	f.emitLabel(errLabel)
-	errCode := f.newTemp("errcode")
-	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(target.typ), target.ref)
-	result := f.emitErrorCodeResult(f.sig.Return, "%"+errCode)
-	fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), result)
-	f.terminated = true
-
-	f.emitLabel(okLabel)
-	if target.typ == checker.TypeVoid {
-		return exprValue{typ: checker.TypeVoid}
-	}
-	value := f.newTemp("ok")
-	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", value, f.g.resultTypeName(target.typ), target.ref)
-	return exprValue{ref: "%" + value, typ: target.typ}
 }
 
 func (f *functionEmitter) emitStringValue(value string) exprValue {

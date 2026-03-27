@@ -94,41 +94,26 @@ func TestUnhandledErrorMain(t *testing.T) {
 	}
 }
 
-func TestTryAndI64Programs(t *testing.T) {
+func TestI64Program(t *testing.T) {
 	t.Parallel()
 
-	testCases := []struct {
-		name string
-		file string
-	}{
-		{name: "try", file: "try.yar"},
-		{name: "i64", file: "i64.yar"},
+	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "i64.yar"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-			src, err := os.ReadFile(filepath.Join("..", "..", "testdata", tc.file))
-			if err != nil {
-				t.Fatal(err)
-			}
+	if err := Build(ctx, string(src), outPath); err != nil {
+		t.Fatal(err)
+	}
 
-			tmpDir := t.TempDir()
-			outPath := filepath.Join(tmpDir, "program")
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			if err := Build(ctx, string(src), outPath); err != nil {
-				t.Fatal(err)
-			}
-
-			cmd := exec.CommandContext(ctx, outPath)
-			if err := cmd.Run(); err != nil {
-				t.Fatal(err)
-			}
-		})
+	cmd := exec.CommandContext(ctx, outPath)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
 	}
 }
 

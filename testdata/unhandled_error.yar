@@ -5,7 +5,5 @@ fn fail() !i32 {
 }
 
 fn main() !i32 {
-    return fail() catch {
-        return error.Boom
-    }
+    return fail()
 }

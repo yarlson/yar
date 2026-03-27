@@ -19,4 +19,4 @@
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `try`, and `i64` compilation through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, and `i64` compilation through the same `clang` boundary used by the CLI.

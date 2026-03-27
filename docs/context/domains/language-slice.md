@@ -32,8 +32,6 @@
 - Boolean literals
 - Function calls
 - Grouping with parentheses
-- `catch` on an errorable expression
-- `try` on an errorable expression
 - Binary arithmetic: `+`, `-`, `*`, `/`
 - Binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 
@@ -47,6 +45,7 @@
 - Arithmetic and relational operators require matching integer operands after literal coercion.
 - Equality and inequality are supported for integers and `bool`.
 - `error.Name` is only valid as the direct operand of `return` inside an errorable function.
+- An errorable call may only be returned directly from a function with the same errorable return type.
 
 ## Builtins
 

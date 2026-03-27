@@ -252,8 +252,6 @@ func lookupKeyword(text string) token.Kind {
 		return token.False
 	case "error":
 		return token.Error
-	case "try":
-		return token.Try
 	default:
 		return token.Ident
 	}

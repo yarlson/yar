@@ -16,8 +16,7 @@
   - binary operators
   - `if` conditions
   - non-propagating returns
-- `catch` unwraps an errorable expression into its success type. If the expression is an error, the catch block runs and must terminate on every path.
-- `try` unwraps an errorable expression inside another errorable function. If the expression is an error, the current function immediately returns the same error code.
+- A call to an errorable function may be returned directly from a function with the same errorable result type.
 
 ## Generated Representation
 
