@@ -6,7 +6,7 @@
 - an LLVM IR backend
 - a tiny C runtime for builtins
 
-Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`bool`/`str`/`void`, `let`, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, `error.Name`, and `catch`.
+Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`, `let`, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, `error.Name`, `catch`, and `try`.
 
 ## Status
 
@@ -157,11 +157,13 @@ The current builtins are:
 
 - `print(str) void`
 - `print_int(i32) void`
+- `panic(str) noreturn`
 
 Generated LLVM IR calls two runtime functions:
 
 - `yar_print`
 - `yar_print_int`
+- `yar_panic`
 
 Those functions are implemented in the runtime C source.
 

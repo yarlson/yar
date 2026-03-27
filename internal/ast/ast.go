@@ -131,7 +131,7 @@ func (e *IdentExpr) Pos() token.Position {
 func (*IdentExpr) exprNode() {}
 
 type IntLiteral struct {
-	Value  int32
+	Value  int64
 	LitPos token.Position
 }
 
@@ -197,6 +197,17 @@ func (e *CatchExpr) Pos() token.Position {
 }
 
 func (*CatchExpr) exprNode() {}
+
+type TryExpr struct {
+	TryPos token.Position
+	Target Expression
+}
+
+func (e *TryExpr) Pos() token.Position {
+	return e.TryPos
+}
+
+func (*TryExpr) exprNode() {}
 
 type BinaryExpr struct {
 	Left     Expression

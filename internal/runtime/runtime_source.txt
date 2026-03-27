@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 void yar_print(const char *data, long long len) {
     if (len <= 0) {
@@ -10,4 +11,12 @@ void yar_print(const char *data, long long len) {
 
 void yar_print_int(int32_t value) {
     (void)printf("%d", value);
+}
+
+void yar_panic(const char *data, long long len) {
+    if (len > 0) {
+        (void)fwrite(data, 1, (size_t)len, stderr);
+    }
+    (void)fflush(stderr);
+    exit(1);
 }

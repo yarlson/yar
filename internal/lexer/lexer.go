@@ -54,13 +54,13 @@ func (l *Lexer) Lex() []token.Token {
 			l.advanceWidth(width)
 			switch r {
 			case '=':
-				if l.match('=') {
+				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.EqualEqual, Text: "==", Pos: pos})
 				} else {
 					tokens = append(tokens, token.Token{Kind: token.Assign, Text: "=", Pos: pos})
 				}
 			case '!':
-				if l.match('=') {
+				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.BangEqual, Text: "!=", Pos: pos})
 				} else {
 					tokens = append(tokens, token.Token{Kind: token.Bang, Text: "!", Pos: pos})
@@ -85,6 +85,18 @@ func (l *Lexer) Lex() []token.Token {
 				tokens = append(tokens, token.Token{Kind: token.Star, Text: "*", Pos: pos})
 			case '/':
 				tokens = append(tokens, token.Token{Kind: token.Slash, Text: "/", Pos: pos})
+			case '<':
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.LessEqual, Text: "<=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Less, Text: "<", Pos: pos})
+				}
+			case '>':
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.GreaterEqual, Text: ">=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Greater, Text: ">", Pos: pos})
+				}
 			case '"':
 				value := l.lexString(pos)
 				tokens = append(tokens, token.Token{Kind: token.String, Text: value, Pos: pos})
@@ -180,12 +192,12 @@ func (l *Lexer) lexString(pos token.Position) string {
 	return string(out)
 }
 
-func (l *Lexer) match(expected rune) bool {
+func (l *Lexer) matchEquals() bool {
 	if l.offset >= len(l.src) {
 		return false
 	}
 	r, width := utf8.DecodeRuneInString(l.src[l.offset:])
-	if r != expected {
+	if r != '=' {
 		return false
 	}
 	l.advanceWidth(width)
@@ -240,15 +252,17 @@ func lookupKeyword(text string) token.Kind {
 		return token.False
 	case "error":
 		return token.Error
+	case "try":
+		return token.Try
 	default:
 		return token.Ident
 	}
 }
 
-func ParseIntLiteral(tok token.Token) (int32, error) {
-	v, err := strconv.ParseInt(tok.Text, 10, 32)
+func ParseIntLiteral(tok token.Token) (int64, error) {
+	v, err := strconv.ParseInt(tok.Text, 10, 64)
 	if err != nil {
 		return 0, err
 	}
-	return int32(v), nil
+	return v, nil
 }

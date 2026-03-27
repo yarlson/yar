@@ -51,7 +51,8 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	}
 	b.WriteString("\n")
 	b.WriteString("declare void @yar_print(ptr, i64)\n")
-	b.WriteString("declare void @yar_print_int(i32)\n\n")
+	b.WriteString("declare void @yar_print_int(i32)\n")
+	b.WriteString("declare void @yar_panic(ptr, i64)\n\n")
 
 	var functionIR []string
 	for _, fn := range program.Functions {
@@ -101,6 +102,12 @@ func builtins() map[string]checker.Signature {
 			Name:    "print_int",
 			Params:  []checker.Type{checker.TypeI32},
 			Return:  checker.TypeVoid,
+			Builtin: true,
+		},
+		"panic": {
+			Name:    "panic",
+			Params:  []checker.Type{checker.TypeStr},
+			Return:  checker.TypeNoReturn,
 			Builtin: true,
 		},
 	}
@@ -172,10 +179,14 @@ func (g *Generator) llvmType(typ checker.Type) string {
 	switch typ {
 	case checker.TypeVoid:
 		return "void"
+	case checker.TypeNoReturn:
+		return "void"
 	case checker.TypeBool:
 		return "i1"
 	case checker.TypeI32:
 		return "i32"
+	case checker.TypeI64:
+		return "i64"
 	case checker.TypeStr:
 		return "%yar.str"
 	default:
@@ -298,13 +309,16 @@ func (f *functionEmitter) emit() string {
 
 	f.genBlock(f.fn.Body)
 	if !f.terminated {
-		if f.sig.Return == checker.TypeVoid {
+		switch f.sig.Return {
+		case checker.TypeVoid:
 			if f.sig.Errorable {
 				result := f.emitSuccessVoid()
 				fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(checker.TypeVoid), result)
 			} else {
 				f.builder.WriteString("  ret void\n")
 			}
+		case checker.TypeNoReturn:
+			f.builder.WriteString("  unreachable\n")
 		}
 	}
 	f.builder.WriteString("}\n")
@@ -355,7 +369,10 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 	case *ast.ReturnStmt:
 		f.genReturn(s)
 	case *ast.ExprStmt:
-		_ = f.genExpression(s.Expr)
+		value := f.genExpression(s.Expr)
+		if value.typ == checker.TypeNoReturn {
+			f.terminated = true
+		}
 	default:
 		panic("unsupported statement")
 	}
@@ -409,7 +426,11 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", tmp, f.g.llvmType(slot.typ), slot.ptr)
 		return exprValue{ref: "%" + tmp, typ: slot.typ}
 	case *ast.IntLiteral:
-		return exprValue{ref: fmt.Sprintf("%d", e.Value), typ: checker.TypeI32}
+		literalType := f.exprType(expr)
+		if literalType == checker.TypeUntypedInt {
+			literalType = checker.TypeI32
+		}
+		return exprValue{ref: fmt.Sprintf("%d", e.Value), typ: literalType}
 	case *ast.BoolLiteral:
 		if e.Value {
 			return exprValue{ref: "1", typ: checker.TypeBool}
@@ -425,6 +446,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.genCall(e)
 	case *ast.CatchExpr:
 		return f.genCatch(e)
+	case *ast.TryExpr:
+		return f.genTry(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
 	}
@@ -436,17 +459,29 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 	out := f.newTemp("tmp")
 	switch expr.Operator {
 	case token.Plus:
-		fmt.Fprintf(&f.builder, "  %%%s = add i32 %s, %s\n", out, left.ref, right.ref)
-		return exprValue{ref: "%" + out, typ: checker.TypeI32}
+		fmt.Fprintf(&f.builder, "  %%%s = add %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: left.typ}
 	case token.Minus:
-		fmt.Fprintf(&f.builder, "  %%%s = sub i32 %s, %s\n", out, left.ref, right.ref)
-		return exprValue{ref: "%" + out, typ: checker.TypeI32}
+		fmt.Fprintf(&f.builder, "  %%%s = sub %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: left.typ}
 	case token.Star:
-		fmt.Fprintf(&f.builder, "  %%%s = mul i32 %s, %s\n", out, left.ref, right.ref)
-		return exprValue{ref: "%" + out, typ: checker.TypeI32}
+		fmt.Fprintf(&f.builder, "  %%%s = mul %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: left.typ}
 	case token.Slash:
-		fmt.Fprintf(&f.builder, "  %%%s = sdiv i32 %s, %s\n", out, left.ref, right.ref)
-		return exprValue{ref: "%" + out, typ: checker.TypeI32}
+		fmt.Fprintf(&f.builder, "  %%%s = sdiv %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: left.typ}
+	case token.Less:
+		fmt.Fprintf(&f.builder, "  %%%s = icmp slt %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: checker.TypeBool}
+	case token.LessEqual:
+		fmt.Fprintf(&f.builder, "  %%%s = icmp sle %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: checker.TypeBool}
+	case token.Greater:
+		fmt.Fprintf(&f.builder, "  %%%s = icmp sgt %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: checker.TypeBool}
+	case token.GreaterEqual:
+		fmt.Fprintf(&f.builder, "  %%%s = icmp sge %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: checker.TypeBool}
 	case token.EqualEqual:
 		fmt.Fprintf(&f.builder, "  %%%s = icmp eq %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
 		return exprValue{ref: "%" + out, typ: checker.TypeBool}
@@ -477,6 +512,15 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		case "print_int":
 			fmt.Fprintf(&f.builder, "  call void @yar_print_int(i32 %s)\n", args[0].ref)
 			return exprValue{typ: checker.TypeVoid}
+		case "panic":
+			ptr := f.newTemp("panic.ptr")
+			length := f.newTemp("panic.len")
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", ptr, args[0].ref)
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", length, args[0].ref)
+			fmt.Fprintf(&f.builder, "  call void @yar_panic(ptr %%%s, i64 %%%s)\n", ptr, length)
+			f.builder.WriteString("  unreachable\n")
+			f.terminated = true
+			return exprValue{typ: checker.TypeNoReturn}
 		}
 	}
 
@@ -488,6 +532,12 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	callType := f.g.llvmType(sig.Return)
 	if sig.Errorable {
 		callType = f.g.resultTypeName(sig.Return)
+	}
+	if sig.Return == checker.TypeNoReturn {
+		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(expr.Name), strings.Join(llvmArgs, ", "))
+		f.builder.WriteString("  unreachable\n")
+		f.terminated = true
+		return exprValue{typ: checker.TypeNoReturn}
 	}
 	tmp := f.newTemp("call")
 	fmt.Fprintf(&f.builder, "  %%%s = call %s %s(%s)\n", tmp, callType, f.g.functionName(expr.Name), strings.Join(llvmArgs, ", "))
@@ -515,6 +565,34 @@ func (f *functionEmitter) genCatch(expr *ast.CatchExpr) exprValue {
 	}
 
 	f.emitLabel(okLabel)
+	if target.typ == checker.TypeVoid {
+		return exprValue{typ: checker.TypeVoid}
+	}
+	value := f.newTemp("ok")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", value, f.g.resultTypeName(target.typ), target.ref)
+	return exprValue{ref: "%" + value, typ: target.typ}
+}
+
+func (f *functionEmitter) genTry(expr *ast.TryExpr) exprValue {
+	target := f.genExpression(expr.Target)
+	errLabel := f.newLabel("try.err")
+	okLabel := f.newLabel("try.ok")
+	isErr := f.newTemp("iserr")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", isErr, f.g.resultTypeName(target.typ), target.ref)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isErr, errLabel, okLabel)
+	f.terminated = true
+
+	f.emitLabel(errLabel)
+	errCode := f.newTemp("errcode")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(target.typ), target.ref)
+	result := f.emitErrorCodeResult(f.sig.Return, "%"+errCode)
+	fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), result)
+	f.terminated = true
+
+	f.emitLabel(okLabel)
+	if target.typ == checker.TypeVoid {
+		return exprValue{typ: checker.TypeVoid}
+	}
 	value := f.newTemp("ok")
 	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", value, f.g.resultTypeName(target.typ), target.ref)
 	return exprValue{ref: "%" + value, typ: target.typ}
@@ -551,16 +629,20 @@ func (f *functionEmitter) emitSuccessResult(typ checker.Type, value string) stri
 
 func (f *functionEmitter) emitErrorResult(typ checker.Type, name string) string {
 	code := f.g.info.ErrorCodes[name]
+	return f.emitErrorCodeResult(typ, fmt.Sprintf("%d", code))
+}
+
+func (f *functionEmitter) emitErrorCodeResult(typ checker.Type, code string) string {
 	tmp1 := f.newTemp("result")
 	tmp2 := f.newTemp("result")
 	if typ == checker.TypeVoid {
 		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s zeroinitializer, i1 1, 0\n", tmp1, f.g.resultTypeName(checker.TypeVoid))
-		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, i32 %d, 1\n", tmp2, f.g.resultTypeName(checker.TypeVoid), tmp1, code)
+		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, i32 %s, 1\n", tmp2, f.g.resultTypeName(checker.TypeVoid), tmp1, code)
 		return "%" + tmp2
 	}
 	tmp3 := f.newTemp("result")
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s zeroinitializer, i1 1, 0\n", tmp1, f.g.resultTypeName(typ))
-	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, i32 %d, 1\n", tmp2, f.g.resultTypeName(typ), tmp1, code)
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, i32 %s, 1\n", tmp2, f.g.resultTypeName(typ), tmp1, code)
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, %s %s, 2\n", tmp3, f.g.resultTypeName(typ), tmp2, f.g.llvmType(typ), zeroValue(typ))
 	return "%" + tmp3
 }
@@ -571,11 +653,21 @@ func zeroValue(typ checker.Type) string {
 		return "0"
 	case checker.TypeI32:
 		return "0"
+	case checker.TypeI64:
+		return "0"
 	case checker.TypeStr:
 		return "zeroinitializer"
 	default:
 		return "0"
 	}
+}
+
+func (f *functionEmitter) exprType(expr ast.Expression) checker.Type {
+	exprType, ok := f.g.info.ExprTypes[expr]
+	if !ok {
+		return checker.TypeInvalid
+	}
+	return exprType.Base
 }
 
 func (f *functionEmitter) newTemp(prefix string) string {

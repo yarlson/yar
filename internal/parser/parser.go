@@ -201,8 +201,24 @@ func (p *Parser) parseCatch() ast.Expression {
 }
 
 func (p *Parser) parseEquality() ast.Expression {
-	expr := p.parseAdditive()
+	expr := p.parseComparison()
 	for p.at(token.EqualEqual) || p.at(token.BangEqual) {
+		op := p.current()
+		p.advance()
+		right := p.parseComparison()
+		expr = &ast.BinaryExpr{
+			Left:     expr,
+			Operator: op.Kind,
+			OpPos:    op.Pos,
+			Right:    right,
+		}
+	}
+	return expr
+}
+
+func (p *Parser) parseComparison() ast.Expression {
+	expr := p.parseAdditive()
+	for p.at(token.Less) || p.at(token.LessEqual) || p.at(token.Greater) || p.at(token.GreaterEqual) {
 		op := p.current()
 		p.advance()
 		right := p.parseAdditive()
@@ -251,6 +267,12 @@ func (p *Parser) parseMultiplicative() ast.Expression {
 func (p *Parser) parsePrimary() ast.Expression {
 	tok := p.current()
 	switch tok.Kind {
+	case token.Try:
+		p.advance()
+		return &ast.TryExpr{
+			TryPos: tok.Pos,
+			Target: p.parsePrimary(),
+		}
 	case token.Ident:
 		p.advance()
 		if p.at(token.LParen) {

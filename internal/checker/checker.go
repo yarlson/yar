@@ -3,6 +3,7 @@ package checker
 import (
 	"fmt"
 	"sort"
+
 	"yar/internal/ast"
 	"yar/internal/diag"
 	"yar/internal/token"
@@ -11,12 +12,15 @@ import (
 type Type string
 
 const (
-	TypeInvalid Type = ""
-	TypeVoid    Type = "void"
-	TypeBool    Type = "bool"
-	TypeI32     Type = "i32"
-	TypeStr     Type = "str"
-	TypeError   Type = "error"
+	TypeInvalid    Type = ""
+	TypeVoid       Type = "void"
+	TypeNoReturn   Type = "noreturn"
+	TypeBool       Type = "bool"
+	TypeI32        Type = "i32"
+	TypeI64        Type = "i64"
+	TypeStr        Type = "str"
+	TypeError      Type = "error"
+	TypeUntypedInt Type = "untyped-int"
 )
 
 type ExprType struct {
@@ -52,6 +56,12 @@ type functionContext struct {
 	scopes    []map[string]Type
 }
 
+type coercedIntegers struct {
+	Left   ExprType
+	Right  ExprType
+	Result Type
+}
+
 func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 	c := &Checker{
 		functions: map[string]Signature{
@@ -65,6 +75,12 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Name:    "print_int",
 				Params:  []Type{TypeI32},
 				Return:  TypeVoid,
+				Builtin: true,
+			},
+			"panic": {
+				Name:    "panic",
+				Params:  []Type{TypeStr},
+				Return:  TypeNoReturn,
 				Builtin: true,
 			},
 		},
@@ -98,6 +114,9 @@ func (c *Checker) checkProgram(program *ast.Program) {
 			Name:      fn.Name,
 			Return:    c.resolveTypeRef(fn.Return),
 			Errorable: fn.ReturnIsBang,
+		}
+		if sig.Return == TypeNoReturn && sig.Errorable {
+			c.diag.Add(fn.Return.Pos, "noreturn functions cannot also be errorable")
 		}
 		for _, param := range fn.Params {
 			sig.Params = append(sig.Params, c.resolveTypeRef(param.Type))
@@ -144,7 +163,7 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 
 	for i, param := range fn.Params {
 		paramType := sig.Params[i]
-		if paramType == TypeVoid || paramType == TypeInvalid {
+		if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
 			c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.Name)
 			continue
 		}
@@ -157,7 +176,14 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 	}
 
 	c.checkBlock(fn.Body)
-	if sig.Return != TypeVoid && !blockDefinitelyReturns(fn.Body) {
+	if sig.Return == TypeVoid {
+		return
+	}
+	if !c.blockDefinitelyTerminates(fn.Body) {
+		if sig.Return == TypeNoReturn {
+			c.diag.Add(fn.NamePos, "function %q must not fall through", fn.Name)
+			return
+		}
 		c.diag.Add(fn.NamePos, "function %q must return a value on all paths", fn.Name)
 	}
 }
@@ -180,9 +206,17 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			c.diag.Add(s.Value.Pos(), "errorable value must be handled with catch")
 			return
 		}
-		if value.Base == TypeInvalid || value.Base == TypeVoid {
+		if value.Base == TypeInvalid || value.Base == TypeVoid || value.Base == TypeNoReturn {
 			c.diag.Add(s.Value.Pos(), "let binding requires a value")
 			return
+		}
+		if value.Base == TypeUntypedInt {
+			defaultType := c.defaultUntypedIntegerType(s.Value)
+			if defaultType == TypeInvalid {
+				c.diag.Add(s.Value.Pos(), "integer literal does not fit a supported integer type")
+				return
+			}
+			value = c.coerceUntypedInteger(s.Value, value, defaultType)
 		}
 		if c.scopeOwns(s.Name) {
 			c.diag.Add(s.NamePos, "local %q is already declared in this scope", s.Name)
@@ -201,6 +235,11 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			c.diag.Add(s.Value.Pos(), "errorable value must be handled with catch")
 			return
 		}
+		if value.Base == TypeNoReturn {
+			c.diag.Add(s.Value.Pos(), "assignment requires a value")
+			return
+		}
+		value = c.coerceUntypedInteger(s.Value, value, targetType)
 		if value.Base != targetType {
 			c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, targetType)
 		}
@@ -227,6 +266,10 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 
 func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 	sig := c.current.signature
+	if sig.Return == TypeNoReturn {
+		c.diag.Add(stmt.ReturnPos, "noreturn functions cannot return")
+		return
+	}
 	if stmt.Value == nil {
 		if sig.Errorable && sig.Return == TypeVoid {
 			return
@@ -253,6 +296,11 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 		c.diag.Add(stmt.Value.Pos(), "return cannot use an unhandled errorable value")
 		return
 	}
+	if value.Base == TypeNoReturn {
+		c.diag.Add(stmt.Value.Pos(), "return requires a value")
+		return
+	}
+	value = c.coerceUntypedInteger(stmt.Value, value, sig.Return)
 	if value.Base != sig.Return {
 		c.diag.Add(stmt.Value.Pos(), "cannot return %s from function returning %s", value.Base, sig.Return)
 	}
@@ -273,7 +321,7 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.IntLiteral:
-		et := ExprType{Base: TypeI32}
+		et := ExprType{Base: TypeUntypedInt}
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.StringLiteral:
@@ -308,6 +356,11 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 				c.diag.Add(arg.Pos(), "errorable value must be handled with catch before passing it")
 				continue
 			}
+			if argType.Base == TypeNoReturn {
+				c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, e.Name)
+				continue
+			}
+			argType = c.coerceUntypedInteger(arg, argType, sig.Params[i])
 			if i < len(sig.Params) && argType.Base != sig.Params[i] {
 				c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, e.Name, sig.Params[i], argType.Base)
 			}
@@ -322,8 +375,21 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 			return ExprType{Base: TypeInvalid}
 		}
 		c.checkBlock(e.Block)
-		if !blockDefinitelyReturns(e.Block) {
-			c.diag.Add(e.CatchPos, "catch block must return on all paths")
+		if !c.blockDefinitelyTerminates(e.Block) {
+			c.diag.Add(e.CatchPos, "catch block must return or terminate on all paths")
+		}
+		et := ExprType{Base: targetType.Base}
+		c.info.ExprTypes[expr] = et
+		return et
+	case *ast.TryExpr:
+		if !c.current.signature.Errorable {
+			c.diag.Add(e.TryPos, "try can only be used inside an errorable function")
+			return ExprType{Base: TypeInvalid}
+		}
+		targetType := c.checkExpression(e.Target)
+		if !targetType.Errorable {
+			c.diag.Add(e.Target.Pos(), "try can only be used with an errorable expression")
+			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: targetType.Base}
 		c.info.ExprTypes[expr] = et
@@ -344,20 +410,40 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 
 	switch binary.Operator {
 	case token.Plus, token.Minus, token.Star, token.Slash:
-		if left.Base != TypeI32 || right.Base != TypeI32 {
-			c.diag.Add(binary.OpPos, "arithmetic operators require i32 operands")
+		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+		if !ok {
+			c.diag.Add(binary.OpPos, "arithmetic operators require matching integer operands")
 			return ExprType{Base: TypeInvalid}
 		}
-		et := ExprType{Base: TypeI32}
+		et := ExprType{Base: coerced.Result}
+		c.info.ExprTypes[expr] = et
+		return et
+	case token.Less, token.LessEqual, token.Greater, token.GreaterEqual:
+		_, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+		if !ok {
+			c.diag.Add(binary.OpPos, "relational operators require matching integer operands")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeBool}
 		c.info.ExprTypes[expr] = et
 		return et
 	case token.EqualEqual, token.BangEqual:
+		if isIntegerType(left.Base) || isIntegerType(right.Base) {
+			_, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+			if !ok {
+				c.diag.Add(binary.OpPos, "comparison operands must have the same type")
+				return ExprType{Base: TypeInvalid}
+			}
+			et := ExprType{Base: TypeBool}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
 		if left.Base != right.Base {
 			c.diag.Add(binary.OpPos, "comparison operands must have the same type")
 			return ExprType{Base: TypeInvalid}
 		}
-		if left.Base != TypeI32 && left.Base != TypeBool {
-			c.diag.Add(binary.OpPos, "comparison is only supported for i32 and bool in v0")
+		if left.Base != TypeBool {
+			c.diag.Add(binary.OpPos, "comparison is only supported for bool and integers in v0")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeBool}
@@ -371,7 +457,7 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 
 func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch Type(ref.Name) {
-	case TypeVoid, TypeBool, TypeI32, TypeStr:
+	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr:
 		return Type(ref.Name)
 	default:
 		c.diag.Add(ref.Pos, "unknown type %q", ref.Name)
@@ -412,21 +498,24 @@ func (c *Checker) useErrorName(name string) {
 	c.info.ErrorCodes[name] = 0
 }
 
-func blockDefinitelyReturns(block *ast.BlockStmt) bool {
+func (c *Checker) blockDefinitelyTerminates(block *ast.BlockStmt) bool {
 	for _, stmt := range block.Stmts {
-		if stmtDefinitelyReturns(stmt) {
+		if c.stmtDefinitelyTerminates(stmt) {
 			return true
 		}
 	}
 	return false
 }
 
-func stmtDefinitelyReturns(stmt ast.Statement) bool {
+func (c *Checker) stmtDefinitelyTerminates(stmt ast.Statement) bool {
 	switch s := stmt.(type) {
 	case *ast.ReturnStmt:
 		return true
 	case *ast.BlockStmt:
-		return blockDefinitelyReturns(s)
+		return c.blockDefinitelyTerminates(s)
+	case *ast.ExprStmt:
+		exprType, ok := c.info.ExprTypes[s.Expr]
+		return ok && exprType.Base == TypeNoReturn
 	default:
 		return false
 	}
@@ -434,4 +523,109 @@ func stmtDefinitelyReturns(stmt ast.Statement) bool {
 
 func formatErrorName(name string) string {
 	return fmt.Sprintf("error.%s", name)
+}
+
+func isIntegerType(typ Type) bool {
+	return typ == TypeI32 || typ == TypeI64 || typ == TypeUntypedInt
+}
+
+func (c *Checker) coerceUntypedInteger(expr ast.Expression, exprType ExprType, target Type) ExprType {
+	if exprType.Base != TypeUntypedInt {
+		return exprType
+	}
+	if target != TypeI32 && target != TypeI64 {
+		return exprType
+	}
+	if !c.intLiteralFits(expr, target) {
+		return exprType
+	}
+	c.setExprType(expr, ExprType{Base: target})
+	return ExprType{Base: target}
+}
+
+func (c *Checker) coerceBinaryIntegers(leftExpr ast.Expression, left ExprType, rightExpr ast.Expression, right ExprType) (coercedIntegers, bool) {
+	out := coercedIntegers{
+		Left:  left,
+		Right: right,
+	}
+	if !isIntegerType(left.Base) || !isIntegerType(right.Base) {
+		return out, false
+	}
+	switch {
+	case left.Base == TypeUntypedInt && right.Base == TypeUntypedInt:
+		target := TypeI32
+		if !c.intLiteralFits(leftExpr, TypeI32) || !c.intLiteralFits(rightExpr, TypeI32) {
+			target = TypeI64
+		}
+		if !c.intLiteralFits(leftExpr, target) || !c.intLiteralFits(rightExpr, target) {
+			return out, false
+		}
+		out.Left = c.coerceUntypedInteger(leftExpr, out.Left, target)
+		out.Right = c.coerceUntypedInteger(rightExpr, out.Right, target)
+		out.Result = target
+		return out, true
+	case left.Base == TypeUntypedInt:
+		if !c.intLiteralFits(leftExpr, right.Base) {
+			return out, false
+		}
+		out.Left = c.coerceUntypedInteger(leftExpr, out.Left, right.Base)
+		out.Result = right.Base
+		return out, true
+	case right.Base == TypeUntypedInt:
+		if !c.intLiteralFits(rightExpr, left.Base) {
+			return out, false
+		}
+		out.Right = c.coerceUntypedInteger(rightExpr, out.Right, left.Base)
+		out.Result = left.Base
+		return out, true
+	case left.Base == right.Base:
+		out.Result = left.Base
+		return out, true
+	default:
+		return out, false
+	}
+}
+
+func (c *Checker) setExprType(expr ast.Expression, exprType ExprType) {
+	c.info.ExprTypes[expr] = exprType
+	if group, ok := expr.(*ast.GroupExpr); ok {
+		c.setExprType(group.Inner, exprType)
+	}
+}
+
+func (c *Checker) intLiteralFits(expr ast.Expression, target Type) bool {
+	literal, ok := unwrapIntLiteral(expr)
+	if !ok {
+		return false
+	}
+	switch target {
+	case TypeI32:
+		return literal.Value >= -2147483648 && literal.Value <= 2147483647
+	case TypeI64:
+		return true
+	default:
+		return false
+	}
+}
+
+func unwrapIntLiteral(expr ast.Expression) (*ast.IntLiteral, bool) {
+	switch e := expr.(type) {
+	case *ast.IntLiteral:
+		return e, true
+	case *ast.GroupExpr:
+		return unwrapIntLiteral(e.Inner)
+	default:
+		return nil, false
+	}
+}
+
+func (c *Checker) defaultUntypedIntegerType(expr ast.Expression) Type {
+	switch {
+	case c.intLiteralFits(expr, TypeI32):
+		return TypeI32
+	case c.intLiteralFits(expr, TypeI64):
+		return TypeI64
+	default:
+		return TypeInvalid
+	}
 }
