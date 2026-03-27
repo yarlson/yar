@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Go build and test artifacts
+/bin/
+/dist/
+*.test
+*.out
+coverage.txt
+coverage.out
+cover.out
+
+# Compiler outputs
+a.out
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.ll
+*.bc
+
+# Temporary files
+*.tmp
+*.swp
+*.swo

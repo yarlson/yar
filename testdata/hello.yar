@@ -1,0 +1,6 @@
+package main
+
+fn main() i32 {
+    print("hello, world\n")
+    return 0
+}

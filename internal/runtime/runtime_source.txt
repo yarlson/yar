@@ -1,0 +1,13 @@
+#include <stdint.h>
+#include <stdio.h>
+
+void yar_print(const char *data, long long len) {
+    if (len <= 0) {
+        return;
+    }
+    (void)fwrite(data, 1, (size_t)len, stdout);
+}
+
+void yar_print_int(int32_t value) {
+    (void)printf("%d", value);
+}
