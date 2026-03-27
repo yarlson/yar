@@ -2,7 +2,7 @@
 
 yar — The compiler CLI and the source language implemented in this repository.
 
-program — A parsed source file with a package declaration and top-level function declarations.
+program — A parsed source file with a package declaration plus top-level `struct` and `fn` declarations.
 
 unit — The result of successful compilation before linking; it contains generated LLVM IR and checker metadata.
 
@@ -22,6 +22,6 @@ handler sugar — `or |err| { ... }`, which checks an error-producing expression
 
 direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
 
-builtin — A function signature hard-coded in the checker and lowered specially in code generation: `print`, `print_int`, or `panic`.
+builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, or `len`.
 
 unhandled error — An errorable `main` result that reaches the generated native wrapper, which prints an error message and exits with code `1`.

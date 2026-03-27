@@ -57,9 +57,10 @@ func (l *Lexer) Lex() []token.Token {
 				if l.matchRune('=') {
 					tokens = append(tokens, token.Token{Kind: token.ColonAssign, Text: ":=", Pos: pos})
 				} else {
-					l.diag.Add(pos, "unexpected character %q", r)
-					tokens = append(tokens, token.Token{Kind: token.Illegal, Text: string(r), Pos: pos})
+					tokens = append(tokens, token.Token{Kind: token.Colon, Text: ":", Pos: pos})
 				}
+			case ';':
+				tokens = append(tokens, token.Token{Kind: token.Semicolon, Text: ";", Pos: pos})
 			case '=':
 				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.EqualEqual, Text: "==", Pos: pos})
@@ -86,6 +87,10 @@ func (l *Lexer) Lex() []token.Token {
 				tokens = append(tokens, token.Token{Kind: token.LBrace, Text: "{", Pos: pos})
 			case '}':
 				tokens = append(tokens, token.Token{Kind: token.RBrace, Text: "}", Pos: pos})
+			case '[':
+				tokens = append(tokens, token.Token{Kind: token.LBracket, Text: "[", Pos: pos})
+			case ']':
+				tokens = append(tokens, token.Token{Kind: token.RBracket, Text: "]", Pos: pos})
 			case '|':
 				tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
 			case '+':
@@ -96,6 +101,8 @@ func (l *Lexer) Lex() []token.Token {
 				tokens = append(tokens, token.Token{Kind: token.Star, Text: "*", Pos: pos})
 			case '/':
 				tokens = append(tokens, token.Token{Kind: token.Slash, Text: "/", Pos: pos})
+			case '%':
+				tokens = append(tokens, token.Token{Kind: token.Percent, Text: "%", Pos: pos})
 			case '<':
 				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.LessEqual, Text: "<=", Pos: pos})
@@ -257,10 +264,22 @@ func lookupKeyword(text string) token.Kind {
 		return token.Fn
 	case "let":
 		return token.Let
+	case "var":
+		return token.Var
+	case "struct":
+		return token.Struct
 	case "or":
 		return token.Or
 	case "if":
 		return token.If
+	case "else":
+		return token.Else
+	case "for":
+		return token.For
+	case "break":
+		return token.Break
+	case "continue":
+		return token.Continue
 	case "return":
 		return token.Return
 	case "true":

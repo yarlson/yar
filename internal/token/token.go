@@ -13,7 +13,9 @@ const (
 	String
 
 	Assign
+	Colon
 	ColonAssign
+	Semicolon
 	Bang
 	Question
 	Comma
@@ -22,11 +24,14 @@ const (
 	RParen
 	LBrace
 	RBrace
+	LBracket
+	RBracket
 	Pipe
 	Plus
 	Minus
 	Star
 	Slash
+	Percent
 	Less
 	LessEqual
 	Greater
@@ -37,8 +42,14 @@ const (
 	Package
 	Fn
 	Let
+	Var
+	Struct
 	Or
 	If
+	Else
+	For
+	Break
+	Continue
 	Return
 	True
 	False
@@ -59,8 +70,12 @@ func (k Kind) String() string {
 		return "string"
 	case Assign:
 		return "="
+	case Colon:
+		return ":"
 	case ColonAssign:
 		return ":="
+	case Semicolon:
+		return ";"
 	case Bang:
 		return "!"
 	case Question:
@@ -77,6 +92,10 @@ func (k Kind) String() string {
 		return "{"
 	case RBrace:
 		return "}"
+	case LBracket:
+		return "["
+	case RBracket:
+		return "]"
 	case Pipe:
 		return "|"
 	case Plus:
@@ -87,6 +106,8 @@ func (k Kind) String() string {
 		return "*"
 	case Slash:
 		return "/"
+	case Percent:
+		return "%"
 	case Less:
 		return "<"
 	case LessEqual:
@@ -105,10 +126,22 @@ func (k Kind) String() string {
 		return "fn"
 	case Let:
 		return "let"
+	case Var:
+		return "var"
+	case Struct:
+		return "struct"
 	case Or:
 		return "or"
 	case If:
 		return "if"
+	case Else:
+		return "else"
+	case For:
+		return "for"
+	case Break:
+		return "break"
+	case Continue:
+		return "continue"
 	case Return:
 		return "return"
 	case True:

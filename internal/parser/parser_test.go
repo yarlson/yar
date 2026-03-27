@@ -103,3 +103,81 @@ fn main() i32 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
 }
+
+func TestParseV02ProgramShape(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+struct User {
+	id i32
+	name str
+}
+
+fn main() i32 {
+	var count i32 = 0
+	users := [2]User{
+		User{id: 1, name: "alice"},
+		User{id: 2, name: "bob"},
+	}
+
+	for count < len(users) {
+		user := users[count]
+		if user.id == 2 {
+			users[count].name = "eve"
+		} else if user.id == 1 {
+			count = count + 1
+			continue
+		} else {
+			break
+		}
+		count = count + 1
+	}
+
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if len(program.Structs) != 1 {
+		t.Fatalf("expected 1 struct, got %d", len(program.Structs))
+	}
+	if program.Structs[0].Name != "User" {
+		t.Fatalf("unexpected struct name: %q", program.Structs[0].Name)
+	}
+
+	mainFn := program.Functions[0]
+	loop, ok := mainFn.Body.Stmts[2].(*ast.ForStmt)
+	if !ok {
+		t.Fatalf("expected for statement, got %T", mainFn.Body.Stmts[2])
+	}
+	if loop.Init != nil || loop.Post != nil {
+		t.Fatalf("expected condition-only loop")
+	}
+
+	ifStmt, ok := loop.Body.Stmts[1].(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("expected if statement, got %T", loop.Body.Stmts[1])
+	}
+	if ifStmt.Else == nil {
+		t.Fatal("expected else branch")
+	}
+	elseIf, ok := ifStmt.Else.(*ast.IfStmt)
+	if !ok {
+		t.Fatalf("expected else-if branch, got %T", ifStmt.Else)
+	}
+	if elseIf.Else == nil {
+		t.Fatal("expected trailing else branch")
+	}
+
+	assign, ok := ifStmt.Then.Stmts[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("expected assignment in then branch, got %T", ifStmt.Then.Stmts[0])
+	}
+	if _, ok := assign.Target.(*ast.SelectorExpr); !ok {
+		t.Fatalf("expected selector assignment target, got %T", assign.Target)
+	}
+}

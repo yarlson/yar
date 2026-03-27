@@ -145,3 +145,145 @@ fn main() i32 {
 		})
 	}
 }
+
+func TestCheckV02FeaturesValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct User {
+	id i32
+	name str
+}
+
+fn lookup(id i32) !User {
+	if id <= 0 {
+		return error.InvalidUserID
+	} else {
+		return User{id: id, name: "user"}
+	}
+}
+
+fn main() !i32 {
+	var found User
+	users := [2]User{
+		User{id: 1, name: "alice"},
+		User{id: 2, name: "bob"},
+	}
+
+	for i := 0; i < len(users); i = i + 1 {
+		user := users[i]
+		if !(user.id % 2 == 0) {
+			continue
+		}
+		found = user
+		break
+	}
+
+	if found.id == 0 {
+		found = lookup(2)?
+	}
+
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckV02FeaturesInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "break outside loop",
+			src: `
+package main
+
+fn main() i32 {
+	break
+	return 0
+}
+`,
+			substr: "break can only be used inside a loop",
+		},
+		{
+			name: "continue outside loop",
+			src: `
+package main
+
+fn main() i32 {
+	continue
+	return 0
+}
+`,
+			substr: "continue can only be used inside a loop",
+		},
+		{
+			name: "len requires array",
+			src: `
+package main
+
+fn main() i32 {
+	x := len(1)
+	return x
+}
+`,
+			substr: "len requires an array argument",
+		},
+		{
+			name: "unknown struct field",
+			src: `
+package main
+
+struct User {
+	id i32
+}
+
+fn main() i32 {
+	user := User{id: 1}
+	return user.name
+}
+`,
+			substr: "struct \"User\" has no field \"name\"",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}

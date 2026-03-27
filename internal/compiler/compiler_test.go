@@ -153,6 +153,23 @@ func TestPanicProgram(t *testing.T) {
 	}
 }
 
+func TestV02FixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "structs_and_loops.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "B\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildAndRunPropagateSugar(t *testing.T) {
 	t.Parallel()
 
@@ -225,6 +242,101 @@ fn main() i32 {
 	}
 	if exitErr.ExitCode() != 7 {
 		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+}
+
+func TestBuildAndRunV02Program(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct User {
+	id i32
+	name str
+}
+
+fn get_user(id i32) !User {
+	if id <= 0 {
+		return error.InvalidUserID
+	} else {
+		return User{id: id, name: "fallback"}
+	}
+}
+
+fn main() !i32 {
+	var winner User
+	users := [3]User{
+		User{id: 1, name: "alice"},
+		User{id: 2, name: "bob"},
+		User{id: 3, name: "eve"},
+	}
+
+	for i := 0; i < len(users); i = i + 1 {
+		user := users[i]
+		if !(user.id % 2 == 0) {
+			continue
+		} else {
+			winner = user
+			break
+		}
+	}
+
+	if winner.id == 0 {
+		winner = get_user(2)?
+	}
+
+	winner.name = "B"
+	print(winner.name)
+	print("\n")
+	return 0
+}
+`
+
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "B\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestBuildAndRunErrorableStructHandling(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct User {
+	id i32
+	name str
+}
+
+fn get_user(id i32) !User {
+	if id <= 0 {
+		return error.InvalidUserID
+	}
+	return User{id: id, name: "ok"}
+}
+
+fn main() i32 {
+	user := get_user(0) or |err| {
+		print("missing\n")
+		return 0
+	}
+	print(user.name)
+	print("\n")
+	return 1
+}
+`
+
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "missing\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
 	}
 }
 

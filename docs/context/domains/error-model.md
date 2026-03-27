@@ -13,11 +13,16 @@
 - Returning `error.Name` is only valid inside an errorable function or a function returning `error`.
 - A raw `!T` expression is rejected in:
   - `:=` bindings
+  - `var` initializers
   - assignments
   - function arguments
+  - unary operators
   - binary operators
-  - `if` conditions
+  - field access
+  - indexing
+  - `if` and `for` conditions
   - non-propagating returns
+  - plain expression statements
 - A call to an errorable function may be returned directly from a function with the same errorable result type.
 - Postfix `?` is propagation sugar only.
 - `or |err| { ... }` is local handling sugar only.

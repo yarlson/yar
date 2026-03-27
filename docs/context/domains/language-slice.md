@@ -3,9 +3,10 @@
 ## Source Shape
 
 - A source file starts with a package declaration and is accepted only when the package name is `main`.
-- Functions are top-level declarations with positional parameters and an explicit return type.
+- Top-level declarations may be `struct` or `fn`.
+- Functions have positional parameters and an explicit return type.
 - Return types may be prefixed with `!` to mark the function as errorable.
-- `let` is not supported; local declarations use `:=`.
+- `let` is not supported; local declarations use `:=` or `var`.
 
 ## Implemented Types
 
@@ -16,13 +17,21 @@
 - `void`
 - `noreturn`
 - `error`
+- user-defined struct types
+- fixed array types
 
 ## Statements
 
 - Block statements delimited by `{` and `}`
 - `:=` bindings with inferred type from the assigned expression
-- Reassignment to an existing local
-- `if` with a condition and a single `then` block
+- `var name Type`
+- `var name Type = expr`
+- Reassignment to an existing local, struct field, or array index
+- `if`, `else`, and `else if`
+- `for cond { ... }`
+- `for init; cond; post { ... }`
+- `break`
+- `continue`
 - `return`
 - Expression statements
 
@@ -33,23 +42,35 @@
 - String literals with `\n`, `\t`, `\\`, and `\"` escapes
 - Boolean literals
 - `error.Name` literals in return position
+- Struct literals
+- Array literals
 - Function calls
 - Grouping with parentheses
+- Field access
+- Indexing
 - Postfix error propagation with `expr?`
 - Local error handling with `expr or |err| { ... }`
-- Binary arithmetic: `+`, `-`, `*`, `/`
+- Unary operators: `-`, `!`
+- Binary arithmetic: `+`, `-`, `*`, `/`, `%`
 - Binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 
 ## Semantic Rules
 
 - `main` must exist and return `i32` or `!i32`.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
+- Struct fields and array elements cannot use `void`, `noreturn`, or an unknown type.
+- Recursive struct containment is rejected.
 - `noreturn` functions cannot also be errorable and cannot contain `return`.
 - Plain `error` is a valid parameter or return type for non-`main` functions.
 - Non-`void` functions must return on every reachable path.
-- `if` conditions must be non-errorable `bool` expressions.
+- `if` and `for` conditions must be non-errorable `bool` expressions.
 - Arithmetic and relational operators require matching integer operands after literal coercion.
 - Equality and inequality are supported for integers and `bool`.
+- Unary `-` requires an integer operand.
+- Unary `!` requires a `bool` operand.
+- Field access requires a struct value and a known field.
+- Indexing requires an array value and an integer index.
+- `len` requires an array argument and returns `i32`.
 - `error.Name` is only valid as the direct operand of `return` inside an errorable function or a function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned directly, propagated with `?`, or handled with `or |err| { ... }`.
 - `?` is only valid on `!T` or `error` expressions and only inside a function that can return an error.
@@ -62,3 +83,4 @@
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
+- `len([N]T) i32`

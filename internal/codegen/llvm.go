@@ -36,9 +36,23 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("; yar v0\n")
+	b.WriteString("; yar v0.2\n")
 	b.WriteString("source_filename = \"yar\"\n\n")
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
+
+	structNames := make([]string, 0, len(info.Structs))
+	for name := range info.Structs {
+		structNames = append(structNames, name)
+	}
+	sort.Strings(structNames)
+	for _, name := range structNames {
+		info := info.Structs[name]
+		fieldTypes := make([]string, 0, len(info.Fields))
+		for _, field := range info.Fields {
+			fieldTypes = append(fieldTypes, g.llvmType(field.Type))
+		}
+		fmt.Fprintf(&b, "%s = type { %s }\n", g.structTypeName(name), strings.Join(fieldTypes, ", "))
+	}
 
 	resultTypes := make([]string, 0, len(g.usedResultType))
 	for typ := range g.usedResultType {
@@ -191,13 +205,20 @@ func (g *Generator) llvmType(typ checker.Type) string {
 		return "%yar.str"
 	case checker.TypeError:
 		return "i32"
-	default:
-		panic("unsupported type: " + typ)
 	}
+
+	if array, ok := checker.ParseArrayType(typ); ok {
+		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
+	}
+	return g.structTypeName(string(typ))
+}
+
+func (g *Generator) structTypeName(name string) string {
+	return "%yar.struct." + sanitizeLabel(name)
 }
 
 func (g *Generator) resultTypeName(typ checker.Type) string {
-	return "%yar.result." + string(typ)
+	return "%yar.result." + sanitizeLabel(string(typ))
 }
 
 func (g *Generator) resultStructLiteral(typ checker.Type) string {
@@ -272,11 +293,17 @@ type functionEmitter struct {
 	labelID    int
 	terminated bool
 	scopes     []map[string]localSlot
+	loops      []loopContext
 }
 
 type localSlot struct {
 	typ checker.Type
 	ptr string
+}
+
+type loopContext struct {
+	breakLabel    string
+	continueLabel string
 }
 
 func newFunctionEmitter(g *Generator, fn *ast.FunctionDecl, sig checker.Signature) *functionEmitter {
@@ -295,9 +322,8 @@ func (f *functionEmitter) emit() string {
 	}
 
 	params := make([]string, 0, len(f.fn.Params))
-	for i, param := range f.fn.Params {
+	for i := range f.fn.Params {
 		params = append(params, fmt.Sprintf("%s %%arg%d", f.g.llvmType(f.sig.Params[i]), i))
-		_ = param
 	}
 
 	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.fn.Name), strings.Join(params, ", "))
@@ -358,26 +384,36 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(value.typ))
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, slot)
 		f.bindLocal(s.Name, localSlot{typ: value.typ, ptr: "%" + slot})
+	case *ast.VarStmt:
+		typ := f.localType(stmt)
+		slot := f.newTemp("slot")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(typ))
+		value := f.g.zeroValue(typ)
+		if s.Value != nil {
+			value = f.genExpression(s.Value).ref
+		}
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(typ), value, slot)
+		f.bindLocal(s.Name, localSlot{typ: typ, ptr: "%" + slot})
 	case *ast.AssignStmt:
-		slot, ok := f.lookupLocal(s.Name)
-		if !ok {
+		ptr, typ := f.addressOfTarget(s.Target)
+		value := f.genExpression(s.Value)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value.ref, ptr)
+	case *ast.IfStmt:
+		f.genIf(s)
+	case *ast.ForStmt:
+		f.genFor(s)
+	case *ast.BreakStmt:
+		if len(f.loops) == 0 {
 			return
 		}
-		value := f.genExpression(s.Value)
-		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(slot.typ), value.ref, slot.ptr)
-	case *ast.IfStmt:
-		cond := f.genExpression(s.Cond)
-		thenLabel := f.newLabel("if.then")
-		endLabel := f.newLabel("if.end")
-		fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", cond.ref, thenLabel, endLabel)
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", f.loops[len(f.loops)-1].breakLabel)
 		f.terminated = true
-		f.emitLabel(thenLabel)
-		f.genBlock(s.Then)
-		if !f.terminated {
-			fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
-			f.terminated = true
+	case *ast.ContinueStmt:
+		if len(f.loops) == 0 {
+			return
 		}
-		f.emitLabel(endLabel)
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", f.loops[len(f.loops)-1].continueLabel)
+		f.terminated = true
 	case *ast.ReturnStmt:
 		f.genReturn(s)
 	case *ast.ExprStmt:
@@ -388,6 +424,109 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 	default:
 		panic("unsupported statement")
 	}
+}
+
+func (f *functionEmitter) genIf(stmt *ast.IfStmt) {
+	cond := f.genExpression(stmt.Cond)
+	thenLabel := f.newLabel("if.then")
+	endLabel := f.newLabel("if.end")
+
+	if stmt.Else == nil {
+		fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", cond.ref, thenLabel, endLabel)
+		f.terminated = true
+		f.emitLabel(thenLabel)
+		f.genBlock(stmt.Then)
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+			f.terminated = true
+		}
+		f.emitLabel(endLabel)
+		return
+	}
+
+	elseLabel := f.newLabel("if.else")
+	fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", cond.ref, thenLabel, elseLabel)
+	f.terminated = true
+
+	f.emitLabel(thenLabel)
+	f.genBlock(stmt.Then)
+	thenTerminated := f.terminated
+	if !thenTerminated {
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+		f.terminated = true
+	}
+
+	f.emitLabel(elseLabel)
+	f.genStatement(stmt.Else)
+	elseTerminated := f.terminated
+	if !elseTerminated {
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+		f.terminated = true
+	}
+
+	if thenTerminated && elseTerminated {
+		f.terminated = true
+		return
+	}
+	f.emitLabel(endLabel)
+}
+
+func (f *functionEmitter) genFor(stmt *ast.ForStmt) {
+	f.pushScope()
+	defer f.popScope()
+
+	if stmt.Init != nil {
+		f.genStatement(stmt.Init)
+		if f.terminated {
+			return
+		}
+	}
+
+	condLabel := f.newLabel("for.cond")
+	bodyLabel := f.newLabel("for.body")
+	endLabel := f.newLabel("for.end")
+	continueLabel := condLabel
+	postLabel := ""
+	if stmt.Post != nil {
+		postLabel = f.newLabel("for.post")
+		continueLabel = postLabel
+	}
+
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", condLabel)
+	f.terminated = true
+
+	f.emitLabel(condLabel)
+	if stmt.Cond != nil {
+		cond := f.genExpression(stmt.Cond)
+		fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", cond.ref, bodyLabel, endLabel)
+	} else {
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", bodyLabel)
+	}
+	f.terminated = true
+
+	f.loops = append(f.loops, loopContext{
+		breakLabel:    endLabel,
+		continueLabel: continueLabel,
+	})
+
+	f.emitLabel(bodyLabel)
+	f.genBlock(stmt.Body)
+	if !f.terminated {
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", continueLabel)
+		f.terminated = true
+	}
+
+	if stmt.Post != nil {
+		f.emitLabel(postLabel)
+		f.genStatement(stmt.Post)
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", condLabel)
+			f.terminated = true
+		}
+	}
+
+	f.loops = f.loops[:len(f.loops)-1]
+	f.emitLabel(endLabel)
 }
 
 func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
@@ -463,17 +602,104 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.emitStringValue(e.Value)
 	case *ast.GroupExpr:
 		return f.genExpression(e.Inner)
+	case *ast.UnaryExpr:
+		return f.genUnary(expr, e)
 	case *ast.PropagateExpr:
 		return f.genPropagate(e)
 	case *ast.HandleExpr:
 		return f.genHandle(e)
 	case *ast.BinaryExpr:
 		return f.genBinary(e)
+	case *ast.SelectorExpr:
+		return f.genSelector(e)
+	case *ast.IndexExpr:
+		return f.genIndex(e)
+	case *ast.StructLiteralExpr:
+		return f.genStructLiteral(expr, e)
+	case *ast.ArrayLiteralExpr:
+		return f.genArrayLiteral(expr, e)
 	case *ast.CallExpr:
 		return f.genCall(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
 	}
+}
+
+func (f *functionEmitter) genUnary(expr ast.Expression, unary *ast.UnaryExpr) exprValue {
+	value := f.genExpression(unary.Inner)
+	switch unary.Operator {
+	case token.Minus:
+		out := f.newTemp("neg")
+		typ := f.exprType(expr)
+		if typ == checker.TypeUntypedInt {
+			typ = checker.TypeI32
+		}
+		fmt.Fprintf(&f.builder, "  %%%s = sub %s 0, %s\n", out, f.g.llvmType(typ), value.ref)
+		return exprValue{ref: "%" + out, typ: typ}
+	case token.Bang:
+		out := f.newTemp("not")
+		fmt.Fprintf(&f.builder, "  %%%s = xor i1 %s, true\n", out, value.ref)
+		return exprValue{ref: "%" + out, typ: checker.TypeBool}
+	default:
+		panic("unsupported unary operator")
+	}
+}
+
+func (f *functionEmitter) genSelector(expr *ast.SelectorExpr) exprValue {
+	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
+	info := f.g.info.Structs[string(baseType)]
+	field, index, _ := info.Field(expr.Name)
+	ptr := f.newTemp("field.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", ptr, f.g.llvmType(baseType), basePtr, index)
+	load := f.newTemp("field")
+	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %%%s\n", load, f.g.llvmType(field.Type), ptr)
+	return exprValue{ref: "%" + load, typ: field.Type}
+}
+
+func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
+	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
+	array, _ := checker.ParseArrayType(baseType)
+	index := f.genExpression(expr.Index)
+	ptr := f.newTemp("elem.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
+	load := f.newTemp("elem")
+	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %%%s\n", load, f.g.llvmType(array.Elem), ptr)
+	return exprValue{ref: "%" + load, typ: array.Elem}
+}
+
+func (f *functionEmitter) genStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) exprValue {
+	typ := f.exprType(expr)
+	if len(lit.Fields) == 0 {
+		return exprValue{ref: "zeroinitializer", typ: typ}
+	}
+
+	value := "zeroinitializer"
+	info := f.g.info.Structs[string(typ)]
+	for _, fieldInit := range lit.Fields {
+		field, index, _ := info.Field(fieldInit.Name)
+		fieldValue := f.genExpression(fieldInit.Value)
+		next := f.newTemp("struct")
+		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(field.Type), fieldValue.ref, index)
+		value = "%" + next
+	}
+	return exprValue{ref: value, typ: typ}
+}
+
+func (f *functionEmitter) genArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralExpr) exprValue {
+	typ := f.exprType(expr)
+	array, _ := checker.ParseArrayType(typ)
+	if len(lit.Elements) == 0 {
+		return exprValue{ref: "zeroinitializer", typ: typ}
+	}
+
+	value := "zeroinitializer"
+	for i, element := range lit.Elements {
+		elementValue := f.genExpression(element)
+		next := f.newTemp("array")
+		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(array.Elem), elementValue.ref, i)
+		value = "%" + next
+	}
+	return exprValue{ref: value, typ: typ}
 }
 
 func (f *functionEmitter) genPropagate(expr *ast.PropagateExpr) exprValue {
@@ -595,6 +821,9 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 	case token.Slash:
 		fmt.Fprintf(&f.builder, "  %%%s = sdiv %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
 		return exprValue{ref: "%" + out, typ: left.typ}
+	case token.Percent:
+		fmt.Fprintf(&f.builder, "  %%%s = srem %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
+		return exprValue{ref: "%" + out, typ: left.typ}
 	case token.Less:
 		fmt.Fprintf(&f.builder, "  %%%s = icmp slt %s %s, %s\n", out, f.g.llvmType(left.typ), left.ref, right.ref)
 		return exprValue{ref: "%" + out, typ: checker.TypeBool}
@@ -619,6 +848,12 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 }
 
 func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
+	if expr.Name == "len" {
+		_ = f.genExpression(expr.Args[0])
+		array, _ := checker.ParseArrayType(f.exprType(expr.Args[0]))
+		return exprValue{ref: fmt.Sprintf("%d", array.Len), typ: checker.TypeI32}
+	}
+
 	sig := f.g.functions[expr.Name]
 	args := make([]exprValue, 0, len(expr.Args))
 	for _, arg := range expr.Args {
@@ -672,6 +907,59 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	}
 }
 
+func (f *functionEmitter) addressOfTarget(target ast.Expression) (string, checker.Type) {
+	ptr, typ, ok := f.addressOfLValueExpr(target)
+	if !ok {
+		panic(fmt.Sprintf("unsupported assignment target %T", target))
+	}
+	return ptr, typ
+}
+
+func (f *functionEmitter) addressOfLValueExpr(expr ast.Expression) (string, checker.Type, bool) {
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		slot, ok := f.lookupLocal(e.Name)
+		if !ok {
+			return "", checker.TypeInvalid, false
+		}
+		return slot.ptr, slot.typ, true
+	case *ast.SelectorExpr:
+		basePtr, baseType, ok := f.addressOfLValueExpr(e.Inner)
+		if !ok {
+			return "", checker.TypeInvalid, false
+		}
+		info := f.g.info.Structs[string(baseType)]
+		field, index, _ := info.Field(e.Name)
+		ptr := f.newTemp("field.ptr")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", ptr, f.g.llvmType(baseType), basePtr, index)
+		return "%" + ptr, field.Type, true
+	case *ast.IndexExpr:
+		basePtr, baseType, ok := f.addressOfLValueExpr(e.Inner)
+		if !ok {
+			return "", checker.TypeInvalid, false
+		}
+		array, _ := checker.ParseArrayType(baseType)
+		index := f.genExpression(e.Index)
+		ptr := f.newTemp("elem.ptr")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
+		return "%" + ptr, array.Elem, true
+	default:
+		return "", checker.TypeInvalid, false
+	}
+}
+
+func (f *functionEmitter) addressOfAggregateExpr(expr ast.Expression) (string, checker.Type) {
+	if ptr, typ, ok := f.addressOfLValueExpr(expr); ok {
+		return ptr, typ
+	}
+
+	value := f.genExpression(expr)
+	slot := f.newTemp("agg.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(value.typ))
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, slot)
+	return "%" + slot, value.typ
+}
+
 func (f *functionEmitter) emitStringValue(value string) exprValue {
 	global := f.g.stringConstant(value)
 	ptrName := f.newTemp("str.ptr")
@@ -717,23 +1005,23 @@ func (f *functionEmitter) emitErrorCodeResult(typ checker.Type, code string) str
 	tmp3 := f.newTemp("result")
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s zeroinitializer, i1 1, 0\n", tmp1, f.g.resultTypeName(typ))
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, i32 %s, 1\n", tmp2, f.g.resultTypeName(typ), tmp1, code)
-	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, %s %s, 2\n", tmp3, f.g.resultTypeName(typ), tmp2, f.g.llvmType(typ), zeroValue(typ))
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %%%s, %s %s, 2\n", tmp3, f.g.resultTypeName(typ), tmp2, f.g.llvmType(typ), f.g.zeroValue(typ))
 	return "%" + tmp3
 }
 
-func zeroValue(typ checker.Type) string {
+func (g *Generator) zeroValue(typ checker.Type) string {
 	switch typ {
-	case checker.TypeBool:
-		return "0"
-	case checker.TypeI32:
-		return "0"
-	case checker.TypeI64:
-		return "0"
-	case checker.TypeError:
+	case checker.TypeBool, checker.TypeI32, checker.TypeI64, checker.TypeError:
 		return "0"
 	case checker.TypeStr:
 		return "zeroinitializer"
 	default:
+		if _, ok := checker.ParseArrayType(typ); ok {
+			return "zeroinitializer"
+		}
+		if _, ok := g.info.Structs[string(typ)]; ok {
+			return "zeroinitializer"
+		}
 		return "0"
 	}
 }
@@ -748,6 +1036,14 @@ func (f *functionEmitter) exprInfo(expr ast.Expression) checker.ExprType {
 		return checker.ExprType{Base: checker.TypeInvalid}
 	}
 	return exprType
+}
+
+func (f *functionEmitter) localType(node ast.Node) checker.Type {
+	typ, ok := f.g.info.Locals[node]
+	if !ok {
+		return checker.TypeInvalid
+	}
+	return typ
 }
 
 func (f *functionEmitter) newTemp(prefix string) string {

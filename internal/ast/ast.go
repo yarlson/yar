@@ -6,6 +6,11 @@ type Node interface {
 	Pos() token.Position
 }
 
+type Declaration interface {
+	Node
+	declNode()
+}
+
 type Statement interface {
 	Node
 	stmtNode()
@@ -19,11 +24,36 @@ type Expression interface {
 type Program struct {
 	PackagePos  token.Position
 	PackageName string
+	Structs     []*StructDecl
 	Functions   []*FunctionDecl
 }
 
 func (p *Program) Pos() token.Position {
 	return p.PackagePos
+}
+
+type TypeRef struct {
+	Name string
+	Pos  token.Position
+}
+
+type StructDecl struct {
+	StructPos token.Position
+	Name      string
+	NamePos   token.Position
+	Fields    []StructField
+}
+
+func (d *StructDecl) Pos() token.Position {
+	return d.StructPos
+}
+
+func (*StructDecl) declNode() {}
+
+type StructField struct {
+	Name    string
+	NamePos token.Position
+	Type    TypeRef
 }
 
 type FunctionDecl struct {
@@ -39,15 +69,12 @@ func (f *FunctionDecl) Pos() token.Position {
 	return f.NamePos
 }
 
+func (*FunctionDecl) declNode() {}
+
 type Param struct {
 	Name    string
 	NamePos token.Position
 	Type    TypeRef
-}
-
-type TypeRef struct {
-	Name string
-	Pos  token.Position
 }
 
 type BlockStmt struct {
@@ -74,14 +101,27 @@ func (s *LetStmt) Pos() token.Position {
 
 func (*LetStmt) stmtNode() {}
 
-type AssignStmt struct {
+type VarStmt struct {
+	VarPos  token.Position
 	Name    string
 	NamePos token.Position
+	Type    TypeRef
 	Value   Expression
 }
 
+func (s *VarStmt) Pos() token.Position {
+	return s.VarPos
+}
+
+func (*VarStmt) stmtNode() {}
+
+type AssignStmt struct {
+	Target Expression
+	Value  Expression
+}
+
 func (s *AssignStmt) Pos() token.Position {
-	return s.NamePos
+	return s.Target.Pos()
 }
 
 func (*AssignStmt) stmtNode() {}
@@ -90,6 +130,7 @@ type IfStmt struct {
 	IfPos token.Position
 	Cond  Expression
 	Then  *BlockStmt
+	Else  Statement
 }
 
 func (s *IfStmt) Pos() token.Position {
@@ -97,6 +138,40 @@ func (s *IfStmt) Pos() token.Position {
 }
 
 func (*IfStmt) stmtNode() {}
+
+type ForStmt struct {
+	ForPos token.Position
+	Init   Statement
+	Cond   Expression
+	Post   Statement
+	Body   *BlockStmt
+}
+
+func (s *ForStmt) Pos() token.Position {
+	return s.ForPos
+}
+
+func (*ForStmt) stmtNode() {}
+
+type BreakStmt struct {
+	BreakPos token.Position
+}
+
+func (s *BreakStmt) Pos() token.Position {
+	return s.BreakPos
+}
+
+func (*BreakStmt) stmtNode() {}
+
+type ContinueStmt struct {
+	ContinuePos token.Position
+}
+
+func (s *ContinueStmt) Pos() token.Position {
+	return s.ContinuePos
+}
+
+func (*ContinueStmt) stmtNode() {}
 
 type ReturnStmt struct {
 	ReturnPos token.Position
@@ -186,6 +261,18 @@ func (e *CallExpr) Pos() token.Position {
 
 func (*CallExpr) exprNode() {}
 
+type UnaryExpr struct {
+	Operator token.Kind
+	OpPos    token.Position
+	Inner    Expression
+}
+
+func (e *UnaryExpr) Pos() token.Position {
+	return e.OpPos
+}
+
+func (*UnaryExpr) exprNode() {}
+
 type BinaryExpr struct {
 	Left     Expression
 	Operator token.Kind
@@ -208,6 +295,61 @@ func (e *GroupExpr) Pos() token.Position {
 }
 
 func (*GroupExpr) exprNode() {}
+
+type SelectorExpr struct {
+	Inner   Expression
+	DotPos  token.Position
+	Name    string
+	NamePos token.Position
+}
+
+func (e *SelectorExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*SelectorExpr) exprNode() {}
+
+type IndexExpr struct {
+	Inner       Expression
+	LBracketPos token.Position
+	Index       Expression
+}
+
+func (e *IndexExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*IndexExpr) exprNode() {}
+
+type StructLiteralExpr struct {
+	Type   TypeRef
+	LBrace token.Position
+	Fields []StructLiteralField
+}
+
+func (e *StructLiteralExpr) Pos() token.Position {
+	return e.Type.Pos
+}
+
+func (*StructLiteralExpr) exprNode() {}
+
+type StructLiteralField struct {
+	Name    string
+	NamePos token.Position
+	Value   Expression
+}
+
+type ArrayLiteralExpr struct {
+	Type     TypeRef
+	LBrace   token.Position
+	Elements []Expression
+}
+
+func (e *ArrayLiteralExpr) Pos() token.Position {
+	return e.Type.Pos
+}
+
+func (*ArrayLiteralExpr) exprNode() {}
 
 type PropagateExpr struct {
 	Inner       Expression

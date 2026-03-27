@@ -3,6 +3,8 @@ package checker
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"yar/internal/ast"
 	"yar/internal/diag"
@@ -36,10 +38,30 @@ type Signature struct {
 	Builtin   bool
 }
 
+type StructField struct {
+	Name string
+	Type Type
+}
+
+type StructInfo struct {
+	Name   string
+	Fields []StructField
+}
+
+func (s StructInfo) Field(name string) (StructField, int, bool) {
+	for i, field := range s.Fields {
+		if field.Name == name {
+			return field, i, true
+		}
+	}
+	return StructField{}, -1, false
+}
+
 type Info struct {
 	Functions     map[*ast.FunctionDecl]Signature
 	ExprTypes     map[ast.Expression]ExprType
 	Locals        map[ast.Node]Type
+	Structs       map[string]StructInfo
 	ErrorCodes    map[string]int
 	OrderedErrors []string
 }
@@ -47,6 +69,7 @@ type Info struct {
 type Checker struct {
 	diag      diag.List
 	functions map[string]Signature
+	structs   map[string]*ast.StructDecl
 	info      Info
 	current   *functionContext
 }
@@ -54,12 +77,42 @@ type Checker struct {
 type functionContext struct {
 	signature Signature
 	scopes    []map[string]Type
+	loopDepth int
 }
 
 type coercedIntegers struct {
 	Left   ExprType
 	Right  ExprType
 	Result Type
+}
+
+type ArrayType struct {
+	Len  int
+	Elem Type
+}
+
+func MakeArrayType(length int, elem Type) Type {
+	return Type(fmt.Sprintf("[%d]%s", length, elem))
+}
+
+func ParseArrayType(typ Type) (ArrayType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "[") {
+		return ArrayType{}, false
+	}
+	end := strings.IndexByte(text, ']')
+	if end < 0 {
+		return ArrayType{}, false
+	}
+	length, err := strconv.Atoi(text[1:end])
+	if err != nil {
+		return ArrayType{}, false
+	}
+	elem := Type(text[end+1:])
+	if elem == TypeInvalid {
+		return ArrayType{}, false
+	}
+	return ArrayType{Len: length, Elem: elem}, true
 }
 
 func Check(program *ast.Program) (Info, []diag.Diagnostic) {
@@ -84,10 +137,12 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Builtin: true,
 			},
 		},
+		structs: make(map[string]*ast.StructDecl),
 		info: Info{
 			Functions:  make(map[*ast.FunctionDecl]Signature),
 			ExprTypes:  make(map[ast.Expression]ExprType),
 			Locals:     make(map[ast.Node]Type),
+			Structs:    make(map[string]StructInfo),
 			ErrorCodes: make(map[string]int),
 		},
 	}
@@ -104,6 +159,42 @@ func (c *Checker) checkProgram(program *ast.Program) {
 	if program.PackageName != "main" {
 		c.diag.Add(program.Pos(), "package must be main")
 	}
+
+	for _, decl := range program.Structs {
+		if _, exists := c.structs[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "struct %q is already declared", decl.Name)
+			continue
+		}
+		c.structs[decl.Name] = decl
+	}
+
+	for _, decl := range program.Structs {
+		if _, exists := c.info.Structs[decl.Name]; exists {
+			continue
+		}
+		info := StructInfo{Name: decl.Name}
+		seenFields := make(map[string]struct{})
+		for _, field := range decl.Fields {
+			if _, exists := seenFields[field.Name]; exists {
+				c.diag.Add(field.NamePos, "field %q is already declared in struct %q", field.Name, decl.Name)
+				continue
+			}
+			seenFields[field.Name] = struct{}{}
+
+			fieldType := c.resolveTypeRef(field.Type)
+			if fieldType == TypeVoid || fieldType == TypeNoReturn {
+				c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.Name)
+				continue
+			}
+			info.Fields = append(info.Fields, StructField{
+				Name: field.Name,
+				Type: fieldType,
+			})
+		}
+		c.info.Structs[decl.Name] = info
+	}
+
+	c.checkStructCycles()
 
 	for _, fn := range program.Functions {
 		if _, exists := c.functions[fn.Name]; exists {
@@ -154,6 +245,45 @@ func (c *Checker) checkProgram(program *ast.Program) {
 	}
 }
 
+func (c *Checker) checkStructCycles() {
+	visiting := make(map[string]bool)
+	visited := make(map[string]bool)
+
+	var visit func(name string)
+	visit = func(name string) {
+		if visited[name] {
+			return
+		}
+		if visiting[name] {
+			c.diag.Add(c.structs[name].NamePos, "struct %q cannot contain itself recursively", name)
+			return
+		}
+		visiting[name] = true
+		info := c.info.Structs[name]
+		for _, field := range info.Fields {
+			for _, dep := range c.structDependencies(field.Type) {
+				visit(dep)
+			}
+		}
+		visiting[name] = false
+		visited[name] = true
+	}
+
+	for name := range c.info.Structs {
+		visit(name)
+	}
+}
+
+func (c *Checker) structDependencies(typ Type) []string {
+	if array, ok := ParseArrayType(typ); ok {
+		return c.structDependencies(array.Elem)
+	}
+	if _, ok := c.info.Structs[string(typ)]; ok {
+		return []string{string(typ)}
+	}
+	return nil
+}
+
 func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 	ctx := &functionContext{
 		signature: sig,
@@ -175,14 +305,13 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 			continue
 		}
 		ctx.scopes[0][param.Name] = paramType
-		c.info.Locals[fn.Body] = TypeVoid
 	}
 
 	c.checkBlock(fn.Body)
 	if sig.Return == TypeVoid {
 		return
 	}
-	if !c.blockDefinitelyTerminates(fn.Body) {
+	if !c.blockDefinitelyReturns(fn.Body) {
 		if sig.Return == TypeNoReturn {
 			c.diag.Add(fn.NamePos, "function %q must not fall through", fn.Name)
 			return
@@ -199,18 +328,23 @@ func (c *Checker) checkBlock(block *ast.BlockStmt) {
 	}
 }
 
+func (c *Checker) checkBlockWithErrorBinding(block *ast.BlockStmt, name string) {
+	c.pushScope()
+	defer c.popScope()
+	c.bindLocal(name, TypeError)
+	for _, stmt := range block.Stmts {
+		c.checkStatement(stmt)
+	}
+}
+
 func (c *Checker) checkStatement(stmt ast.Statement) {
 	switch s := stmt.(type) {
 	case *ast.BlockStmt:
 		c.checkBlock(s)
 	case *ast.LetStmt:
 		value := c.checkExpression(s.Value)
-		if value.Errorable {
-			c.diag.Add(s.Value.Pos(), "errorable value cannot be bound to a local")
-			return
-		}
-		if value.Base == TypeInvalid || value.Base == TypeVoid || value.Base == TypeNoReturn {
-			c.diag.Add(s.Value.Pos(), "declaration requires a value")
+		value = c.requireNonErrorableValue(s.Value, value, "errorable value cannot be bound to a local")
+		if value.Base == TypeInvalid {
 			return
 		}
 		if value.Base == TypeUntypedInt {
@@ -227,19 +361,38 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		}
 		c.bindLocal(s.Name, value.Base)
 		c.info.Locals[s] = value.Base
+	case *ast.VarStmt:
+		declaredType := c.resolveTypeRef(s.Type)
+		if declaredType == TypeVoid || declaredType == TypeNoReturn || declaredType == TypeInvalid {
+			c.diag.Add(s.Type.Pos, "local %q cannot use type %q", s.Name, s.Type.Name)
+			return
+		}
+		if c.scopeOwns(s.Name) {
+			c.diag.Add(s.NamePos, "local %q is already declared in this scope", s.Name)
+			return
+		}
+		if s.Value != nil {
+			value := c.checkExpression(s.Value)
+			value = c.requireNonErrorableValue(s.Value, value, "errorable value cannot be bound to a local")
+			if value.Base == TypeInvalid {
+				return
+			}
+			value = c.coerceUntypedInteger(s.Value, value, declaredType)
+			if value.Base != declaredType {
+				c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, declaredType)
+				return
+			}
+		}
+		c.bindLocal(s.Name, declaredType)
+		c.info.Locals[s] = declaredType
 	case *ast.AssignStmt:
-		targetType, ok := c.lookupLocal(s.Name)
-		if !ok {
-			c.diag.Add(s.NamePos, "unknown local %q", s.Name)
+		targetType := c.checkAssignmentTarget(s.Target)
+		if targetType == TypeInvalid {
 			return
 		}
 		value := c.checkExpression(s.Value)
-		if value.Errorable {
-			c.diag.Add(s.Value.Pos(), "errorable value cannot be assigned directly")
-			return
-		}
-		if value.Base == TypeNoReturn {
-			c.diag.Add(s.Value.Pos(), "assignment requires a value")
+		value = c.requireNonErrorableValue(s.Value, value, "errorable value cannot be assigned directly")
+		if value.Base == TypeInvalid {
 			return
 		}
 		value = c.coerceUntypedInteger(s.Value, value, targetType)
@@ -247,14 +400,21 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, targetType)
 		}
 	case *ast.IfStmt:
-		cond := c.checkExpression(s.Cond)
-		if cond.Errorable {
-			c.diag.Add(s.Cond.Pos(), "if condition cannot be errorable")
-		}
-		if cond.Base != TypeBool {
-			c.diag.Add(s.Cond.Pos(), "if condition must be bool")
-		}
+		c.checkCondition(s.Cond, "if condition must be bool", "if condition cannot be errorable")
 		c.checkBlock(s.Then)
+		if s.Else != nil {
+			c.checkStatement(s.Else)
+		}
+	case *ast.ForStmt:
+		c.checkFor(s)
+	case *ast.BreakStmt:
+		if c.current.loopDepth == 0 {
+			c.diag.Add(s.BreakPos, "break can only be used inside a loop")
+		}
+	case *ast.ContinueStmt:
+		if c.current.loopDepth == 0 {
+			c.diag.Add(s.ContinuePos, "continue can only be used inside a loop")
+		}
 	case *ast.ReturnStmt:
 		c.checkReturn(s)
 	case *ast.ExprStmt:
@@ -264,6 +424,104 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		}
 	default:
 		c.diag.Add(stmt.Pos(), "unsupported statement")
+	}
+}
+
+func (c *Checker) checkFor(stmt *ast.ForStmt) {
+	c.pushScope()
+	defer c.popScope()
+
+	if stmt.Init != nil {
+		c.checkForClauseStatement(stmt.Init)
+	}
+	if stmt.Cond == nil {
+		c.diag.Add(stmt.ForPos, "for loop requires a condition")
+	} else {
+		c.checkCondition(stmt.Cond, "for condition must be bool", "for condition cannot be errorable")
+	}
+	if stmt.Post != nil {
+		c.checkForClauseStatement(stmt.Post)
+	}
+
+	c.current.loopDepth++
+	c.checkBlock(stmt.Body)
+	c.current.loopDepth--
+}
+
+func (c *Checker) checkForClauseStatement(stmt ast.Statement) {
+	switch stmt.(type) {
+	case *ast.LetStmt, *ast.VarStmt, *ast.AssignStmt, *ast.ExprStmt:
+		c.checkStatement(stmt)
+	default:
+		c.diag.Add(stmt.Pos(), "for clause must be a declaration, assignment, or expression")
+	}
+}
+
+func (c *Checker) checkCondition(expr ast.Expression, typeMessage, errorMessage string) {
+	cond := c.checkExpression(expr)
+	if cond.Errorable {
+		c.diag.Add(expr.Pos(), "%s", errorMessage)
+	}
+	if cond.Base != TypeBool {
+		c.diag.Add(expr.Pos(), "%s", typeMessage)
+	}
+}
+
+func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
+	switch t := target.(type) {
+	case *ast.IdentExpr:
+		typ, ok := c.lookupLocal(t.Name)
+		if !ok {
+			c.diag.Add(t.NamePos, "unknown local %q", t.Name)
+			return TypeInvalid
+		}
+		return typ
+	case *ast.SelectorExpr:
+		base := c.checkAssignmentTarget(t.Inner)
+		if base == TypeInvalid {
+			return TypeInvalid
+		}
+		info, ok := c.info.Structs[string(base)]
+		if !ok {
+			c.diag.Add(t.DotPos, "field access requires a struct value")
+			return TypeInvalid
+		}
+		field, _, ok := info.Field(t.Name)
+		if !ok {
+			c.diag.Add(t.NamePos, "struct %q has no field %q", info.Name, t.Name)
+			return TypeInvalid
+		}
+		return field.Type
+	case *ast.IndexExpr:
+		base := c.checkAssignmentTarget(t.Inner)
+		if base == TypeInvalid {
+			return TypeInvalid
+		}
+		array, ok := ParseArrayType(base)
+		if !ok {
+			c.diag.Add(t.LBracketPos, "indexing requires an array value")
+			return TypeInvalid
+		}
+		indexType := c.checkExpression(t.Index)
+		if indexType.Errorable {
+			c.diag.Add(t.Index.Pos(), "index expression cannot be errorable")
+			return TypeInvalid
+		}
+		if !isIntegerType(indexType.Base) {
+			c.diag.Add(t.Index.Pos(), "index expression must be an integer")
+			return TypeInvalid
+		}
+		if indexType.Base == TypeUntypedInt {
+			indexType = c.coerceUntypedInteger(t.Index, indexType, TypeI32)
+			if indexType.Base == TypeUntypedInt {
+				c.diag.Add(t.Index.Pos(), "index expression must fit in i32")
+				return TypeInvalid
+			}
+		}
+		return array.Elem
+	default:
+		c.diag.Add(target.Pos(), "invalid assignment target")
+		return TypeInvalid
 	}
 }
 
@@ -302,7 +560,7 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 		c.diag.Add(stmt.Value.Pos(), "return cannot use an errorable value directly")
 		return
 	}
-	if value.Base == TypeNoReturn {
+	if value.Base == TypeNoReturn || value.Base == TypeVoid {
 		c.diag.Add(stmt.Value.Pos(), "return requires a value")
 		return
 	}
@@ -345,43 +603,231 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		et := c.checkExpression(e.Inner)
 		c.info.ExprTypes[expr] = et
 		return et
+	case *ast.UnaryExpr:
+		return c.checkUnary(expr, e)
 	case *ast.PropagateExpr:
 		return c.checkPropagate(expr, e)
 	case *ast.HandleExpr:
 		return c.checkHandle(expr, e)
 	case *ast.BinaryExpr:
 		return c.checkBinary(expr, e)
+	case *ast.SelectorExpr:
+		return c.checkSelector(expr, e)
+	case *ast.IndexExpr:
+		return c.checkIndex(expr, e)
+	case *ast.StructLiteralExpr:
+		return c.checkStructLiteral(expr, e)
+	case *ast.ArrayLiteralExpr:
+		return c.checkArrayLiteral(expr, e)
 	case *ast.CallExpr:
-		sig, ok := c.functions[e.Name]
-		if !ok {
-			c.diag.Add(e.NamePos, "unknown function %q", e.Name)
-			return ExprType{Base: TypeInvalid}
-		}
-		if len(e.Args) != len(sig.Params) {
-			c.diag.Add(e.NamePos, "function %q expects %d arguments, got %d", e.Name, len(sig.Params), len(e.Args))
-		}
-		for i, arg := range e.Args {
-			argType := c.checkExpression(arg)
-			if argType.Errorable {
-				c.diag.Add(arg.Pos(), "errorable value cannot be passed as an argument")
-				continue
-			}
-			if argType.Base == TypeNoReturn {
-				c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, e.Name)
-				continue
-			}
-			argType = c.coerceUntypedInteger(arg, argType, sig.Params[i])
-			if i < len(sig.Params) && argType.Base != sig.Params[i] {
-				c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, e.Name, sig.Params[i], argType.Base)
-			}
-		}
-		et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
-		c.info.ExprTypes[expr] = et
-		return et
+		return c.checkCall(expr, e)
 	default:
 		c.diag.Add(expr.Pos(), "unsupported expression")
 		return ExprType{Base: TypeInvalid}
 	}
+}
+
+func (c *Checker) checkUnary(expr ast.Expression, unary *ast.UnaryExpr) ExprType {
+	inner := c.checkExpression(unary.Inner)
+	if inner.Errorable {
+		c.diag.Add(unary.OpPos, "unary operators cannot use errorable operands")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	switch unary.Operator {
+	case token.Minus:
+		if !isIntegerType(inner.Base) {
+			c.diag.Add(unary.OpPos, "unary - requires an integer operand")
+			return ExprType{Base: TypeInvalid}
+		}
+		c.info.ExprTypes[expr] = inner
+		return inner
+	case token.Bang:
+		if inner.Base != TypeBool {
+			c.diag.Add(unary.OpPos, "unary ! requires a bool operand")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeBool}
+		c.info.ExprTypes[expr] = et
+		return et
+	default:
+		c.diag.Add(unary.OpPos, "unsupported unary operator")
+		return ExprType{Base: TypeInvalid}
+	}
+}
+
+func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr) ExprType {
+	inner := c.checkExpression(selector.Inner)
+	if inner.Errorable {
+		c.diag.Add(selector.DotPos, "field access cannot use an errorable value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	info, ok := c.info.Structs[string(inner.Base)]
+	if !ok {
+		c.diag.Add(selector.DotPos, "field access requires a struct value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	field, _, ok := info.Field(selector.Name)
+	if !ok {
+		c.diag.Add(selector.NamePos, "struct %q has no field %q", info.Name, selector.Name)
+		return ExprType{Base: TypeInvalid}
+	}
+
+	et := ExprType{Base: field.Type}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType {
+	inner := c.checkExpression(index.Inner)
+	if inner.Errorable {
+		c.diag.Add(index.LBracketPos, "indexing cannot use an errorable value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	array, ok := ParseArrayType(inner.Base)
+	if !ok {
+		c.diag.Add(index.LBracketPos, "indexing requires an array value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	indexType := c.checkExpression(index.Index)
+	if indexType.Errorable {
+		c.diag.Add(index.Index.Pos(), "index expression cannot be errorable")
+		return ExprType{Base: TypeInvalid}
+	}
+	if !isIntegerType(indexType.Base) {
+		c.diag.Add(index.Index.Pos(), "index expression must be an integer")
+		return ExprType{Base: TypeInvalid}
+	}
+	if indexType.Base == TypeUntypedInt {
+		indexType = c.coerceUntypedInteger(index.Index, indexType, TypeI32)
+		if indexType.Base == TypeUntypedInt {
+			c.diag.Add(index.Index.Pos(), "index expression must fit in i32")
+			return ExprType{Base: TypeInvalid}
+		}
+	}
+
+	et := ExprType{Base: array.Elem}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) ExprType {
+	typ := c.resolveTypeRef(lit.Type)
+	info, ok := c.info.Structs[string(typ)]
+	if !ok {
+		c.diag.Add(lit.Type.Pos, "struct literal requires a struct type")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	seen := make(map[string]struct{})
+	for _, field := range lit.Fields {
+		if _, exists := seen[field.Name]; exists {
+			c.diag.Add(field.NamePos, "field %q is already initialized", field.Name)
+			continue
+		}
+		seen[field.Name] = struct{}{}
+
+		fieldInfo, _, ok := info.Field(field.Name)
+		if !ok {
+			c.diag.Add(field.NamePos, "struct %q has no field %q", info.Name, field.Name)
+			continue
+		}
+		value := c.checkExpression(field.Value)
+		value = c.requireNonErrorableValue(field.Value, value, "errorable value cannot be used in a struct literal")
+		if value.Base == TypeInvalid {
+			continue
+		}
+		value = c.coerceUntypedInteger(field.Value, value, fieldInfo.Type)
+		if value.Base != fieldInfo.Type {
+			c.diag.Add(field.Value.Pos(), "cannot assign %s to %s", value.Base, fieldInfo.Type)
+		}
+	}
+
+	et := ExprType{Base: typ}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralExpr) ExprType {
+	typ := c.resolveTypeRef(lit.Type)
+	array, ok := ParseArrayType(typ)
+	if !ok {
+		c.diag.Add(lit.Type.Pos, "array literal requires an array type")
+		return ExprType{Base: TypeInvalid}
+	}
+	if len(lit.Elements) > array.Len {
+		c.diag.Add(lit.Pos(), "array literal has too many elements for %s", typ)
+	}
+	for _, element := range lit.Elements {
+		value := c.checkExpression(element)
+		value = c.requireNonErrorableValue(element, value, "errorable value cannot be used in an array literal")
+		if value.Base == TypeInvalid {
+			continue
+		}
+		value = c.coerceUntypedInteger(element, value, array.Elem)
+		if value.Base != array.Elem {
+			c.diag.Add(element.Pos(), "cannot assign %s to %s", value.Base, array.Elem)
+		}
+	}
+
+	et := ExprType{Base: typ}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
+	if call.Name == "len" {
+		if len(call.Args) != 1 {
+			c.diag.Add(call.NamePos, "function %q expects 1 arguments, got %d", call.Name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		argType := c.checkExpression(call.Args[0])
+		if argType.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		if _, ok := ParseArrayType(argType.Base); !ok {
+			c.diag.Add(call.Args[0].Pos(), "len requires an array argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeI32}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+
+	sig, ok := c.functions[call.Name]
+	if !ok {
+		c.diag.Add(call.NamePos, "unknown function %q", call.Name)
+		return ExprType{Base: TypeInvalid}
+	}
+	if len(call.Args) != len(sig.Params) {
+		c.diag.Add(call.NamePos, "function %q expects %d arguments, got %d", call.Name, len(sig.Params), len(call.Args))
+	}
+	for i, arg := range call.Args {
+		argType := c.checkExpression(arg)
+		if argType.Errorable {
+			c.diag.Add(arg.Pos(), "errorable value cannot be passed as an argument")
+			continue
+		}
+		if argType.Base == TypeNoReturn || argType.Base == TypeVoid {
+			c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, call.Name)
+			continue
+		}
+		if i >= len(sig.Params) {
+			continue
+		}
+		argType = c.coerceUntypedInteger(arg, argType, sig.Params[i])
+		if argType.Base != sig.Params[i] {
+			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, call.Name, sig.Params[i], argType.Base)
+		}
+	}
+	et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
+	c.info.ExprTypes[expr] = et
+	return et
 }
 
 func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprType {
@@ -393,7 +839,7 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 	}
 
 	switch binary.Operator {
-	case token.Plus, token.Minus, token.Star, token.Slash:
+	case token.Plus, token.Minus, token.Star, token.Slash, token.Percent:
 		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
 		if !ok {
 			c.diag.Add(binary.OpPos, "arithmetic operators require matching integer operands")
@@ -427,7 +873,7 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			return ExprType{Base: TypeInvalid}
 		}
 		if left.Base != TypeBool {
-			c.diag.Add(binary.OpPos, "comparison is only supported for bool and integers in v0")
+			c.diag.Add(binary.OpPos, "comparison is only supported for bool and integers in v0.2")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeBool}
@@ -443,10 +889,27 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch Type(ref.Name) {
 	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr, TypeError:
 		return Type(ref.Name)
-	default:
-		c.diag.Add(ref.Pos, "unknown type %q", ref.Name)
-		return TypeInvalid
 	}
+
+	if text, ok := parseArrayTypeName(ref.Name); ok {
+		if text.Len < 0 || text.Len > 2147483647 {
+			c.diag.Add(ref.Pos, "array length %d is out of range", text.Len)
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(ast.TypeRef{Name: text.Elem, Pos: ref.Pos})
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "array element type %q is not allowed", text.Elem)
+			return TypeInvalid
+		}
+		return MakeArrayType(text.Len, elemType)
+	}
+
+	if _, ok := c.structs[ref.Name]; ok {
+		return Type(ref.Name)
+	}
+
+	c.diag.Add(ref.Pos, "unknown type %q", ref.Name)
+	return TypeInvalid
 }
 
 func (c *Checker) pushScope() {
@@ -482,24 +945,57 @@ func (c *Checker) useErrorName(name string) {
 	c.info.ErrorCodes[name] = 0
 }
 
-func (c *Checker) blockDefinitelyTerminates(block *ast.BlockStmt) bool {
+func (c *Checker) blockDefinitelyReturns(block *ast.BlockStmt) bool {
 	for _, stmt := range block.Stmts {
-		if c.stmtDefinitelyTerminates(stmt) {
+		if c.stmtDefinitelyReturns(stmt) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *Checker) stmtDefinitelyTerminates(stmt ast.Statement) bool {
+func (c *Checker) stmtDefinitelyReturns(stmt ast.Statement) bool {
 	switch s := stmt.(type) {
 	case *ast.ReturnStmt:
 		return true
 	case *ast.BlockStmt:
-		return c.blockDefinitelyTerminates(s)
+		return c.blockDefinitelyReturns(s)
 	case *ast.ExprStmt:
 		exprType, ok := c.info.ExprTypes[s.Expr]
 		return ok && exprType.Base == TypeNoReturn
+	case *ast.IfStmt:
+		if s.Else == nil {
+			return false
+		}
+		return c.blockDefinitelyReturns(s.Then) && c.stmtDefinitelyReturns(s.Else)
+	default:
+		return false
+	}
+}
+
+func (c *Checker) blockTerminatesControlFlow(block *ast.BlockStmt) bool {
+	for _, stmt := range block.Stmts {
+		if c.stmtTerminatesControlFlow(stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) stmtTerminatesControlFlow(stmt ast.Statement) bool {
+	switch s := stmt.(type) {
+	case *ast.ReturnStmt, *ast.BreakStmt, *ast.ContinueStmt:
+		return true
+	case *ast.BlockStmt:
+		return c.blockTerminatesControlFlow(s)
+	case *ast.ExprStmt:
+		exprType, ok := c.info.ExprTypes[s.Expr]
+		return ok && exprType.Base == TypeNoReturn
+	case *ast.IfStmt:
+		if s.Else == nil {
+			return false
+		}
+		return c.blockTerminatesControlFlow(s.Then) && c.stmtTerminatesControlFlow(s.Else)
 	default:
 		return false
 	}
@@ -534,7 +1030,7 @@ func (c *Checker) checkHandle(expr ast.Expression, handle *ast.HandleExpr) ExprT
 	switch {
 	case inner.Errorable && inner.Base != TypeVoid:
 		c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
-		if !c.blockDefinitelyTerminates(handle.Handler) {
+		if !c.blockTerminatesControlFlow(handle.Handler) {
 			c.diag.Add(handle.OrPos, "or handler for a value result must terminate control flow")
 			return ExprType{Base: TypeInvalid}
 		}
@@ -563,6 +1059,18 @@ func formatErrorName(name string) string {
 
 func isIntegerType(typ Type) bool {
 	return typ == TypeI32 || typ == TypeI64 || typ == TypeUntypedInt
+}
+
+func (c *Checker) requireNonErrorableValue(expr ast.Expression, exprType ExprType, errorMessage string) ExprType {
+	if exprType.Errorable {
+		c.diag.Add(expr.Pos(), "%s", errorMessage)
+		return ExprType{Base: TypeInvalid}
+	}
+	if exprType.Base == TypeInvalid || exprType.Base == TypeVoid || exprType.Base == TypeNoReturn {
+		c.diag.Add(expr.Pos(), "declaration requires a value")
+		return ExprType{Base: TypeInvalid}
+	}
+	return exprType
 }
 
 func (c *Checker) coerceUntypedInteger(expr ast.Expression, exprType ExprType, target Type) ExprType {
@@ -650,6 +1158,15 @@ func unwrapIntLiteral(expr ast.Expression) (*ast.IntLiteral, bool) {
 		return e, true
 	case *ast.GroupExpr:
 		return unwrapIntLiteral(e.Inner)
+	case *ast.UnaryExpr:
+		if e.Operator != token.Minus {
+			return nil, false
+		}
+		inner, ok := unwrapIntLiteral(e.Inner)
+		if !ok {
+			return nil, false
+		}
+		return &ast.IntLiteral{Value: -inner.Value, LitPos: e.OpPos}, true
 	default:
 		return nil, false
 	}
@@ -666,18 +1183,33 @@ func (c *Checker) defaultUntypedIntegerType(expr ast.Expression) Type {
 	}
 }
 
-func (c *Checker) checkBlockWithErrorBinding(block *ast.BlockStmt, name string) {
-	c.pushScope()
-	defer c.popScope()
-	c.bindLocal(name, TypeError)
-	for _, stmt := range block.Stmts {
-		c.checkStatement(stmt)
-	}
-}
-
 func (c *Checker) currentCanPropagateError() bool {
 	if c.current == nil {
 		return false
 	}
 	return c.current.signature.Errorable || c.current.signature.Return == TypeError
+}
+
+type parsedArrayType struct {
+	Len  int
+	Elem string
+}
+
+func parseArrayTypeName(name string) (parsedArrayType, bool) {
+	if !strings.HasPrefix(name, "[") {
+		return parsedArrayType{}, false
+	}
+	end := strings.IndexByte(name, ']')
+	if end < 0 {
+		return parsedArrayType{}, false
+	}
+	length, err := strconv.Atoi(name[1:end])
+	if err != nil {
+		return parsedArrayType{}, false
+	}
+	elem := name[end+1:]
+	if elem == "" {
+		return parsedArrayType{}, false
+	}
+	return parsedArrayType{Len: length, Elem: elem}, true
 }

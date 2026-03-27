@@ -98,6 +98,15 @@ go run ./cmd/yar run testdata/hello.yar
 
 This builds to a temporary executable and runs it immediately.
 
+### Run a v0.2 program
+
+```bash
+go run ./cmd/yar run testdata/structs_and_loops.yar
+```
+
+This exercises structs, fixed arrays, `for`, `else`, `break`, `continue`,
+field assignment, indexing, `var`, unary `!`, `%`, and `len`.
+
 ## Example Program
 
 ```yar
@@ -172,6 +181,29 @@ x := divide(10, 2) or |err| {
 
 These forms are syntax sugar. The compiler lowers them into explicit temporaries, error checks, branches, and returns.
 
+## v0.2 Surface
+
+The current language supports:
+
+- top-level `struct` and `fn` declarations
+- fixed arrays such as `[3]User`
+- `if` / `else` / `else if`
+- `for cond { ... }` and `for init; cond; post { ... }`
+- `break` and `continue`
+- `var` declarations in addition to `:=`
+- field access and field assignment
+- indexing and index assignment
+- unary `-`, unary `!`, and `%`
+- `len(array)`
+
+Still not implemented:
+
+- imports
+- methods
+- slices
+- `&&`
+- `||`
+
 ## How Builtins Work
 
 The current builtins are:
@@ -179,6 +211,7 @@ The current builtins are:
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
+- `len([N]T) i32`
 
 Generated LLVM IR calls two runtime functions:
 
@@ -200,6 +233,10 @@ Those functions are implemented in the runtime C source.
 - [testdata/hello.yar](testdata/hello.yar): hello world example
 - [testdata/add.yar](testdata/add.yar): arithmetic example
 - [testdata/divide.yar](testdata/divide.yar): error propagation example
+- [testdata/i64.yar](testdata/i64.yar): `i64` type-check and codegen example
+- [testdata/unhandled_error.yar](testdata/unhandled_error.yar): unhandled error wrapper example
+- [testdata/panic.yar](testdata/panic.yar): panic runtime example
+- [testdata/structs_and_loops.yar](testdata/structs_and_loops.yar): v0.2 structs, arrays, and control-flow example
 
 ## Verify The Repository
 
