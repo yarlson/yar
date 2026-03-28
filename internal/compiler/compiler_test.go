@@ -1133,6 +1133,40 @@ fn main() i32 {
 	}
 }
 
+func TestInternalBuiltinRejectedInUserCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"i32_to_i64", "x := i32_to_i64(1)\n\t_ := x"},
+		{"i64_to_i32", "x := i64_to_i32(1)\n\t_ := x"},
+		{"chr", "x := chr(65)\n\t_ := x"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			src := "package main\n\nfn main() i32 {\n\t" + tt.body + "\n\treturn 0\n}\n"
+			writeSourceFile(t, filepath.Join(root, "main.yar"), src)
+
+			_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+			if err != nil {
+				t.Fatalf("expected diagnostics, got error: %v", err)
+			}
+			if len(diags) == 0 {
+				t.Fatal("expected diagnostics for internal builtin usage")
+			}
+			if got := joinDiagnosticMessages(diags); !strings.Contains(got, "internal to the standard library") {
+				t.Fatalf("unexpected diagnostics: %s", got)
+			}
+		})
+	}
+}
+
 func buildAndRun(t *testing.T, src string) (string, error) {
 	t.Helper()
 

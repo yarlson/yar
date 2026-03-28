@@ -199,9 +199,10 @@ func (l *packageLoader) loadStdlibPackage(importPath string) (*ast.Package, erro
 	}
 
 	pkg := &ast.Package{
-		Path:  importPath,
-		Name:  packageName,
-		Files: files,
+		Path:   importPath,
+		Name:   packageName,
+		Stdlib: true,
+		Files:  files,
 	}
 	l.packages[importPath] = pkg
 
@@ -899,6 +900,9 @@ func (l *packageLowerer) rewriteCallee(pkg *ast.Package, callee ast.Expression) 
 		}
 		if _, ok := l.functions[pkg.Path][ident.Name]; ok {
 			return &ast.IdentExpr{Name: canonicalDeclName(pkg, ident.Name), NamePos: ident.NamePos}
+		}
+		if checker.IsInternalBuiltin(ident.Name) && !pkg.Stdlib {
+			l.diag.Add(ident.NamePos, "builtin %q is internal to the standard library; use the conv package instead", ident.Name)
 		}
 		return &ast.IdentExpr{Name: ident.Name, NamePos: ident.NamePos}
 	}

@@ -555,9 +555,6 @@ Builtins are fixed by the compiler:
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
-- `chr(i32) str` — construct a one-byte string from a byte value (traps if value is outside 0–255)
-- `i32_to_i64(i32) i64` — widen an i32 to i64
-- `i64_to_i32(i64) i32` — truncate an i64 to i32
 
 They are not user-overridable.
 
@@ -627,6 +624,9 @@ import "conv"
 
 Available functions:
 
+- `conv.to_i64(n i32) i64` — widen an i32 to i64
+- `conv.to_i32(n i64) i32` — truncate an i64 to i32
+- `conv.byte_to_str(b i32) str` — construct a one-byte string from a byte value (traps if value is outside 0–255)
 - `conv.itoa(n i32) str` — convert an i32 to its base-10 decimal string
 - `conv.itoa64(n i64) str` — convert an i64 to its base-10 decimal string
 

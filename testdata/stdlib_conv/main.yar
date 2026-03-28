@@ -29,7 +29,7 @@ fn main() i32 {
     if conv.itoa64(42) != "42" {
         return 7
     }
-    neg1 := i32_to_i64(0 - 1)
+    neg1 := conv.to_i64(0 - 1)
     if conv.itoa64(neg1) != "-1" {
         return 8
     }

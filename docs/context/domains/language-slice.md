@@ -135,3 +135,7 @@
 - `delete(map[K]V, K) void`
 
 Builtins remain globally available and are not imported.
+
+Three additional builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the
+standard library. User code accesses their functionality through the `conv`
+package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).

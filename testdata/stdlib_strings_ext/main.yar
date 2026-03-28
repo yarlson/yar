@@ -1,6 +1,7 @@
 package main
 
 import "strings"
+import "conv"
 
 fn test_parse_error_empty() bool {
     v := strings.parse_i64("") or |err| {
@@ -41,7 +42,7 @@ fn main() !i32 {
         return 3
     }
     v2 := strings.parse_i64("-42")?
-    neg42 := i32_to_i64(0 - 42)
+    neg42 := conv.to_i64(0 - 42)
     if v2 != neg42 {
         return 4
     }

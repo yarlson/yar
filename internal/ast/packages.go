@@ -9,6 +9,7 @@ type PackageImport struct {
 type Package struct {
 	Path      string
 	Name      string
+	Stdlib    bool
 	Files     []*Program
 	Imports   []PackageImport
 	Structs   []*StructDecl

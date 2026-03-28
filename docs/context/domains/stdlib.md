@@ -58,10 +58,13 @@ Errors: `error.InvalidUTF8` for malformed sequences, `error.OutOfRange` for inva
 
 ### `conv`
 
-Integer-to-string conversion.
+Type conversion and integer-to-string functions.
 
 Functions:
 
+- `to_i64(n i32) i64` — widen i32 to i64 (wraps internal `i32_to_i64` builtin)
+- `to_i32(n i64) i32` — truncate i64 to i32 (wraps internal `i64_to_i32` builtin)
+- `byte_to_str(b i32) str` — one-byte string from byte value (wraps internal `chr` builtin)
 - `itoa(n i32) str` — base-10 decimal string from i32
 - `itoa64(n i64) str` — base-10 decimal string from i64
 
@@ -69,7 +72,7 @@ Depends on `strings.from_byte` for digit character construction.
 
 ## Constraints
 
-- All stdlib functions use only the public language surface plus compiler builtins (`chr`, `i32_to_i64`, `i64_to_i32`). No compiler-internal backdoors.
+- Stdlib packages have access to internal builtins (`chr`, `i32_to_i64`, `i64_to_i32`) that are not available to user code. The `conv` package exposes these as public wrappers. Other stdlib packages (e.g., `strings`) also call them directly.
 - Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs — acceptable for the current stage.
 - Stdlib packages are not versioned separately from the compiler.
 

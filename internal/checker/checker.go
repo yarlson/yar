@@ -241,6 +241,15 @@ func IsBuiltinFunction(name string) bool {
 	}
 }
 
+func IsInternalBuiltin(name string) bool {
+	switch name {
+	case "chr", "i32_to_i64", "i64_to_i32":
+		return true
+	default:
+		return false
+	}
+}
+
 func isMapKeyType(typ Type) bool {
 	switch typ {
 	case TypeBool, TypeI32, TypeI64, TypeStr:

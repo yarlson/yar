@@ -23,6 +23,7 @@
 - The language supports user-defined structs, fixed arrays, slices, loops, and explicit assignment targets for locals, fields, and indices.
 - Error names are collected across the program, sorted lexicographically, and then mapped to integer codes for the generated IR and native `main` wrapper.
 - Builtins are compiler-owned contracts, not user-overridable functions, including sequence helpers such as `len` and `append`.
+- Three builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the standard library and rejected in user code by the package lowerer. User code accesses their functionality through the `conv` stdlib package.
 - The runtime C source is embedded in the Go binary and materialized into a temporary file during native builds.
 - Runtime-managed allocation helpers exist as an internal boundary for future heap-backed features; allocation failure is treated as an unrecoverable runtime failure rather than a YAR `error`.
 - The CLI places a timeout around `build` and `run` operations before invoking external processes.

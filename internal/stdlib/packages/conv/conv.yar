@@ -27,6 +27,18 @@ pub fn itoa(n i32) str {
     return result
 }
 
+pub fn to_i64(n i32) i64 {
+    return i32_to_i64(n)
+}
+
+pub fn to_i32(n i64) i32 {
+    return i64_to_i32(n)
+}
+
+pub fn byte_to_str(b i32) str {
+    return chr(b)
+}
+
 pub fn itoa64(n i64) str {
     if n == 0 {
         return "0"
