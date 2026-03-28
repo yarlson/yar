@@ -942,6 +942,33 @@ func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
 	}
 }
 
+func TestCompilePathLowersHostProcessDecls(t *testing.T) {
+	t.Parallel()
+
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	for _, want := range []string{
+		"declare void @yar_set_args(i32, ptr)",
+		"declare void @yar_process_args(ptr)",
+		"declare i32 @yar_process_run(ptr, ptr)",
+		"declare i32 @yar_process_run_inherit(ptr, ptr)",
+		"declare i32 @yar_env_lookup(%yar.str, ptr)",
+		"declare void @yar_eprint(ptr, i64)",
+		"define i32 @main(i32 %argc, ptr %argv)",
+		"call void @yar_set_args(i32 %argc, ptr %argv)",
+	} {
+		if !strings.Contains(unit.IR, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, unit.IR)
+		}
+	}
+}
+
 func TestStdlibFSPathFixtureProgram(t *testing.T) {
 	t.Parallel()
 
@@ -951,6 +978,51 @@ func TestStdlibFSPathFixtureProgram(t *testing.T) {
 	}
 	if got, want := output, "fs_path ok\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStdlibProcessEnvFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	captureScript := filepath.Join(root, "capture.sh")
+	inheritScript := filepath.Join(root, "inherit.sh")
+	writeSourceFile(t, captureScript, "#!/bin/sh\nprintf 'captured stdout\\n'\nprintf 'captured stderr\\n' >&2\nexit 7\n")
+	writeSourceFile(t, inheritScript, "#!/bin/sh\nprintf 'inherit stdout\\n'\nprintf 'inherit stderr\\n' >&2\nexit 3\n")
+	if err := os.Chmod(captureScript, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(inheritScript, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath, captureScript, inheritScript)
+	cmd.Env = append(os.Environ(), "YAR_PROCESS_ENV_TEST=env ok")
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"stdio stderr\n",
+		"inherit stdout\n",
+		"inherit stderr\n",
+		"process_env ok\n",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("expected output to contain %q, got %q", want, output.String())
+		}
 	}
 }
 
@@ -995,6 +1067,95 @@ fn main() !i32 {
 		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
 	}
 	if got, want := output.String(), "unhandled error: NotFound\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestUnhandledHostProcessErrorMain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	missingPath := filepath.Join(root, "missing-executable")
+	writeSourceFile(t, filepath.Join(root, "main.yar"), fmt.Sprintf(`package main
+
+import "process"
+
+fn main() !i32 {
+	process.run([]str{%q})?
+	return 0
+}
+`, missingPath))
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "unhandled error: NotFound\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestUnhandledHostProcessInvalidArgumentMain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "process"
+
+fn main() !i32 {
+	process.run([]str{})?
+	return 0
+}
+`)
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "unhandled error: InvalidArgument\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
 	}
 }

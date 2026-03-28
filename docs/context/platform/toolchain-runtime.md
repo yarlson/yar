@@ -21,6 +21,8 @@
 - `yar_print(const char *data, long long len)` writes string data to stdout when the length is positive.
 - `yar_print_int(int32_t value)` prints a signed 32-bit integer with `printf`.
 - `yar_panic(const char *data, long long len)` writes the message to stderr, flushes stderr, and exits with status `1`.
+- `yar_eprint(const char *data, long long len)` writes string data to stderr when the length is positive and flushes stderr.
+- The generated native `main` wrapper now accepts `argc` / `argv`, forwards them to `yar_set_args(int32_t argc, char **argv)`, and then calls user `yar.main()`.
 
 ### Allocation
 
@@ -52,6 +54,15 @@
 - Runtime filesystem status codes map in codegen to stable YAR error names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and `IO`.
 - The current implementation uses POSIX interfaces (`stat`, `opendir`, `mkdir`, `remove`, `mkstemp`) and normalizes paths through the `path` stdlib package rather than a platform-specific separator API.
 
+### Process / Environment Runtime
+
+- `yar_process_args(yar_slice *out)` copies the host argument vector into a runtime-managed `[]str`.
+- `yar_process_run(const yar_slice *argv, yar_process_result *out)` launches one child process, captures stdout/stderr into runtime-managed strings, and returns a stable host-process status code.
+- `yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out)` launches one child with inherited stdin/stdout/stderr and returns a stable host-process status code.
+- `yar_env_lookup(yar_str name, yar_str *out)` looks up one environment variable and returns a stable host-process status code.
+- Host-process status codes map in codegen to stable YAR error names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and `IO`.
+- The current implementation uses POSIX interfaces (`fork`, `execvp`, `waitpid`, `mkstemp`, `getenv`) and currently captures child stdout/stderr through temporary files.
+
 ### Map Runtime
 
 - `yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size)` allocates a new open-addressed hash map with initial capacity 8.
@@ -75,4 +86,4 @@
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, map operations, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, string operations (including indexing, slicing, and concatenation edge cases), stdlib imports, host filesystem/path behavior, CC override behavior, internal builtin rejection, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, map operations, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, string operations (including indexing, slicing, and concatenation edge cases), stdlib imports, host filesystem/path behavior, host process/environment behavior, CC override behavior, internal builtin rejection, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

@@ -681,6 +681,56 @@ Filesystem errors surface through ordinary YAR errors using the names:
 Current implementation note: the host filesystem runtime is POSIX-oriented and
 uses `TMPDIR` or `/tmp` for `fs.temp_dir`.
 
+### `process`
+
+```yar
+import "process"
+```
+
+Types:
+
+- `process.Result { exit_code i32, stdout str, stderr str }`
+
+Available functions:
+
+- `process.args() []str`
+- `process.run(argv []str) !process.Result`
+- `process.run_inherit(argv []str) !i32`
+
+Host-process launch failures surface through ordinary YAR errors using the names:
+
+- `error.NotFound`
+- `error.PermissionDenied`
+- `error.InvalidArgument`
+- `error.IO`
+
+If a child process launches successfully, a non-zero child exit code is reported
+as data in `process.Result.exit_code` or the returned `i32`, not as a YAR
+`error`.
+
+### `env`
+
+```yar
+import "env"
+```
+
+Available functions:
+
+- `env.lookup(name str) !str`
+
+Environment lookup returns `error.NotFound` when a variable is absent. Names
+that cannot cross the host boundary return `error.InvalidArgument`.
+
+### `stdio`
+
+```yar
+import "stdio"
+```
+
+Available functions:
+
+- `stdio.eprint(msg str) void`
+
 ## Not Implemented
 
 The compiler does not currently implement:

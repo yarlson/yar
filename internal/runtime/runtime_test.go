@@ -41,3 +41,20 @@ func TestSourceIncludesFilesystemHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceIncludesProcessHelpers(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"void yar_set_args(int32_t argc, char **argv)",
+		"void yar_process_args(yar_slice *out)",
+		"int32_t yar_process_run(const yar_slice *argv, yar_process_result *out)",
+		"int32_t yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out)",
+		"int32_t yar_env_lookup(yar_str name, yar_str *out)",
+		"void yar_eprint(const char *data, long long len)",
+	} {
+		if !strings.Contains(Source(), want) {
+			t.Fatalf("expected runtime source to contain %q", want)
+		}
+	}
+}

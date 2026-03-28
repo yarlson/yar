@@ -258,6 +258,8 @@ func IsHostIntrinsic(file, fullName string) bool {
 	switch fullName {
 	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
 		return true
+	case "process.args", "process.run", "process.run_inherit", "env.lookup", "stdio.eprint":
+		return true
 	default:
 		return false
 	}
@@ -1531,6 +1533,15 @@ func (c *Checker) registerHostErrorNames(fullName string) {
 			"AlreadyExists",
 			"IO",
 			"InvalidPath",
+			"NotFound",
+			"PermissionDenied",
+		} {
+			c.info.ErrorCodes[name] = 0
+		}
+	case "process.run", "process.run_inherit", "env.lookup":
+		for _, name := range []string{
+			"IO",
+			"InvalidArgument",
 			"NotFound",
 			"PermissionDenied",
 		} {

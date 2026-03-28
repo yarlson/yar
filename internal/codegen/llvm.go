@@ -126,15 +126,21 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_print(ptr, i64)\n")
 	b.WriteString("declare void @yar_print_int(i32)\n")
 	b.WriteString("declare void @yar_panic(ptr, i64)\n")
+	b.WriteString("declare void @yar_eprint(ptr, i64)\n")
 	b.WriteString("declare ptr @yar_alloc(i64)\n")
 	b.WriteString("declare ptr @yar_alloc_zeroed(i64)\n")
 	b.WriteString("declare void @yar_trap_oom()\n")
+	b.WriteString("declare void @yar_set_args(i32, ptr)\n")
 	b.WriteString("declare void @yar_slice_index_check(i64, i64)\n")
 	b.WriteString("declare void @yar_slice_range_check(i64, i64, i64)\n")
 	b.WriteString("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n")
 	b.WriteString("declare i32 @yar_str_equal(ptr, i64, ptr, i64)\n")
 	b.WriteString("declare %yar.str @yar_str_concat(ptr, i64, ptr, i64)\n")
 	b.WriteString("declare void @yar_str_index_check(i64, i64)\n")
+	b.WriteString("declare void @yar_process_args(ptr)\n")
+	b.WriteString("declare i32 @yar_process_run(ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_process_run_inherit(ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_env_lookup(%yar.str, ptr)\n")
 	b.WriteString("declare ptr @yar_map_new(i32, i32, i32)\n")
 	b.WriteString("declare void @yar_map_set(ptr, ptr, ptr)\n")
 	b.WriteString("declare i32 @yar_map_get(ptr, ptr, ptr)\n")
@@ -205,8 +211,9 @@ func (g *Generator) emitMainWrapper() (string, error) {
 	}
 
 	var b strings.Builder
-	b.WriteString("define i32 @main() {\n")
+	b.WriteString("define i32 @main(i32 %argc, ptr %argv) {\n")
 	b.WriteString("entry:\n")
+	b.WriteString("  call void @yar_set_args(i32 %argc, ptr %argv)\n")
 	if !mainSig.Errorable {
 		fmt.Fprintf(&b, "  %%main_value = call i32 @yar.main()\n")
 		b.WriteString("  ret i32 %main_value\n")
@@ -1674,6 +1681,49 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 
 func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exprValue) exprValue {
 	switch sig.FullName {
+	case "process.args":
+		out := f.newTemp("process.args.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.slice\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.slice zeroinitializer, ptr %%%s\n", out)
+		fmt.Fprintf(&f.builder, "  call void @yar_process_args(ptr %%%s)\n", out)
+		return f.loadValue("%"+out, sig.Return)
+	case "process.run":
+		argv := f.newTemp("process.run.argv")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.slice\n", argv)
+		fmt.Fprintf(&f.builder, "  store %%yar.slice %s, ptr %%%s\n", args[0].ref, argv)
+		out := f.newTemp("process.run.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(sig.Return))
+		fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(sig.Return), out)
+		status := f.newTemp("process.run.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_process_run(ptr %%%s, ptr %%%s)\n", status, argv, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "process.run_inherit":
+		argv := f.newTemp("process.run_inherit.argv")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.slice\n", argv)
+		fmt.Fprintf(&f.builder, "  store %%yar.slice %s, ptr %%%s\n", args[0].ref, argv)
+		out := f.newTemp("process.run_inherit.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", out)
+		fmt.Fprintf(&f.builder, "  store i32 0, ptr %%%s\n", out)
+		status := f.newTemp("process.run_inherit.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_process_run_inherit(ptr %%%s, ptr %%%s)\n", status, argv, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "env.lookup":
+		out := f.newTemp("env.lookup.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.str zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("env.lookup.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_env_lookup(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeStr)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "stdio.eprint":
+		ptr := f.newTemp("eprint.ptr")
+		length := f.newTemp("eprint.len")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", ptr, args[0].ref)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", length, args[0].ref)
+		fmt.Fprintf(&f.builder, "  call void @yar_eprint(ptr %%%s, i64 %%%s)\n", ptr, length)
+		return exprValue{typ: checker.TypeVoid}
 	case "fs.read_file":
 		out := f.newTemp("fs.read_file.out")
 		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
@@ -1681,11 +1731,11 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		status := f.newTemp("fs.read_file.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_read_file(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		value := f.loadValue("%"+out, checker.TypeStr)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
 	case "fs.write_file":
 		status := f.newTemp("fs.write_file.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_write_file(%%yar.str %s, %%yar.str %s)\n", status, args[0].ref, args[1].ref)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
 	case "fs.read_dir":
 		out := f.newTemp("fs.read_dir.out")
 		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.slice\n", out)
@@ -1693,7 +1743,7 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		status := f.newTemp("fs.read_dir.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_read_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		value := f.loadValue("%"+out, sig.Return)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
 	case "fs.stat":
 		out := f.newTemp("fs.stat.out")
 		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", out)
@@ -1702,15 +1752,15 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_stat(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		tag := f.newTemp("fs.stat.tag")
 		fmt.Fprintf(&f.builder, "  %%%s = load i32, ptr %%%s\n", tag, out)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, f.emitEnumTagValue(sig.Return, "%"+tag)), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, f.emitEnumTagValue(sig.Return, "%"+tag)), typ: sig.Return}
 	case "fs.mkdir_all":
 		status := f.newTemp("fs.mkdir_all.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_mkdir_all(%%yar.str %s)\n", status, args[0].ref)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
 	case "fs.remove_all":
 		status := f.newTemp("fs.remove_all.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_remove_all(%%yar.str %s)\n", status, args[0].ref)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
 	case "fs.temp_dir":
 		out := f.newTemp("fs.temp_dir.out")
 		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
@@ -1718,7 +1768,7 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		status := f.newTemp("fs.temp_dir.status")
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_temp_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		value := f.loadValue("%"+out, checker.TypeStr)
-		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
 	default:
 		panic("unsupported host intrinsic")
 	}
@@ -1909,7 +1959,7 @@ func (f *functionEmitter) emitAllocType(typ checker.Type, zeroed bool) string {
 	return f.emitAllocBytes(f.emitTypeSize(typ), zeroed)
 }
 
-func (f *functionEmitter) emitHostStatusResult(typ checker.Type, status, successValue string) string {
+func (f *functionEmitter) emitHostStatusResult(fullName string, typ checker.Type, status, successValue string) string {
 	isOK := f.newTemp("host.ok")
 	okLabel := f.newLabel("host.ok")
 	errLabel := f.newLabel("host.err")
@@ -1929,7 +1979,7 @@ func (f *functionEmitter) emitHostStatusResult(typ checker.Type, status, success
 	f.terminated = true
 
 	f.emitLabel(errLabel)
-	errCode := f.emitHostErrorCode(status)
+	errCode := f.emitHostErrorCode(fullName, status)
 	errResult := f.emitErrorCodeResult(typ, errCode)
 	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
 	f.terminated = true
@@ -1940,17 +1990,38 @@ func (f *functionEmitter) emitHostStatusResult(typ checker.Type, status, success
 	return "%" + result
 }
 
-func (f *functionEmitter) emitHostErrorCode(status string) string {
+func (f *functionEmitter) emitHostErrorCode(fullName, status string) string {
 	code := fmt.Sprintf("%d", f.mustErrorCode("IO"))
-	for _, item := range []struct {
+
+	var items []struct {
 		status int
 		name   string
-	}{
-		{status: 4, name: "InvalidPath"},
-		{status: 3, name: "AlreadyExists"},
-		{status: 2, name: "PermissionDenied"},
-		{status: 1, name: "NotFound"},
-	} {
+	}
+	switch fullName {
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
+		items = []struct {
+			status int
+			name   string
+		}{
+			{status: 4, name: "InvalidPath"},
+			{status: 3, name: "AlreadyExists"},
+			{status: 2, name: "PermissionDenied"},
+			{status: 1, name: "NotFound"},
+		}
+	case "process.run", "process.run_inherit", "env.lookup":
+		items = []struct {
+			status int
+			name   string
+		}{
+			{status: 3, name: "InvalidArgument"},
+			{status: 2, name: "PermissionDenied"},
+			{status: 1, name: "NotFound"},
+		}
+	default:
+		panic("missing host error mapping for " + fullName)
+	}
+
+	for _, item := range items {
 		match := f.newTemp("host.err.match")
 		next := f.newTemp("host.err.code")
 		fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, %d\n", match, status, item.status)

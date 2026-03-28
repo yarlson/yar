@@ -142,9 +142,14 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 
 ## Standard Library Surface
 
-- Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `path`, and `fs`.
+- Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `path`, `fs`, `process`, `env`, and `stdio`.
 - `path` is pure yar code and provides `clean`, `join`, `dir`, `base`, and `ext` for host-style path manipulation.
 - `fs` provides explicit-error text file and directory operations: `read_file`, `write_file`, `read_dir`, `stat`, `mkdir_all`, `remove_all`, and `temp_dir`.
 - `fs.read_dir` returns `[]fs.DirEntry`, where `DirEntry` has `name str` and `is_dir bool`.
 - `fs.stat` returns `!fs.EntryKind`, where `EntryKind` cases are `File`, `Directory`, and `Other`.
 - Host filesystem failures surface through ordinary `error` values using stable names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and `IO`.
+- `process.args()` returns `[]str`, `process.run([]str)` returns `!process.Result`, and `process.run_inherit([]str)` returns `!i32`.
+- `process.Result` has `exit_code i32`, `stdout str`, and `stderr str`.
+- `env.lookup(str)` returns `!str`.
+- `stdio.eprint(str)` writes to stderr and returns `void`.
+- Host process/environment failures surface through ordinary `error` values using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and `IO`.

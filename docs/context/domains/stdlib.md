@@ -7,7 +7,7 @@
 - Stdlib packages are imported with bare paths like any user package: `import "strings"`.
 - Resolution order: local packages first, embedded stdlib second. A local directory with the same name shadows the stdlib package.
 - Stdlib packages are parsed, type-checked, and compiled through the same pipeline as user code.
-- Most stdlib functions are ordinary yar code. A small set of embedded `fs` declarations are tagged as host intrinsics during checking/codegen and lower to runtime shims while keeping the user-facing API package-shaped.
+- Most stdlib functions are ordinary yar code. A small set of embedded `fs`, `process`, `env`, and `stdio` declarations are tagged as host intrinsics during checking/codegen and lower to runtime shims while keeping the user-facing API package-shaped.
 
 ## Infrastructure
 
@@ -112,12 +112,54 @@ Errors:
 - `error.InvalidPath`
 - `error.IO`
 
+### `process`
+
+Host-backed process and argv helpers.
+
+Types:
+
+- `Result { exit_code i32, stdout str, stderr str }`
+
+Functions:
+
+- `args() []str` — return the host-provided argument vector
+- `run(argv []str) !Result` — launch one child process, capture stdout/stderr, and return the child exit code plus captured output
+- `run_inherit(argv []str) !i32` — launch one child process with inherited stdin/stdout/stderr and return the child exit code
+
+Errors:
+
+- `error.NotFound`
+- `error.PermissionDenied`
+- `error.InvalidArgument`
+- `error.IO`
+
+### `env`
+
+Host-backed environment lookup.
+
+Functions:
+
+- `lookup(name str) !str` — return one environment variable value, or `error.NotFound` when absent
+
+Additional current failure mode:
+
+- `error.InvalidArgument` for names that cannot cross the host boundary (for example embedded NUL bytes)
+
+### `stdio`
+
+Host-backed stderr output.
+
+Functions:
+
+- `eprint(msg str) void` — write one string to stderr
+
 ## Constraints
 
 - Stdlib packages have access to internal builtins (`chr`, `i32_to_i64`, `i64_to_i32`) that are not available to user code. The `conv` package exposes these as public wrappers. Other stdlib packages (e.g., `strings`) also call them directly.
 - Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs — acceptable for the current stage.
 - Stdlib packages are not versioned separately from the compiler.
 - The `fs` runtime boundary is currently POSIX-oriented (`stat`, `opendir`, `mkdir`, `remove`, `TMPDIR`) rather than a full cross-platform abstraction.
+- The `process` runtime boundary is also POSIX-oriented in the first version (`fork`, `execvp`, `waitpid`, `mkstemp`) and currently captures child stdout/stderr through temporary files before copying them into runtime-managed strings.
 
 ## Adding a New Package
 
@@ -130,7 +172,7 @@ Errors:
 ## Testing
 
 - `internal/stdlib/stdlib_test.go` covers embedding: `Has`, `ReadDir`, `ReadFile`.
-- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, `TestStdlibConvFixtureProgram`, and `TestStdlibFSPathFixtureProgram` compile and run programs using stdlib functions.
-- `TestUnhandledHostFilesystemErrorMain` verifies that propagated `fs` failures surface stable error names at the native `main` wrapper.
+- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, `TestStdlibConvFixtureProgram`, `TestStdlibFSPathFixtureProgram`, and `TestStdlibProcessEnvFixtureProgram` compile and run programs using stdlib functions.
+- `TestUnhandledHostFilesystemErrorMain`, `TestUnhandledHostProcessErrorMain`, and `TestUnhandledHostProcessInvalidArgumentMain` verify that propagated host failures surface stable error names at the native `main` wrapper.
 - `TestLocalPackageShadowsStdlib` verifies the shadowing behavior.
-- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, `testdata/stdlib_conv/main.yar`, and `testdata/stdlib_fs_path/main.yar` are the representative fixtures.
+- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, `testdata/stdlib_conv/main.yar`, `testdata/stdlib_fs_path/main.yar`, and `testdata/stdlib_process_env/main.yar` are the representative fixtures.

@@ -1,10 +1,12 @@
 #include <stdint.h>
 #include <errno.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static void yar_runtime_fail(const char *data, long long len) {
@@ -28,6 +30,14 @@ void yar_print_int(int32_t value) {
 
 void yar_panic(const char *data, long long len) {
     yar_runtime_fail(data, len);
+}
+
+void yar_eprint(const char *data, long long len) {
+    if (len <= 0) {
+        return;
+    }
+    (void)fwrite(data, 1, (size_t)len, stderr);
+    (void)fflush(stderr);
 }
 
 void yar_trap_oom(void) {
@@ -81,6 +91,22 @@ typedef struct {
     int32_t cap;
 } yar_slice;
 
+static yar_str yar_empty_str(void);
+static yar_slice yar_empty_slice(void);
+static char *yar_fs_copy_cstr(const char *src, size_t len);
+static yar_str yar_fs_copy_bytes(const char *src, size_t len);
+
+static int32_t yar_host_argc = 0;
+static char **yar_host_argv = NULL;
+
+void yar_set_args(int32_t argc, char **argv) {
+    if (argc < 0) {
+        argc = 0;
+    }
+    yar_host_argc = argc;
+    yar_host_argv = argv;
+}
+
 int32_t yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len) {
     if (a_len != b_len) return 0;
     if (a_len == 0) return 1;
@@ -123,6 +149,501 @@ yar_str yar_str_from_byte(int32_t value) {
     result.ptr = buf;
     result.len = 1;
     return result;
+}
+
+/* --- host process and environment runtime --- */
+
+#define YAR_HOST_OK                0
+#define YAR_HOST_NOT_FOUND         1
+#define YAR_HOST_PERMISSION_DENIED 2
+#define YAR_HOST_INVALID_ARGUMENT  3
+#define YAR_HOST_IO                4
+
+typedef struct {
+    int32_t exit_code;
+    yar_str stdout;
+    yar_str stderr;
+} yar_process_result;
+
+static int32_t yar_host_status_from_errno(int errnum) {
+    switch (errnum) {
+    case 0:
+        return YAR_HOST_IO;
+    case ENOENT:
+    case ENOTDIR:
+        return YAR_HOST_NOT_FOUND;
+    case EACCES:
+    case EPERM:
+        return YAR_HOST_PERMISSION_DENIED;
+    case E2BIG:
+    case EFAULT:
+    case EINVAL:
+    case ENAMETOOLONG:
+    case ENOEXEC:
+        return YAR_HOST_INVALID_ARGUMENT;
+    default:
+        return YAR_HOST_IO;
+    }
+}
+
+static void yar_free_str(yar_str value) {
+    free((void *)value.ptr);
+}
+
+static int32_t yar_host_string_cstr(yar_str value, int allow_empty, char **out) {
+    int32_t status = YAR_HOST_OK;
+    char *buf;
+    size_t i;
+
+    *out = NULL;
+    if (value.len < 0 || (value.ptr == NULL && value.len != 0)) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+    if (!allow_empty && value.len == 0) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+
+    buf = yar_fs_copy_cstr(value.ptr != NULL ? value.ptr : "", (size_t)value.len);
+    for (i = 0; i < (size_t)value.len; i++) {
+        if (buf[i] == '\0') {
+            free(buf);
+            return YAR_HOST_INVALID_ARGUMENT;
+        }
+    }
+
+    *out = buf;
+    return status;
+}
+
+static void yar_process_free_argv(char **argv, int32_t argc) {
+    int32_t i;
+
+    if (argv == NULL) {
+        return;
+    }
+    for (i = 0; i < argc; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+}
+
+static int32_t yar_process_argv_cstr(yar_slice argv, char ***out_argv, int32_t *out_argc) {
+    yar_str *values;
+    char **cargv;
+    int32_t i;
+    int32_t status;
+
+    *out_argv = NULL;
+    *out_argc = 0;
+    if (argv.len <= 0 || argv.cap < argv.len || (argv.ptr == NULL && argv.len != 0)) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+
+    values = (yar_str *)argv.ptr;
+    cargv = (char **)calloc((size_t)argv.len + 1, sizeof(char *));
+    if (cargv == NULL) {
+        yar_trap_oom();
+    }
+
+    for (i = 0; i < argv.len; i++) {
+        status = yar_host_string_cstr(values[i], i != 0, &cargv[i]);
+        if (status != YAR_HOST_OK) {
+            yar_process_free_argv(cargv, i);
+            return status;
+        }
+    }
+
+    *out_argv = cargv;
+    *out_argc = argv.len;
+    return YAR_HOST_OK;
+}
+
+void yar_process_args(yar_slice *out) {
+    yar_str *values;
+    int32_t i;
+
+    if (out == NULL) {
+        return;
+    }
+    *out = yar_empty_slice();
+    if (yar_host_argc <= 0 || yar_host_argv == NULL) {
+        return;
+    }
+
+    values = (yar_str *)calloc((size_t)yar_host_argc, sizeof(yar_str));
+    if (values == NULL) {
+        yar_trap_oom();
+    }
+    for (i = 0; i < yar_host_argc; i++) {
+        const char *arg = yar_host_argv[i] != NULL ? yar_host_argv[i] : "";
+        values[i] = yar_fs_copy_bytes(arg, strlen(arg));
+    }
+    out->ptr = values;
+    out->len = yar_host_argc;
+    out->cap = yar_host_argc;
+}
+
+int32_t yar_env_lookup(yar_str name, yar_str *out) {
+    char *cname;
+    const char *value;
+    int32_t status;
+
+    if (out == NULL) {
+        return YAR_HOST_IO;
+    }
+    *out = yar_empty_str();
+
+    status = yar_host_string_cstr(name, 1, &cname);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+
+    value = getenv(cname);
+    free(cname);
+    if (value == NULL) {
+        return YAR_HOST_NOT_FOUND;
+    }
+
+    *out = yar_fs_copy_bytes(value, strlen(value));
+    return YAR_HOST_OK;
+}
+
+static int32_t yar_process_create_tempfile(const char *label, int *fd_out) {
+    const char *tmpdir = getenv("TMPDIR");
+    size_t dir_len;
+    size_t label_len = strlen(label);
+    char *pattern;
+    int fd;
+
+    if (fd_out == NULL) {
+        return YAR_HOST_IO;
+    }
+    if (tmpdir == NULL || tmpdir[0] == '\0') {
+        tmpdir = "/tmp";
+    }
+
+    dir_len = strlen(tmpdir);
+    pattern = (char *)malloc(dir_len + label_len + sizeof("/yar--XXXXXX"));
+    if (pattern == NULL) {
+        yar_trap_oom();
+    }
+    memcpy(pattern, tmpdir, dir_len);
+    pattern[dir_len] = '/';
+    memcpy(pattern + dir_len + 1, "yar-", 4);
+    memcpy(pattern + dir_len + 5, label, label_len);
+    memcpy(pattern + dir_len + 5 + label_len, "-XXXXXX", 8);
+
+    fd = mkstemp(pattern);
+    if (fd < 0) {
+        int32_t status = yar_host_status_from_errno(errno);
+        free(pattern);
+        return status;
+    }
+    (void)unlink(pattern);
+    free(pattern);
+    *fd_out = fd;
+    return YAR_HOST_OK;
+}
+
+static int32_t yar_process_read_exec_error(int fd, int *errnum_out) {
+    int errnum = 0;
+    size_t off = 0;
+
+    *errnum_out = 0;
+    while (off < sizeof(errnum)) {
+        ssize_t n = read(fd, ((char *)&errnum) + off, sizeof(errnum) - off);
+        if (n == 0) {
+            if (off == 0) {
+                return YAR_HOST_OK;
+            }
+            return YAR_HOST_IO;
+        }
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return yar_host_status_from_errno(errno);
+        }
+        off += (size_t)n;
+    }
+    *errnum_out = errnum;
+    return YAR_HOST_OK;
+}
+
+static int32_t yar_process_wait(pid_t pid, int32_t *exit_code_out) {
+    int status = 0;
+    pid_t waited;
+
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) {
+        return yar_host_status_from_errno(errno);
+    }
+
+    if (WIFEXITED(status)) {
+        *exit_code_out = (int32_t)WEXITSTATUS(status);
+        return YAR_HOST_OK;
+    }
+    if (WIFSIGNALED(status)) {
+        *exit_code_out = 128 + (int32_t)WTERMSIG(status);
+        return YAR_HOST_OK;
+    }
+    return YAR_HOST_IO;
+}
+
+static int32_t yar_process_read_file_fd(int fd, yar_str *out) {
+    struct stat st;
+    char *buf;
+    size_t total;
+    size_t off;
+
+    *out = yar_empty_str();
+    if (fstat(fd, &st) != 0) {
+        return yar_host_status_from_errno(errno);
+    }
+    if (st.st_size == 0) {
+        return YAR_HOST_OK;
+    }
+    if (st.st_size < 0) {
+        return YAR_HOST_IO;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        return yar_host_status_from_errno(errno);
+    }
+
+    total = (size_t)st.st_size;
+    buf = (char *)malloc(total);
+    if (buf == NULL) {
+        yar_trap_oom();
+    }
+
+    off = 0;
+    while (off < total) {
+        ssize_t n = read(fd, buf + off, total - off);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            free(buf);
+            return yar_host_status_from_errno(errno);
+        }
+        if (n == 0) {
+            break;
+        }
+        off += (size_t)n;
+    }
+
+    out->ptr = buf;
+    out->len = (long long)off;
+    return YAR_HOST_OK;
+}
+
+static int32_t yar_process_collect_capture(int stdout_fd, int stderr_fd, int32_t exit_code, yar_process_result *out) {
+    int32_t status;
+    yar_str stdout_text;
+    yar_str stderr_text;
+
+    if (out == NULL) {
+        return YAR_HOST_IO;
+    }
+    out->exit_code = exit_code;
+    out->stdout = yar_empty_str();
+    out->stderr = yar_empty_str();
+
+    status = yar_process_read_file_fd(stdout_fd, &stdout_text);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+    status = yar_process_read_file_fd(stderr_fd, &stderr_text);
+    if (status != YAR_HOST_OK) {
+        yar_free_str(stdout_text);
+        return status;
+    }
+
+    out->stdout = stdout_text;
+    out->stderr = stderr_text;
+    return YAR_HOST_OK;
+}
+
+int32_t yar_process_run(const yar_slice *argv, yar_process_result *out) {
+    char **cargv;
+    int32_t argc;
+    int stdout_fd = -1;
+    int stderr_fd = -1;
+    int exec_pipe[2] = {-1, -1};
+    int exec_errnum;
+    int32_t exit_code;
+    int32_t status;
+    pid_t pid;
+
+    if (out != NULL) {
+        out->exit_code = 0;
+        out->stdout = yar_empty_str();
+        out->stderr = yar_empty_str();
+    }
+
+    if (argv == NULL) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+    status = yar_process_argv_cstr(*argv, &cargv, &argc);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+    status = yar_process_create_tempfile("stdout", &stdout_fd);
+    if (status != YAR_HOST_OK) {
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    status = yar_process_create_tempfile("stderr", &stderr_fd);
+    if (status != YAR_HOST_OK) {
+        close(stdout_fd);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (pipe(exec_pipe) != 0) {
+        status = yar_host_status_from_errno(errno);
+        close(stdout_fd);
+        close(stderr_fd);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (fcntl(exec_pipe[1], F_SETFD, FD_CLOEXEC) < 0) {
+        status = yar_host_status_from_errno(errno);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        close(stdout_fd);
+        close(stderr_fd);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        status = yar_host_status_from_errno(errno);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        close(stdout_fd);
+        close(stderr_fd);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (pid == 0) {
+        int child_errno;
+
+        close(exec_pipe[0]);
+        if (dup2(stdout_fd, STDOUT_FILENO) < 0 || dup2(stderr_fd, STDERR_FILENO) < 0) {
+            child_errno = errno;
+            (void)write(exec_pipe[1], &child_errno, sizeof(child_errno));
+            _exit(127);
+        }
+        close(stdout_fd);
+        close(stderr_fd);
+        execvp(cargv[0], cargv);
+        child_errno = errno;
+        (void)write(exec_pipe[1], &child_errno, sizeof(child_errno));
+        _exit(127);
+    }
+
+    close(exec_pipe[1]);
+    status = yar_process_read_exec_error(exec_pipe[0], &exec_errnum);
+    close(exec_pipe[0]);
+    if (status != YAR_HOST_OK) {
+        close(stdout_fd);
+        close(stderr_fd);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (exec_errnum != 0) {
+        close(stdout_fd);
+        close(stderr_fd);
+        (void)yar_process_wait(pid, &exit_code);
+        yar_process_free_argv(cargv, argc);
+        return yar_host_status_from_errno(exec_errnum);
+    }
+
+    status = yar_process_wait(pid, &exit_code);
+    if (status == YAR_HOST_OK) {
+        status = yar_process_collect_capture(stdout_fd, stderr_fd, exit_code, out);
+    }
+
+    close(stdout_fd);
+    close(stderr_fd);
+    yar_process_free_argv(cargv, argc);
+    return status;
+}
+
+int32_t yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out) {
+    char **cargv;
+    int32_t argc;
+    int exec_pipe[2] = {-1, -1};
+    int exec_errnum;
+    int32_t exit_code = 0;
+    int32_t status;
+    pid_t pid;
+
+    if (exit_code_out == NULL) {
+        return YAR_HOST_IO;
+    }
+    *exit_code_out = 0;
+
+    if (argv == NULL) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+    status = yar_process_argv_cstr(*argv, &cargv, &argc);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+    if (pipe(exec_pipe) != 0) {
+        status = yar_host_status_from_errno(errno);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (fcntl(exec_pipe[1], F_SETFD, FD_CLOEXEC) < 0) {
+        status = yar_host_status_from_errno(errno);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        status = yar_host_status_from_errno(errno);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (pid == 0) {
+        int child_errno;
+
+        close(exec_pipe[0]);
+        execvp(cargv[0], cargv);
+        child_errno = errno;
+        (void)write(exec_pipe[1], &child_errno, sizeof(child_errno));
+        _exit(127);
+    }
+
+    close(exec_pipe[1]);
+    status = yar_process_read_exec_error(exec_pipe[0], &exec_errnum);
+    close(exec_pipe[0]);
+    if (status != YAR_HOST_OK) {
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    if (exec_errnum != 0) {
+        (void)yar_process_wait(pid, &exit_code);
+        yar_process_free_argv(cargv, argc);
+        return yar_host_status_from_errno(exec_errnum);
+    }
+
+    status = yar_process_wait(pid, &exit_code);
+    if (status == YAR_HOST_OK) {
+        *exit_code_out = exit_code;
+    }
+    yar_process_free_argv(cargv, argc);
+    return status;
 }
 
 /* --- filesystem runtime --- */
