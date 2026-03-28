@@ -2,7 +2,7 @@
 
 A compiled language with explicit error handling, enums with payloads, and a multi-package module system. Yar compiles to native executables through LLVM IR and clang.
 
-```yar
+```
 package main
 
 import "strings"
@@ -82,7 +82,7 @@ yar <command> <file> [-o output]
 
 Functions that can fail return `!T`. Callers must handle the error — the compiler enforces this.
 
-```yar
+```
 fn parse(input str) !i32 {
     if len(input) == 0 {
         return error.Empty
@@ -108,7 +108,7 @@ fn main() !i32 {
 
 Enums are closed variant types. Cases can carry payloads. `match` is exhaustive.
 
-```yar
+```
 enum Expr {
     Int { value i32 }
     Name { text str }
@@ -130,7 +130,7 @@ fn eval(e Expr) i32 {
 
 Packages are directories of `.yar` files. Exported declarations use `pub`.
 
-```yar
+```
 // lexer/lexer.yar
 package lexer
 
@@ -144,7 +144,7 @@ pub fn classify(ch i32) str {
 }
 ```
 
-```yar
+```
 // main.yar
 package main
 
@@ -160,7 +160,7 @@ fn main() i32 {
 
 ### Pointers and recursive data
 
-```yar
+```
 struct Node {
     value i32
     next *Node
@@ -179,7 +179,7 @@ fn main() i32 {
 
 Map indexing returns `!V` — missing keys are errors, not silent zero values.
 
-```yar
+```
 fn main() !i32 {
     m := map[str]i32{"x": 1, "y": 2}
     v := m["x"]?
