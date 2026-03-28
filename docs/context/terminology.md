@@ -28,7 +28,7 @@ handler sugar — `or |err| { ... }`, which checks an error-producing expression
 
 direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
 
-builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, `len`, or `append`.
+builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, `len`, `append`, `has`, or `delete`.
 
 enum — A user-defined closed variant type with named cases, each case optionally carrying a payload of named fields.
 
@@ -37,3 +37,13 @@ match — An exhaustive statement that branches on the case of an enum value, bi
 package graph — The directed acyclic graph of packages rooted at the entry `package main`, resolved by `internal/compiler` before lowering into a single checked program.
 
 unhandled error — An errorable `main` result that reaches the generated native wrapper, which prints an error message and exits with code `1`.
+
+stdlib — The embedded standard library of yar packages (`strings`, `utf8`, `conv`) compiled through the same pipeline as user code.
+
+internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to stdlib packages and rejected in user code by the package lowerer.
+
+slice — A runtime-managed dynamic sequence type `[]T` backed by a pointer, length, and capacity descriptor.
+
+map — A runtime-managed hash table type `map[K]V` with key types restricted to `bool`, `i32`, `i64`, and `str`.
+
+pub — Export marker for top-level `struct`, `enum`, and `fn` declarations, making them visible to importing packages.
