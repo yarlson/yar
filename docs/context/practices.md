@@ -1,29 +1,61 @@
 # Practices
 
-- The repository is organized as a single-project Go module with one user-facing runtime process: the `yar` CLI.
-- Compilation is staged as lex/parse, semantic checking, LLVM IR generation, and optional native linking.
-- Parse and semantic failures are returned as diagnostics; infrastructure failures such as file I/O or `clang` execution are returned as Go errors.
+- The repository is organized as a single-project Go module with one
+  user-facing runtime process: the `yar` CLI.
+- Compilation is staged as package loading, package-graph lowering, semantic
+  checking, LLVM IR generation, and optional native linking.
+- Parse and semantic failures are returned as diagnostics; infrastructure
+  failures such as file I/O or `clang` execution are returned as Go errors.
 - Entry programs must declare `package main`.
-- A user-defined `main` function is required, and it must return `i32` or `!i32`.
+- A user-defined `main` function is required, and it must return `i32` or
+  `!i32`.
 - Packages may span multiple `.yar` files in one directory.
 - Imports are explicit `import "path"` declarations after the package clause.
-- Imported names stay package-qualified; imports do not inject unqualified exported names into local scope.
-- Top-level declarations may be `struct`, `enum`, or `fn`, optionally prefixed with `pub`.
+- Imports resolve from local packages under the entry root first and fall back
+  to the embedded stdlib only when the local package path is absent.
+- Imported names stay package-qualified; imports do not inject unqualified
+  exported names into local scope.
+- Top-level declarations may be `struct`, `enum`, or `fn`, optionally prefixed
+  with `pub`.
 - Cross-package references may use only exported top-level declarations.
-- Exported declarations may not expose package-local struct types in their public surface.
+- Exported declarations may not expose package-local struct or enum types in
+  their public surface.
 - Import cycles are rejected.
-- Local variables are introduced with `:=` or `var`, scoped by blocks, and may be reassigned only after declaration.
-- Raw errorable values cannot be bound, assigned, passed as arguments, used in conditions, used in unary or binary operators, or accessed through fields or indexing.
-- `&&` and `||` short-circuit in source order and require non-errorable `bool` operands.
-- Errorable results must be handled immediately with direct `return`, `?`, or `or |err| { ... }`.
-- `?` is front-end sugar for explicit error inspection and return from the current function.
-- `or |err| { ... }` is front-end sugar for explicit local error inspection and handler control flow.
-- Handler bindings introduced by `or |err| { ... }` are scoped to the handler block and have type `error`.
+- Package lowering rewrites package-local and imported declarations to
+  canonical package-qualified names before checking and code generation.
+- Local variables are introduced with `:=` or `var`, scoped by blocks, and may
+  be reassigned only after declaration.
+- Raw errorable values cannot be bound, assigned, passed as arguments, used in
+  conditions, used in unary or binary operators, or accessed through fields or
+  indexing.
+- `&&` and `||` short-circuit in source order and require non-errorable `bool`
+  operands.
+- Errorable results must be handled immediately with direct `return`, `?`, or
+  `or |err| { ... }`.
+- `?` is front-end sugar for explicit error inspection and return from the
+  current function.
+- `or |err| { ... }` is front-end sugar for explicit local error inspection and
+  handler control flow.
+- Handler bindings introduced by `or |err| { ... }` are scoped to the handler
+  block and have type `error`.
 - The language supports both `!T` errorable returns and plain `error` values.
-- The language supports user-defined structs, fixed arrays, slices, loops, and explicit assignment targets for locals, fields, and indices.
-- Error names are collected across the program, sorted lexicographically, and then mapped to integer codes for the generated IR and native `main` wrapper.
-- Builtins are compiler-owned contracts, not user-overridable functions, including collection helpers such as `len`, `append`, `has`, `delete`, and `keys`.
-- Three builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the standard library and rejected in user code by the package lowerer. User code accesses their functionality through the `conv` stdlib package.
-- The runtime C source is embedded in the Go binary and materialized into a temporary file during native builds.
-- Runtime-managed allocation helpers exist as an internal boundary for future heap-backed features; allocation failure is treated as an unrecoverable runtime failure rather than a YAR `error`.
-- The CLI places a timeout around `build` and `run` operations before invoking external processes.
+- The language supports user-defined structs, enums, fixed arrays, slices,
+  maps, pointers, loops, and explicit assignment targets for locals, fields,
+  indices, dereferences, and map elements.
+- Error names are collected across the program, sorted lexicographically, and
+  then mapped to integer codes for the generated IR and native `main` wrapper.
+- Builtins are compiler-owned contracts, not user-overridable functions,
+  including collection helpers such as `len`, `append`, `has`, `delete`, and
+  `keys`.
+- Three builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the
+  standard library and rejected in user code by the package lowerer. User code
+  accesses their functionality through the `conv` stdlib package.
+- Map indexing returns an errorable value and uses `error.MissingKey` when the
+  key is absent. `keys(map)` returns a snapshot slice of the current keys.
+- The runtime C source is embedded in the Go binary and materialized into a
+  temporary file during native builds.
+- Runtime-managed allocation helpers back slices, maps, pointer-supporting
+  storage, and other heap-backed features. Allocation failure is an
+  unrecoverable runtime failure rather than a YAR `error`.
+- The CLI places a timeout around `build` and `run` operations before invoking
+  external processes.

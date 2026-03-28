@@ -2,48 +2,77 @@
 
 yar — The compiler CLI and the source language implemented in this repository.
 
-program — A loaded package graph rooted at an entry `package main`.
-
 file AST — A parsed source file with a package declaration, optional imports,
-and top-level `struct` and `fn` declarations.
+and top-level `struct`, `enum`, and `fn` declarations.
 
 package — A directory of one or more `.yar` files that declare the same package
 name and share one top-level namespace.
 
-unit — The result of successful compilation before linking; it contains generated LLVM IR and checker metadata.
+program — The lowered, checked compilation unit produced from the entry package
+graph rooted at `package main`.
 
-diagnostic — A source-positioned parse or semantic problem returned alongside compilation results instead of as a hard process error.
+package graph — The directed acyclic graph of packages rooted at the entry
+`package main`, resolved by `internal/compiler` before lowering into a single
+checked program.
 
-errorable function — A function declared with `!` before its return type, such as `!i32` or `!void`.
+canonical name — A lowered declaration name derived from the package path or
+package name, used to merge multiple packages into one checked AST without
+symbol collisions.
 
-error value — A value of builtin type `error`, typically introduced by returning `error.Name` or by the binder in an `or |err| { ... }` handler.
+unit — The result of successful compilation before linking; it contains
+generated LLVM IR and checker metadata.
 
-error code — The integer representation assigned to each distinct returned `error.Name` value during code generation.
+diagnostic — A source-positioned parse or semantic problem returned alongside
+compilation results instead of as a hard process error.
 
-result type — The generated LLVM struct used to represent an errorable return, carrying an error flag, an error code, and optionally a success value.
+errorable function — A function declared with `!` before its return type, such
+as `!i32` or `!void`.
 
-propagation sugar — Postfix `?`, which checks an error-producing expression and returns from the current function when the error is non-nil.
+error value — A value of builtin type `error`, typically introduced by
+returning `error.Name` or by the binder in an `or |err| { ... }` handler.
 
-handler sugar — `or |err| { ... }`, which checks an error-producing expression and runs a local handler block when the error is non-nil.
+error code — The integer representation assigned to each distinct returned
+`error.Name` value during code generation.
 
-direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
+result type — The generated LLVM struct used to represent an errorable return,
+carrying an error flag, an error code, and optionally a success value.
 
-builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, `len`, `append`, `has`, or `delete`.
+propagation sugar — Postfix `?`, which checks an error-producing expression and
+returns from the current function when the error is non-nil.
 
-enum — A user-defined closed variant type with named cases, each case optionally carrying a payload of named fields.
+handler sugar — `or |err| { ... }`, which checks an error-producing expression
+and runs a local handler block when the error is non-nil.
 
-match — An exhaustive statement that branches on the case of an enum value, binding payload fields when present.
+direct propagation — Returning an errorable call expression unchanged from a
+function with the same errorable result type.
 
-package graph — The directed acyclic graph of packages rooted at the entry `package main`, resolved by `internal/compiler` before lowering into a single checked program.
+builtin — A compiler-owned operation with checker-defined behavior: `print`,
+`print_int`, `panic`, `len`, `append`, `has`, `delete`, or `keys`.
 
-unhandled error — An errorable `main` result that reaches the generated native wrapper, which prints an error message and exits with code `1`.
+host intrinsic — A stdlib declaration whose checker/codegen wiring calls a
+runtime helper directly instead of emitted yar code.
 
-stdlib — The embedded standard library of yar packages (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) compiled through the same pipeline as user code.
+enum — A user-defined closed variant type with named cases, each case
+optionally carrying a payload of named fields.
 
-internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to stdlib packages and rejected in user code by the package lowerer.
+match — An exhaustive statement that branches on the case of an enum value,
+binding payload fields when present.
 
-slice — A runtime-managed dynamic sequence type `[]T` backed by a pointer, length, and capacity descriptor.
+unhandled error — An errorable `main` result that reaches the generated native
+wrapper, which prints an error message and exits with code `1`.
 
-map — A runtime-managed hash table type `map[K]V` with key types restricted to `bool`, `i32`, `i64`, and `str`.
+stdlib — The embedded standard library of yar packages (`strings`, `utf8`,
+`conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) compiled through the
+same pipeline as user code.
 
-pub — Export marker for top-level `struct`, `enum`, and `fn` declarations, making them visible to importing packages.
+internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to
+stdlib packages and rejected in user code by the package lowerer.
+
+slice — A runtime-managed dynamic sequence type `[]T` backed by a pointer,
+length, and capacity descriptor.
+
+map — A runtime-managed hash table type `map[K]V` with key types restricted to
+`bool`, `i32`, `i64`, and `str`.
+
+pub — Export marker for top-level `struct`, `enum`, and `fn` declarations,
+making them visible to importing packages.
