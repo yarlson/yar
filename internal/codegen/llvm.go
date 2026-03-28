@@ -39,6 +39,7 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	b.WriteString("; yar v0.2\n")
 	b.WriteString("source_filename = \"yar\"\n\n")
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
+	b.WriteString("%yar.slice = type { ptr, i32, i32 }\n")
 
 	structNames := make([]string, 0, len(info.Structs))
 	for name := range info.Structs {
@@ -110,6 +111,9 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare ptr @yar_alloc(i64)\n")
 	b.WriteString("declare ptr @yar_alloc_zeroed(i64)\n")
 	b.WriteString("declare void @yar_trap_oom()\n")
+	b.WriteString("declare void @yar_slice_index_check(i64, i64)\n")
+	b.WriteString("declare void @yar_slice_range_check(i64, i64, i64)\n")
+	b.WriteString("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -220,6 +224,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
+	}
+	if _, ok := checker.ParseSliceType(typ); ok {
+		return "%yar.slice"
 	}
 	return g.structTypeName(string(typ))
 }
@@ -631,10 +638,14 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.genSelector(e)
 	case *ast.IndexExpr:
 		return f.genIndex(e)
+	case *ast.SliceExpr:
+		return f.genSlice(expr, e)
 	case *ast.StructLiteralExpr:
 		return f.genStructLiteral(expr, e)
 	case *ast.ArrayLiteralExpr:
 		return f.genArrayLiteral(expr, e)
+	case *ast.SliceLiteralExpr:
+		return f.genSliceLiteral(expr, e)
 	case *ast.CallExpr:
 		return f.genCall(e)
 	default:
@@ -675,13 +686,48 @@ func (f *functionEmitter) genSelector(expr *ast.SelectorExpr) exprValue {
 
 func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
 	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
-	array, _ := checker.ParseArrayType(baseType)
-	index := f.genExpression(expr.Index)
-	ptr := f.newTemp("elem.ptr")
-	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
+	if array, ok := checker.ParseArrayType(baseType); ok {
+		index := f.genExpression(expr.Index)
+		ptr := f.newTemp("elem.ptr")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
+		load := f.newTemp("elem")
+		fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %%%s\n", load, f.g.llvmType(array.Elem), ptr)
+		return exprValue{ref: "%" + load, typ: array.Elem}
+	}
+
+	slice, _ := checker.ParseSliceType(baseType)
+	ptr := f.addressOfSliceElement(basePtr, slice.Elem, f.genExpression(expr.Index))
 	load := f.newTemp("elem")
-	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %%%s\n", load, f.g.llvmType(array.Elem), ptr)
-	return exprValue{ref: "%" + load, typ: array.Elem}
+	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", load, f.g.llvmType(slice.Elem), ptr)
+	return exprValue{ref: "%" + load, typ: slice.Elem}
+}
+
+func (f *functionEmitter) genSlice(expr ast.Expression, sliceExpr *ast.SliceExpr) exprValue {
+	basePtr, baseType := f.addressOfAggregateExpr(sliceExpr.Inner)
+	sliceType, _ := checker.ParseSliceType(baseType)
+	sliceValue := f.loadValue(basePtr, baseType)
+	dataPtr := f.extractSliceField(sliceValue.ref, 0, "slice.data")
+	length := f.extractSliceField(sliceValue.ref, 1, "slice.len")
+	capacity := f.extractSliceField(sliceValue.ref, 2, "slice.cap")
+	length64 := f.intToI64(length.ref, length.typ)
+	capacity64 := f.intToI64(capacity.ref, capacity.typ)
+	start := f.genExpression(sliceExpr.Start)
+	end := f.genExpression(sliceExpr.End)
+	start64 := f.intToI64(start.ref, start.typ)
+	end64 := f.intToI64(end.ref, end.typ)
+	fmt.Fprintf(&f.builder, "  call void @yar_slice_range_check(i64 %s, i64 %s, i64 %s)\n", start64, end64, length64)
+	newPtr := f.newTemp("slice.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %s, i64 %s\n", newPtr, f.g.llvmType(sliceType.Elem), dataPtr.ref, start64)
+	newLen64 := f.newTemp("slice.len64")
+	fmt.Fprintf(&f.builder, "  %%%s = sub i64 %s, %s\n", newLen64, end64, start64)
+	newLen := f.newTemp("slice.len")
+	fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %%%s to i32\n", newLen, newLen64)
+	newCap64 := f.newTemp("slice.cap64")
+	fmt.Fprintf(&f.builder, "  %%%s = sub i64 %s, %s\n", newCap64, capacity64, start64)
+	newCap := f.newTemp("slice.cap")
+	fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %%%s to i32\n", newCap, newCap64)
+	ref := f.emitSliceValue("%"+newPtr, "%"+newLen, "%"+newCap)
+	return exprValue{ref: ref, typ: f.exprType(expr)}
 }
 
 func (f *functionEmitter) genStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) exprValue {
@@ -717,6 +763,24 @@ func (f *functionEmitter) genArrayLiteral(expr ast.Expression, lit *ast.ArrayLit
 		value = "%" + next
 	}
 	return exprValue{ref: value, typ: typ}
+}
+
+func (f *functionEmitter) genSliceLiteral(expr ast.Expression, lit *ast.SliceLiteralExpr) exprValue {
+	typ := f.exprType(expr)
+	sliceType, _ := checker.ParseSliceType(typ)
+	if len(lit.Elements) == 0 {
+		return exprValue{ref: "zeroinitializer", typ: typ}
+	}
+	dataPtr := f.emitAllocBytes(f.emitArrayAllocSize(sliceType.Elem, len(lit.Elements)), false)
+	for i, element := range lit.Elements {
+		elementValue := f.genExpression(element)
+		ptr := f.newTemp("slice.elem.ptr")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %s, i64 %d\n", ptr, f.g.llvmType(sliceType.Elem), dataPtr, i)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(sliceType.Elem), elementValue.ref, ptr)
+	}
+	length := fmt.Sprintf("%d", len(lit.Elements))
+	ref := f.emitSliceValue(dataPtr, length, length)
+	return exprValue{ref: ref, typ: typ}
 }
 
 func (f *functionEmitter) genPropagate(expr *ast.PropagateExpr) exprValue {
@@ -908,9 +972,71 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	}
 
 	if sig.Name == "len" && sig.Builtin {
-		_ = f.genExpression(expr.Args[0])
-		array, _ := checker.ParseArrayType(f.exprType(expr.Args[0]))
-		return exprValue{ref: fmt.Sprintf("%d", array.Len), typ: checker.TypeI32}
+		arg := f.genExpression(expr.Args[0])
+		if array, ok := checker.ParseArrayType(f.exprType(expr.Args[0])); ok {
+			return exprValue{ref: fmt.Sprintf("%d", array.Len), typ: checker.TypeI32}
+		}
+		length := f.extractSliceField(arg.ref, 1, "slice.len")
+		return exprValue{ref: length.ref, typ: checker.TypeI32}
+	}
+	if sig.Name == "append" && sig.Builtin {
+		sliceValue := f.genExpression(expr.Args[0])
+		element := f.genExpression(expr.Args[1])
+		sliceType, _ := checker.ParseSliceType(sig.Return)
+		oldData := f.extractSliceField(sliceValue.ref, 0, "append.data")
+		oldLen := f.extractSliceField(sliceValue.ref, 1, "append.len")
+		oldCap := f.extractSliceField(sliceValue.ref, 2, "append.cap")
+		newLen := f.newTemp("append.len")
+		fmt.Fprintf(&f.builder, "  %%%s = add i32 %s, 1\n", newLen, oldLen.ref)
+		oldLen64 := f.intToI64(oldLen.ref, oldLen.typ)
+		needsGrow := f.newTemp("append.needs_grow")
+		growLabel := f.newLabel("append.grow")
+		reuseLabel := f.newLabel("append.reuse")
+		writeLabel := f.newLabel("append.write")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, %s\n", needsGrow, oldLen.ref, oldCap.ref)
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", needsGrow, growLabel, reuseLabel)
+		f.terminated = true
+
+		f.emitLabel(reuseLabel)
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", writeLabel)
+		f.terminated = true
+
+		f.emitLabel(growLabel)
+		capWasZero := f.newTemp("append.cap_zero")
+		doubledCap := f.newTemp("append.cap_double")
+		newCap := f.newTemp("append.cap")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, 0\n", capWasZero, oldCap.ref)
+		fmt.Fprintf(&f.builder, "  %%%s = mul i32 %s, 2\n", doubledCap, oldCap.ref)
+		fmt.Fprintf(&f.builder, "  %%%s = select i1 %%%s, i32 1, i32 %%%s\n", newCap, capWasZero, doubledCap)
+		allocSize := f.emitScaledSize(sliceType.Elem, f.intToI64("%"+newCap, checker.TypeI32))
+		newData := f.emitAllocBytes(allocSize, false)
+		hasExisting := f.newTemp("append.has_existing")
+		copyLabel := f.newLabel("append.copy")
+		growReadyLabel := f.newLabel("append.ready")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %s, 0\n", hasExisting, oldLen.ref)
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", hasExisting, copyLabel, growReadyLabel)
+		f.terminated = true
+
+		f.emitLabel(copyLabel)
+		copySize := f.emitScaledSize(sliceType.Elem, oldLen64)
+		f.emitMemcpy(newData, oldData.ref, copySize)
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", growReadyLabel)
+		f.terminated = true
+
+		f.emitLabel(growReadyLabel)
+		dataPhi := f.newTemp("append.data")
+		capPhi := f.newTemp("append.cap")
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", writeLabel)
+		f.terminated = true
+
+		f.emitLabel(writeLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = phi ptr [%s, %%%s], [%s, %%%s]\n", dataPhi, oldData.ref, reuseLabel, newData, growReadyLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = phi i32 [%s, %%%s], [%%%s, %%%s]\n", capPhi, oldCap.ref, reuseLabel, newCap, growReadyLabel)
+		elemPtr := f.newTemp("append.elem.ptr")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %%%s, i64 %s\n", elemPtr, f.g.llvmType(sliceType.Elem), dataPhi, oldLen64)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(sliceType.Elem), element.ref, elemPtr)
+		ref := f.emitSliceValue("%"+dataPhi, "%"+newLen, "%"+capPhi)
+		return exprValue{ref: ref, typ: sig.Return}
 	}
 
 	args := make([]exprValue, 0, len(expr.Args))
@@ -996,11 +1122,15 @@ func (f *functionEmitter) addressOfLValueExpr(expr ast.Expression) (string, chec
 		if !ok {
 			return "", checker.TypeInvalid, false
 		}
-		array, _ := checker.ParseArrayType(baseType)
-		index := f.genExpression(e.Index)
-		ptr := f.newTemp("elem.ptr")
-		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
-		return "%" + ptr, array.Elem, true
+		if array, ok := checker.ParseArrayType(baseType); ok {
+			index := f.genExpression(e.Index)
+			ptr := f.newTemp("elem.ptr")
+			fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, %s %s\n", ptr, f.g.llvmType(baseType), basePtr, f.g.llvmType(index.typ), index.ref)
+			return "%" + ptr, array.Elem, true
+		}
+		slice, _ := checker.ParseSliceType(baseType)
+		ptr := f.addressOfSliceElement(basePtr, slice.Elem, f.genExpression(e.Index))
+		return ptr, slice.Elem, true
 	default:
 		return "", checker.TypeInvalid, false
 	}
@@ -1016,6 +1146,77 @@ func (f *functionEmitter) addressOfAggregateExpr(expr ast.Expression) (string, c
 	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(value.typ))
 	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, slot)
 	return "%" + slot, value.typ
+}
+
+func (f *functionEmitter) loadValue(ptr string, typ checker.Type) exprValue {
+	load := f.newTemp("load")
+	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", load, f.g.llvmType(typ), ptr)
+	return exprValue{ref: "%" + load, typ: typ}
+}
+
+func (f *functionEmitter) extractSliceField(sliceRef string, index int, prefix string) exprValue {
+	tmp := f.newTemp(prefix)
+	switch index {
+	case 0:
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.slice %s, 0\n", tmp, sliceRef)
+		return exprValue{ref: "%" + tmp}
+	case 1, 2:
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.slice %s, %d\n", tmp, sliceRef, index)
+		return exprValue{ref: "%" + tmp, typ: checker.TypeI32}
+	default:
+		panic("unsupported slice field")
+	}
+}
+
+func (f *functionEmitter) intToI64(ref string, typ checker.Type) string {
+	switch typ {
+	case checker.TypeI64:
+		return ref
+	case checker.TypeI32, checker.TypeBool:
+		tmp := f.newTemp("i64")
+		fmt.Fprintf(&f.builder, "  %%%s = sext %s %s to i64\n", tmp, f.g.llvmType(typ), ref)
+		return "%" + tmp
+	default:
+		return ref
+	}
+}
+
+func (f *functionEmitter) emitSliceValue(dataPtr, length, capacity string) string {
+	tmp1 := f.newTemp("slice")
+	tmp2 := f.newTemp("slice")
+	tmp3 := f.newTemp("slice")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.slice zeroinitializer, ptr %s, 0\n", tmp1, dataPtr)
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.slice %%%s, i32 %s, 1\n", tmp2, tmp1, length)
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.slice %%%s, i32 %s, 2\n", tmp3, tmp2, capacity)
+	return "%" + tmp3
+}
+
+func (f *functionEmitter) emitArrayAllocSize(elemType checker.Type, count int) string {
+	countRef := fmt.Sprintf("%d", count)
+	return f.emitScaledSize(elemType, countRef)
+}
+
+func (f *functionEmitter) emitScaledSize(elemType checker.Type, countRef string) string {
+	elemSize := f.emitTypeSize(elemType)
+	tmp := f.newTemp("size")
+	fmt.Fprintf(&f.builder, "  %%%s = mul i64 %s, %s\n", tmp, elemSize, countRef)
+	return "%" + tmp
+}
+
+func (f *functionEmitter) emitMemcpy(dst, src, size string) {
+	fmt.Fprintf(&f.builder, "  call void @llvm.memcpy.p0.p0.i64(ptr %s, ptr %s, i64 %s, i1 false)\n", dst, src, size)
+}
+
+func (f *functionEmitter) addressOfSliceElement(slicePtr string, elemType checker.Type, index exprValue) string {
+	sliceValue := f.loadValue(slicePtr, checker.MakeSliceType(elemType))
+	dataPtr := f.extractSliceField(sliceValue.ref, 0, "slice.data")
+	length := f.extractSliceField(sliceValue.ref, 1, "slice.len")
+	index64 := f.intToI64(index.ref, index.typ)
+	length64 := f.intToI64(length.ref, length.typ)
+	fmt.Fprintf(&f.builder, "  call void @yar_slice_index_check(i64 %s, i64 %s)\n", index64, length64)
+	ptr := f.newTemp("slice.elem.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %s, i64 %s\n", ptr, f.g.llvmType(elemType), dataPtr.ref, index64)
+	return "%" + ptr
 }
 
 func (f *functionEmitter) emitStringValue(value string) exprValue {
@@ -1097,6 +1298,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 		return "zeroinitializer"
 	default:
 		if _, ok := checker.ParseArrayType(typ); ok {
+			return "zeroinitializer"
+		}
+		if _, ok := checker.ParseSliceType(typ); ok {
 			return "zeroinitializer"
 		}
 		if _, ok := g.info.Structs[string(typ)]; ok {

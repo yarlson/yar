@@ -81,6 +81,50 @@ fn main() i32 {
 	}
 }
 
+func TestParseSliceForms(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+fn main() i32 {
+	values := []i32{1, 2, 3}
+	prefix := values[0:2]
+	return prefix[1]
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	litStmt, ok := program.Functions[0].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[0].Body.Stmts[0])
+	}
+	litExpr, ok := litStmt.Value.(*ast.SliceLiteralExpr)
+	if !ok {
+		t.Fatalf("expected slice literal expression, got %T", litStmt.Value)
+	}
+	if got, want := litExpr.Type.Name, "[]i32"; got != want {
+		t.Fatalf("unexpected slice literal type: got %q want %q", got, want)
+	}
+
+	sliceStmt, ok := program.Functions[0].Body.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[0].Body.Stmts[1])
+	}
+	sliceExpr, ok := sliceStmt.Value.(*ast.SliceExpr)
+	if !ok {
+		t.Fatalf("expected slice expression, got %T", sliceStmt.Value)
+	}
+	if _, ok := sliceExpr.Start.(*ast.IntLiteral); !ok {
+		t.Fatalf("expected integer slice start, got %T", sliceExpr.Start)
+	}
+	if _, ok := sliceExpr.End.(*ast.IntLiteral); !ok {
+		t.Fatalf("expected integer slice end, got %T", sliceExpr.End)
+	}
+}
+
 func TestParseBoolOperatorPrecedence(t *testing.T) {
 	t.Parallel()
 

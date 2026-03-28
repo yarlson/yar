@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"yar/internal/ast"
 	"yar/internal/diag"
 	"yar/internal/lexer"
@@ -146,6 +147,14 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 func (p *Parser) parseTypeRef() ast.TypeRef {
 	if p.at(token.LBracket) {
 		lbracket := p.expect(token.LBracket, "expected '['")
+		if p.at(token.RBracket) {
+			p.advance()
+			elem := p.parseTypeRef()
+			return ast.TypeRef{
+				Name: "[]" + elem.Name,
+				Pos:  lbracket.Pos,
+			}
+		}
 		lengthTok := p.expect(token.Int, "expected array length")
 		p.expect(token.RBracket, "expected ']' after array length")
 		elem := p.parseTypeRef()
@@ -563,14 +572,7 @@ func (p *Parser) parsePostfix() ast.Expression {
 				NamePos: fieldTok.Pos,
 			}
 		case p.at(token.LBracket):
-			lbracket := p.expect(token.LBracket, "expected '['")
-			index := p.parseExpression()
-			p.expect(token.RBracket, "expected ']'")
-			expr = &ast.IndexExpr{
-				Inner:       expr,
-				LBracketPos: lbracket.Pos,
-				Index:       index,
-			}
+			expr = p.finishIndexOrSlice(expr)
 		case p.at(token.Question):
 			questionTok := p.expect(token.Question, "expected '?'")
 			expr = &ast.PropagateExpr{
@@ -620,7 +622,7 @@ func (p *Parser) parsePrimary() ast.Expression {
 		p.expect(token.RParen, "expected ')'")
 		return &ast.GroupExpr{Inner: inner}
 	case token.LBracket:
-		return p.parseArrayLiteral()
+		return p.parseSequenceLiteral()
 	default:
 		p.errorCurrent("expected expression")
 		p.advance()
@@ -656,16 +658,24 @@ func (p *Parser) finishStructLiteral(typeRef ast.TypeRef) ast.Expression {
 	return expr
 }
 
-func (p *Parser) parseArrayLiteral() ast.Expression {
+func (p *Parser) parseSequenceLiteral() ast.Expression {
 	typeRef := p.parseTypeRef()
 	lbrace := p.expect(token.LBrace, "expected '{' after array type")
-	expr := &ast.ArrayLiteralExpr{
-		Type:   typeRef,
-		LBrace: lbrace.Pos,
+	var expr ast.Expression
+	if strings.HasPrefix(typeRef.Name, "[]") {
+		expr = &ast.SliceLiteralExpr{Type: typeRef, LBrace: lbrace.Pos}
+	} else {
+		expr = &ast.ArrayLiteralExpr{Type: typeRef, LBrace: lbrace.Pos}
 	}
 
 	for !p.at(token.RBrace) && !p.at(token.EOF) {
-		expr.Elements = append(expr.Elements, p.parseExpression())
+		element := p.parseExpression()
+		switch e := expr.(type) {
+		case *ast.ArrayLiteralExpr:
+			e.Elements = append(e.Elements, element)
+		case *ast.SliceLiteralExpr:
+			e.Elements = append(e.Elements, element)
+		}
 		if !p.at(token.Comma) {
 			break
 		}
@@ -676,6 +686,29 @@ func (p *Parser) parseArrayLiteral() ast.Expression {
 	}
 	p.expect(token.RBrace, "expected '}' after array literal")
 	return expr
+}
+
+func (p *Parser) finishIndexOrSlice(expr ast.Expression) ast.Expression {
+	lbracket := p.expect(token.LBracket, "expected '['")
+	start := p.parseExpression()
+	if p.at(token.Colon) {
+		colon := p.expect(token.Colon, "expected ':'")
+		end := p.parseExpression()
+		p.expect(token.RBracket, "expected ']'")
+		return &ast.SliceExpr{
+			Inner:       expr,
+			LBracketPos: lbracket.Pos,
+			Start:       start,
+			ColonPos:    colon.Pos,
+			End:         end,
+		}
+	}
+	p.expect(token.RBracket, "expected ']'")
+	return &ast.IndexExpr{
+		Inner:       expr,
+		LBracketPos: lbracket.Pos,
+		Index:       start,
+	}
 }
 
 func (p *Parser) finishCall(callee ast.Expression) ast.Expression {

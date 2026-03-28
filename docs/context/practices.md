@@ -20,9 +20,9 @@
 - `or |err| { ... }` is front-end sugar for explicit local error inspection and handler control flow.
 - Handler bindings introduced by `or |err| { ... }` are scoped to the handler block and have type `error`.
 - The language supports both `!T` errorable returns and plain `error` values.
-- The language supports user-defined structs, fixed arrays, loops, and explicit assignment targets for locals, fields, and indices.
+- The language supports user-defined structs, fixed arrays, slices, loops, and explicit assignment targets for locals, fields, and indices.
 - Error names are collected across the program, sorted lexicographically, and then mapped to integer codes for the generated IR and native `main` wrapper.
-- Builtins are compiler-owned contracts, not user-overridable functions.
+- Builtins are compiler-owned contracts, not user-overridable functions, including sequence helpers such as `len` and `append`.
 - The runtime C source is embedded in the Go binary and materialized into a temporary file during native builds.
 - Runtime-managed allocation helpers exist as an internal boundary for future heap-backed features; allocation failure is treated as an unrecoverable runtime failure rather than a YAR `error`.
 - The CLI places a timeout around `build` and `run` operations before invoking external processes.

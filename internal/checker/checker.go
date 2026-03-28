@@ -98,8 +98,16 @@ type ArrayType struct {
 	Elem Type
 }
 
+type SliceType struct {
+	Elem Type
+}
+
 func MakeArrayType(length int, elem Type) Type {
 	return Type(fmt.Sprintf("[%d]%s", length, elem))
+}
+
+func MakeSliceType(elem Type) Type {
+	return Type("[]" + string(elem))
 }
 
 func ParseArrayType(typ Type) (ArrayType, bool) {
@@ -120,6 +128,27 @@ func ParseArrayType(typ Type) (ArrayType, bool) {
 		return ArrayType{}, false
 	}
 	return ArrayType{Len: length, Elem: elem}, true
+}
+
+func ParseSliceType(typ Type) (SliceType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "[]") {
+		return SliceType{}, false
+	}
+	elem := Type(text[2:])
+	if elem == TypeInvalid {
+		return SliceType{}, false
+	}
+	return SliceType{Elem: elem}, true
+}
+
+func IsBuiltinFunction(name string) bool {
+	switch name {
+	case "print", "print_int", "panic", "len", "append":
+		return true
+	default:
+		return false
+	}
 }
 
 func Check(program *ast.Program) (Info, []diag.Diagnostic) {
@@ -144,6 +173,13 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				FullName: "panic",
 				Params:   []Type{TypeStr},
 				Return:   TypeNoReturn,
+				Builtin:  true,
+			},
+			"append": {
+				Name:     "append",
+				FullName: "append",
+				Params:   []Type{TypeInvalid, TypeInvalid},
+				Return:   TypeInvalid,
 				Builtin:  true,
 			},
 		},
@@ -208,6 +244,10 @@ func (c *Checker) checkProgram(program *ast.Program) {
 	c.checkStructCycles()
 
 	for _, fn := range program.Functions {
+		if IsBuiltinFunction(fn.Name) {
+			c.diag.Add(fn.NamePos, "function %q is already declared", fn.Name)
+			continue
+		}
 		if _, exists := c.functions[fn.Name]; exists {
 			c.diag.Add(fn.NamePos, "function %q is already declared", fn.Name)
 			continue
@@ -290,6 +330,9 @@ func (c *Checker) checkStructCycles() {
 func (c *Checker) structDependencies(typ Type) []string {
 	if array, ok := ParseArrayType(typ); ok {
 		return c.structDependencies(array.Elem)
+	}
+	if _, ok := ParseSliceType(typ); ok {
+		return nil
 	}
 	if _, ok := c.info.Structs[string(typ)]; ok {
 		return []string{string(typ)}
@@ -510,9 +553,9 @@ func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
 		if base == TypeInvalid {
 			return TypeInvalid
 		}
-		array, ok := ParseArrayType(base)
+		elemType, ok := sequenceElementType(base)
 		if !ok {
-			c.diag.Add(t.LBracketPos, "indexing requires an array value")
+			c.diag.Add(t.LBracketPos, "indexing requires an array or slice value")
 			return TypeInvalid
 		}
 		indexType := c.checkExpression(t.Index)
@@ -531,7 +574,7 @@ func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
 				return TypeInvalid
 			}
 		}
-		return array.Elem
+		return elemType
 	default:
 		c.diag.Add(target.Pos(), "invalid assignment target")
 		return TypeInvalid
@@ -628,10 +671,14 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		return c.checkSelector(expr, e)
 	case *ast.IndexExpr:
 		return c.checkIndex(expr, e)
+	case *ast.SliceExpr:
+		return c.checkSlice(expr, e)
 	case *ast.StructLiteralExpr:
 		return c.checkStructLiteral(expr, e)
 	case *ast.ArrayLiteralExpr:
 		return c.checkArrayLiteral(expr, e)
+	case *ast.SliceLiteralExpr:
+		return c.checkSliceLiteral(expr, e)
 	case *ast.CallExpr:
 		return c.checkCall(expr, e)
 	default:
@@ -700,9 +747,9 @@ func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType
 		return ExprType{Base: TypeInvalid}
 	}
 
-	array, ok := ParseArrayType(inner.Base)
+	elemType, ok := sequenceElementType(inner.Base)
 	if !ok {
-		c.diag.Add(index.LBracketPos, "indexing requires an array value")
+		c.diag.Add(index.LBracketPos, "indexing requires an array or slice value")
 		return ExprType{Base: TypeInvalid}
 	}
 
@@ -723,7 +770,29 @@ func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType
 		}
 	}
 
-	et := ExprType{Base: array.Elem}
+	et := ExprType{Base: elemType}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkSlice(expr ast.Expression, slice *ast.SliceExpr) ExprType {
+	inner := c.checkExpression(slice.Inner)
+	if inner.Errorable {
+		c.diag.Add(slice.LBracketPos, "slicing cannot use an errorable value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	sliceType, ok := ParseSliceType(inner.Base)
+	if !ok {
+		c.diag.Add(slice.LBracketPos, "slicing requires a slice value")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	if !c.checkSliceBound(slice.Start) || !c.checkSliceBound(slice.End) {
+		return ExprType{Base: TypeInvalid}
+	}
+
+	et := ExprType{Base: MakeSliceType(sliceType.Elem)}
 	c.info.ExprTypes[expr] = et
 	return et
 }
@@ -792,6 +861,30 @@ func (c *Checker) checkArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralEx
 	return et
 }
 
+func (c *Checker) checkSliceLiteral(expr ast.Expression, lit *ast.SliceLiteralExpr) ExprType {
+	typ := c.resolveTypeRef(lit.Type)
+	sliceType, ok := ParseSliceType(typ)
+	if !ok {
+		c.diag.Add(lit.Type.Pos, "slice literal requires a slice type")
+		return ExprType{Base: TypeInvalid}
+	}
+	for _, element := range lit.Elements {
+		value := c.checkExpression(element)
+		value = c.requireNonErrorableValue(element, value, "errorable value cannot be used in a slice literal")
+		if value.Base == TypeInvalid {
+			continue
+		}
+		value = c.coerceUntypedInteger(element, value, sliceType.Elem)
+		if value.Base != sliceType.Elem {
+			c.diag.Add(element.Pos(), "cannot assign %s to %s", value.Base, sliceType.Elem)
+		}
+	}
+
+	et := ExprType{Base: typ}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
 func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 	name, namePos, ok := callName(call.Callee)
 	if ok && name == "len" {
@@ -804,12 +897,46 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
 			return ExprType{Base: TypeInvalid}
 		}
-		if _, ok := ParseArrayType(argType.Base); !ok {
-			c.diag.Add(call.Args[0].Pos(), "len requires an array argument")
+		if !isSequenceType(argType.Base) {
+			c.diag.Add(call.Args[0].Pos(), "len requires an array or slice argument")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeI32}
 		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{TypeInvalid}, Return: TypeI32, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "append" {
+		if len(call.Args) != 2 {
+			c.diag.Add(namePos, "function %q expects 2 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		sliceArg := c.checkExpression(call.Args[0])
+		if sliceArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		sliceType, ok := ParseSliceType(sliceArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "append requires a slice as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		valueArg := c.checkExpression(call.Args[1])
+		if valueArg.Errorable {
+			c.diag.Add(call.Args[1].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		if valueArg.Base == TypeNoReturn || valueArg.Base == TypeVoid {
+			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q requires a value", name)
+			return ExprType{Base: TypeInvalid}
+		}
+		valueArg = c.coerceUntypedInteger(call.Args[1], valueArg, sliceType.Elem)
+		if valueArg.Base != sliceType.Elem {
+			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q must be %s, got %s", name, sliceType.Elem, valueArg.Base)
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: sliceArg.Base}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{sliceArg.Base, sliceType.Elem}, Return: sliceArg.Base, Builtin: true}
 		c.info.ExprTypes[expr] = et
 		return et
 	}
@@ -926,6 +1053,15 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch Type(ref.Name) {
 	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr, TypeError:
 		return Type(ref.Name)
+	}
+
+	if text, ok := parseSliceTypeName(ref.Name); ok {
+		elemType := c.resolveTypeRef(ast.TypeRef{Name: text.Elem, Pos: ref.Pos})
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "slice element type %q is not allowed", text.Elem)
+			return TypeInvalid
+		}
+		return MakeSliceType(elemType)
 	}
 
 	if text, ok := parseArrayTypeName(ref.Name); ok {
@@ -1094,8 +1230,43 @@ func formatErrorName(name string) string {
 	return fmt.Sprintf("error.%s", name)
 }
 
+func sequenceElementType(typ Type) (Type, bool) {
+	if array, ok := ParseArrayType(typ); ok {
+		return array.Elem, true
+	}
+	if slice, ok := ParseSliceType(typ); ok {
+		return slice.Elem, true
+	}
+	return TypeInvalid, false
+}
+
+func isSequenceType(typ Type) bool {
+	_, ok := sequenceElementType(typ)
+	return ok
+}
+
 func isIntegerType(typ Type) bool {
 	return typ == TypeI32 || typ == TypeI64 || typ == TypeUntypedInt
+}
+
+func (c *Checker) checkSliceBound(expr ast.Expression) bool {
+	boundType := c.checkExpression(expr)
+	if boundType.Errorable {
+		c.diag.Add(expr.Pos(), "slice bounds cannot be errorable")
+		return false
+	}
+	if !isIntegerType(boundType.Base) {
+		c.diag.Add(expr.Pos(), "slice bounds must be integers")
+		return false
+	}
+	if boundType.Base == TypeUntypedInt {
+		boundType = c.coerceUntypedInteger(expr, boundType, TypeI32)
+		if boundType.Base == TypeUntypedInt {
+			c.diag.Add(expr.Pos(), "slice bounds must fit in i32")
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Checker) requireNonErrorableValue(expr ast.Expression, exprType ExprType, errorMessage string) ExprType {
@@ -1232,6 +1403,10 @@ type parsedArrayType struct {
 	Elem string
 }
 
+type parsedSliceType struct {
+	Elem string
+}
+
 func parseArrayTypeName(name string) (parsedArrayType, bool) {
 	if !strings.HasPrefix(name, "[") {
 		return parsedArrayType{}, false
@@ -1249,4 +1424,15 @@ func parseArrayTypeName(name string) (parsedArrayType, bool) {
 		return parsedArrayType{}, false
 	}
 	return parsedArrayType{Len: length, Elem: elem}, true
+}
+
+func parseSliceTypeName(name string) (parsedSliceType, bool) {
+	if !strings.HasPrefix(name, "[]") {
+		return parsedSliceType{}, false
+	}
+	elem := name[2:]
+	if elem == "" {
+		return parsedSliceType{}, false
+	}
+	return parsedSliceType{Elem: elem}, true
 }

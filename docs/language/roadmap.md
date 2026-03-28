@@ -25,6 +25,7 @@ Current baseline already includes:
 - top-level `struct` and `fn`
 - primitive types plus `error`
 - fixed-size arrays
+- slices
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
@@ -61,7 +62,6 @@ The goal is not lots of new features, but a cleaner and more uniform language.
 
 - methods
 - enums
-- slices
 - generics
 - pattern matching
 - exceptions
@@ -87,8 +87,8 @@ The minimal runtime-managed memory model is now an accepted design foundation.
 
 - future heap-backed features should reuse the shared allocation boundary
 - allocation failure is outside the ordinary `error` model
-- this is groundwork, not a claim that pointers, slices, maps, or string
-  concatenation are already shipped
+- this is groundwork, not a claim that pointers, maps, or string concatenation
+  are already shipped
 
 ---
 
@@ -116,7 +116,6 @@ This area should be approached carefully because it has many interactions with:
 
 These are interesting but not currently committed:
 
-- slices
 - methods
 - enums / tagged unions
 - richer builtin library

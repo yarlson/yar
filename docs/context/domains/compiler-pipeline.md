@@ -9,11 +9,11 @@
   - `Build(ctx, src, outputPath)` / `Run(ctx, src)` for in-memory single-file build helpers
   - `BuildPath(ctx, path, outputPath)` / `RunPath(ctx, path)` for package builds from disk
 - `internal/lexer` tokenizes source text, including control-flow, aggregate, and punctuation tokens, handles `//` comments and string escapes, and produces lexical diagnostics.
-- `internal/parser` builds file ASTs, including top-level `struct` declarations, optional `pub` export markers, `import` declarations, loops, aggregate literals, lvalue forms, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`, and appends parser diagnostics to lexer diagnostics.
+- `internal/parser` builds file ASTs, including top-level `struct` declarations, optional `pub` export markers, `import` declarations, loops, array and slice literals, index and slice postfix forms, lvalue forms, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`, and appends parser diagnostics to lexer diagnostics.
 - `internal/compiler` lowers the loaded package graph into one combined checked program by rewriting package-local and imported symbols to canonical names after import and export validation.
-- `internal/checker` validates struct and function shape, tracks scopes, resolves builtin and rewritten user function signatures, resolves user-defined and array types, assigns expression types, validates loop and assignment-target rules, validates error-sugar legality, and records ordered error names.
-- `internal/codegen` lowers the checked AST into LLVM IR, expanding error sugar and short-circuit boolean operators into explicit checks, branches, and returns, lowering loops and aggregate values, generating the exported `main` wrapper around `yar.main`, and declaring the shared runtime allocation helpers used by future heap-backed features.
-- `internal/runtime` exposes embedded runtime C source to the build step, including builtin I/O, panic behavior, and the shared allocation/trap boundary.
+- `internal/checker` validates struct and function shape, tracks scopes, resolves builtin and rewritten user function signatures, resolves user-defined, array, and slice types, assigns expression types, validates loop and assignment-target rules, validates slice indexing/slicing and `append`, validates error-sugar legality, and records ordered error names.
+- `internal/codegen` lowers the checked AST into LLVM IR, expanding error sugar and short-circuit boolean operators into explicit checks, branches, and returns, lowering loops and aggregate values, lowering slices to runtime descriptors plus allocation/copy helpers, generating the exported `main` wrapper around `yar.main`, and declaring the shared runtime allocation helpers used by future heap-backed features.
+- `internal/runtime` exposes embedded runtime C source to the build step, including builtin I/O, panic behavior, slice bounds checks, and the shared allocation/trap boundary.
 
 ## Stage Contracts
 

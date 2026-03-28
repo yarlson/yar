@@ -329,6 +329,20 @@ func (e *IndexExpr) Pos() token.Position {
 
 func (*IndexExpr) exprNode() {}
 
+type SliceExpr struct {
+	Inner       Expression
+	LBracketPos token.Position
+	Start       Expression
+	ColonPos    token.Position
+	End         Expression
+}
+
+func (e *SliceExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*SliceExpr) exprNode() {}
+
 type StructLiteralExpr struct {
 	Type   TypeRef
 	LBrace token.Position
@@ -358,6 +372,18 @@ func (e *ArrayLiteralExpr) Pos() token.Position {
 }
 
 func (*ArrayLiteralExpr) exprNode() {}
+
+type SliceLiteralExpr struct {
+	Type     TypeRef
+	LBrace   token.Position
+	Elements []Expression
+}
+
+func (e *SliceLiteralExpr) Pos() token.Position {
+	return e.Type.Pos
+}
+
+func (*SliceLiteralExpr) exprNode() {}
 
 type PropagateExpr struct {
 	Inner       Expression

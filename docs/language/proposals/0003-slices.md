@@ -1,6 +1,6 @@
 # Proposal: Slices
 
-Status: deferred
+Status: accepted
 
 ## 1. Summary
 
@@ -86,6 +86,9 @@ The minimal model is intentionally close to a value descriptor:
 - indexing reads or writes an existing element
 - slicing `s[i:j]` produces a new slice view over the same underlying storage
 - `append(s, v)` returns an updated slice value and may allocate new storage
+
+Because a slice stores descriptor state rather than inline elements, slice fields
+do not create recursive inline containment the way fixed arrays do.
 
 The caller must keep the returned result of `append`.
 
@@ -188,10 +191,8 @@ reason about.
 
 ## 11. Why Now?
 
-Dynamic sequences are one of the clearest self-hosting blockers.
-
-Even so, the feature remains deferred because it brings a real runtime and
-aliasing model with it, and YAR should not add that lightly.
+Dynamic sequences were one of the clearest self-hosting blockers, and the
+language now implements the smallest useful slice surface described here.
 
 ## 12. Open Questions
 
@@ -202,11 +203,11 @@ aliasing model with it, and YAR should not add that lightly.
 
 ## 13. Decision
 
-Deferred.
+Accepted and implemented.
 
-Slices are clearly valuable and likely necessary for self-hosting, but they have
-enough runtime and semantic weight that they should not be rushed in before the
-core language is more settled.
+YAR now supports slice types, slice literals, indexing, index assignment,
+slicing, `len(slice)`, and `append(slice, value)` with runtime bounds checks and
+runtime-managed allocation.
 
 ## 14. Implementation Checklist
 

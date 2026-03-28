@@ -258,6 +258,65 @@ fn main() !i32 {
 	}
 }
 
+func TestCheckSlicesValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn prefix(values []i32, n i32) []i32 {
+	return values[0:n]
+}
+
+fn main() i32 {
+	values := []i32{}
+	values = append(values, 1)
+	values = append(values, 2)
+	part := prefix(values, len(values))
+	part[1] = 9
+	return values[1]
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckRecursiveSliceStructValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct Node {
+	children []Node
+}
+
+fn main() i32 {
+	root := Node{}
+	root.children = append(root.children, Node{})
+	return len(root.children)
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckV02FeaturesInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -300,7 +359,60 @@ fn main() i32 {
 	return x
 }
 `,
-			substr: "len requires an array argument",
+			substr: "len requires an array or slice argument",
+		},
+		{
+			name: "builtin len cannot be redeclared",
+			src: `
+package main
+
+fn len(value i32) i32 {
+	return value
+}
+
+fn main() i32 {
+	return 0
+}
+`,
+			substr: "function \"len\" is already declared",
+		},
+		{
+			name: "slice element type cannot be void",
+			src: `
+package main
+
+fn main() i32 {
+	values := []void{}
+	return 0
+}
+`,
+			substr: "slice element type \"void\" is not allowed",
+		},
+		{
+			name: "append value type mismatch",
+			src: `
+package main
+
+fn main() i32 {
+	values := []i32{}
+	values = append(values, true)
+	return 0
+}
+`,
+			substr: "argument 2 to \"append\" must be i32, got bool",
+		},
+		{
+			name: "slicing requires slice",
+			src: `
+package main
+
+fn main() i32 {
+	values := [2]i32{1, 2}
+	part := values[0:1]
+	return len(part)
+}
+`,
+			substr: "slicing requires a slice value",
 		},
 		{
 			name: "unknown struct field",

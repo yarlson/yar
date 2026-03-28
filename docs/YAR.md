@@ -57,6 +57,7 @@ Implemented types:
 - `error`
 - user-defined `struct` types
 - fixed-size array types such as `[4]i32` and `[3]User`
+- slice types such as `[]i32` and `[]User`
 
 ### Error-Related Types
 
@@ -74,6 +75,8 @@ Current restrictions:
 - struct fields cannot use `noreturn`
 - array elements cannot use `void`
 - array elements cannot use `noreturn`
+- slice elements cannot use `void`
+- slice elements cannot use `noreturn`
 - recursive struct containment is rejected
 
 ## Declarations
@@ -152,6 +155,33 @@ Supported array operations:
 - index assignment
 - `len(array)`
 
+## Slices
+
+Slices are supported:
+
+```yar
+values := []i32{}
+values = append(values, 1)
+values = append(values, 2)
+part := values[0:1]
+part[0] = 9
+```
+
+Supported slice operations:
+
+- slice types: `[]T`
+- slice literals
+- indexing
+- index assignment
+- slicing with `s[i:j]`
+- `len(slice)`
+- `append(slice, value)` returning an updated slice
+
+Slices are views over runtime-managed backing storage. Slicing shares storage,
+and `append` may reuse that storage or allocate a new backing buffer.
+
+Slice indexing and slicing are bounds-checked at runtime and trap on invalid ranges.
+
 ## Functions
 
 Functions are declared with `fn`:
@@ -189,7 +219,7 @@ Implemented statements:
 - block statements: `{ ... }`
 - short local declarations: `x := expr`
 - typed local declarations: `var name Type` and `var name Type = expr`
-- assignment to locals, struct fields, and array indices
+- assignment to locals, struct fields, array indices, and slice indices
 - `if`
 - `if` / `else`
 - `else if`
@@ -211,10 +241,12 @@ Implemented expressions:
 - boolean literals
 - struct literals
 - array literals
+- slice literals
 - function calls
 - parenthesized expressions
 - field access
 - indexing
+- slicing
 - unary `-`
 - unary `!`
 - short-circuit boolean operators: `&&`, `||`
@@ -372,7 +404,8 @@ Builtins are fixed by the compiler:
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T) i32`
+- `len([N]T | []T) i32`
+- `append([]T, T) []T`
 
 They are not user-overridable.
 
@@ -388,13 +421,14 @@ with status `1`.
 
 `panic(str)` writes to stderr and exits with status `1`.
 
+Out-of-range slice indexing and invalid slice ranges trap with a runtime failure.
+
 ## Not Implemented
 
 The compiler does not currently implement:
 
 - methods
 - enums
-- slices
 - import aliases
 - pattern matching
 - exceptions

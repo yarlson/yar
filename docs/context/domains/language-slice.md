@@ -22,6 +22,7 @@
 - `error`
 - user-defined struct types
 - fixed array types
+- slice types
 
 ## Statements
 
@@ -29,7 +30,7 @@
 - `:=` bindings with inferred type from the assigned expression
 - `var name Type`
 - `var name Type = expr`
-- Reassignment to an existing local, struct field, or array index
+- Reassignment to an existing local, struct field, array index, or slice index
 - `if`, `else`, and `else if`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
@@ -48,10 +49,12 @@
 - `error.Name` literals in return position
 - Struct literals
 - Array literals
+- Slice literals
 - Function calls
 - Grouping with parentheses
 - Field access
 - Indexing
+- Slicing with `s[i:j]`
 - Postfix error propagation with `expr?`
 - Local error handling with `expr or |err| { ... }`
 - Unary operators: `-`, `!`
@@ -68,7 +71,7 @@
 - Duplicate top-level names are rejected package-wide, including across files.
 - Import cycles are rejected.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
-- Struct fields and array elements cannot use `void`, `noreturn`, or an unknown type.
+- Struct fields, array elements, and slice elements cannot use `void`, `noreturn`, or an unknown type.
 - Recursive struct containment is rejected.
 - `noreturn` functions cannot also be errorable and cannot contain `return`.
 - Plain `error` is a valid parameter or return type for non-`main` functions.
@@ -80,8 +83,12 @@
 - Unary `-` requires an integer operand.
 - Unary `!` requires a `bool` operand.
 - Field access requires a struct value and a known field.
-- Indexing requires an array value and an integer index.
-- `len` requires an array argument and returns `i32`.
+- Indexing requires an array or slice value and an integer index.
+- Slicing requires a slice value and integer bounds.
+- Slice fields do not count as recursive inline containment, so recursive shapes such as `[]Node` fields are allowed.
+- Out-of-range slice indexing and slicing trap at runtime.
+- `len` requires an array or slice argument and returns `i32`.
+- `append` requires `append([]T, T)` and returns `[]T`.
 - `error.Name` is only valid as the direct operand of `return` inside an errorable function or a function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned directly, propagated with `?`, or handled with `or |err| { ... }`.
 - `?` is only valid on `!T` or `error` expressions and only inside a function that can return an error.
@@ -94,6 +101,7 @@
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T) i32`
+- `len([N]T | []T) i32`
+- `append([]T, T) []T`
 
 Builtins remain globally available and are not imported.

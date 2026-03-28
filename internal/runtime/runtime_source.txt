@@ -30,6 +30,20 @@ void yar_trap_oom(void) {
     yar_runtime_fail(message, sizeof(message) - 1);
 }
 
+void yar_slice_index_check(long long index, long long len) {
+    if (index < 0 || index >= len) {
+        static const char message[] = "runtime failure: slice index out of range\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+}
+
+void yar_slice_range_check(long long start, long long end, long long len) {
+    if (start < 0 || end < start || end > len) {
+        static const char message[] = "runtime failure: slice range out of bounds\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+}
+
 void *yar_alloc(long long size) {
     void *ptr;
 

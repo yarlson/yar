@@ -190,6 +190,23 @@ func TestBoolOperatorFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestSliceFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "slices.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "3\n9\n1\n2\n4\n4\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildAndRunPropagateSugar(t *testing.T) {
 	t.Parallel()
 
@@ -357,6 +374,49 @@ fn main() i32 {
 	}
 	if got, want := output, "missing\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestSliceIndexOutOfRangePanics(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	values := []i32{1}
+	print_int(values[1])
+	return 0
+}
+`
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := Build(ctx, src, outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "runtime failure: slice index out of range\n"; got != want {
+		t.Fatalf("unexpected panic output: got %q want %q", got, want)
 	}
 }
 
@@ -528,6 +588,33 @@ pub struct Wrapper {
 		t.Fatal("expected diagnostics")
 	}
 	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "exported struct \"Wrapper\" cannot use non-exported type \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsBuiltinFunctionShadowing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+fn append(values []i32, value i32) []i32 {
+	return values
+}
+
+fn main() i32 {
+	return 0
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "function \"append\" is already declared") {
 		t.Fatalf("unexpected diagnostics: %s", got)
 	}
 }

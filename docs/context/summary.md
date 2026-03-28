@@ -27,9 +27,9 @@ embedded runtime to produce or run a native executable.
 
 - The repository contains one deployable unit: the `yar` CLI compiler.
 - Programs are package graphs rooted at an entry `package main`, with one or more `.yar` files per package, explicit `import` declarations, package-qualified cross-package references, and optional `pub` on top-level `struct` and `fn` declarations.
-- The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, user-defined structs, and fixed arrays.
-- The language supports `:=`, `var`, assignment to locals/fields/indices, `if` / `else`, `for`, `break`, `continue`, struct literals, array literals, field access, indexing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
-- Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, and `len(array)`.
+- The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, user-defined structs, fixed arrays, and slices.
+- The language supports `:=`, `var`, assignment to locals/fields/indices, `if` / `else`, `for`, `break`, `continue`, struct literals, array literals, slice literals, field access, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
+- Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, `len(array-or-slice)`, and `append(slice, value)`.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
 ## Capabilities
@@ -39,7 +39,7 @@ embedded runtime to produce or run a native executable.
 - Build and run native executables backed by an embedded runtime C source.
 - Propagate errors with direct `return` or postfix `?`.
 - Handle errors locally with `or |err| { ... }`.
-- Support aggregate values and return types with structs and fixed arrays.
+- Support aggregate values and return types with structs, fixed arrays, and slices.
 - Support loops and branch-based control flow for small real programs, including short-circuit boolean logic.
 - Expose a runtime-managed allocation boundary internally for future heap-backed features.
 
@@ -49,4 +49,4 @@ embedded runtime to produce or run a native executable.
 - Textual LLVM IR generation
 - External `clang` invocation for compile and link
 - Embedded C runtime source for builtin functions and shared allocation helpers
-- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, and the v0.2 control-flow and aggregate surface
+- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, slice behavior, and the v0.2 control-flow and aggregate surface

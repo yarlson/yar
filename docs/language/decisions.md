@@ -67,6 +67,13 @@ Packages may span multiple files, imports are explicit, cross-package references
 stay qualified, and top-level declarations are package-local unless marked
 `pub`.
 
+### Slices
+
+Status: accepted
+
+YAR supports `[]T`, slice literals, `s[i:j]`, indexing, `len(slice)`, and
+explicit `append(slice, value)` reassignment with runtime bounds checks.
+
 ---
 
 ## Rejected
@@ -92,13 +99,6 @@ Features should not be added purely from intuition or implementation momentum.
 ---
 
 ## Deferred
-
-### Slices
-
-Status: deferred
-
-Interesting and useful, but currently deferred until a clear need and design
-story exist.
 
 ### Methods
 

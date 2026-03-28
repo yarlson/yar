@@ -362,6 +362,10 @@ func (l *packageLowerer) indexPackages() {
 
 		functions := make(map[string]*ast.FunctionDecl)
 		for _, decl := range pkg.Functions {
+			if checker.IsBuiltinFunction(decl.Name) {
+				l.diag.Add(decl.NamePos, "function %q is already declared", decl.Name)
+				continue
+			}
 			if _, ok := functions[decl.Name]; ok {
 				l.diag.Add(decl.NamePos, "function %q is already declared", decl.Name)
 				continue
@@ -416,6 +420,10 @@ func (l *packageLowerer) validateExportedDeclarations() {
 func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref ast.TypeRef, ownerKind, ownerName string) {
 	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
 		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos}, ownerKind, ownerName)
+		return
+	}
+	if slice, ok := checker.ParseSliceType(checker.Type(ref.Name)); ok {
+		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(slice.Elem), Pos: ref.Pos}, ownerKind, ownerName)
 		return
 	}
 	if isBuiltinType(ref.Name) || strings.Contains(ref.Name, ".") {
@@ -493,6 +501,10 @@ func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef) ast.T
 	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
 		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos})
 		return ast.TypeRef{Name: string(checker.MakeArrayType(array.Len, checker.Type(inner.Name))), Pos: ref.Pos}
+	}
+	if slice, ok := checker.ParseSliceType(checker.Type(ref.Name)); ok {
+		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(slice.Elem), Pos: ref.Pos})
+		return ast.TypeRef{Name: string(checker.MakeSliceType(checker.Type(inner.Name))), Pos: ref.Pos}
 	}
 	if isBuiltinType(ref.Name) {
 		return ref
@@ -599,6 +611,8 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 		return &ast.SelectorExpr{Inner: l.rewriteExpr(pkg, e.Inner), DotPos: e.DotPos, Name: e.Name, NamePos: e.NamePos}
 	case *ast.IndexExpr:
 		return &ast.IndexExpr{Inner: l.rewriteExpr(pkg, e.Inner), LBracketPos: e.LBracketPos, Index: l.rewriteExpr(pkg, e.Index)}
+	case *ast.SliceExpr:
+		return &ast.SliceExpr{Inner: l.rewriteExpr(pkg, e.Inner), LBracketPos: e.LBracketPos, Start: l.rewriteExpr(pkg, e.Start), ColonPos: e.ColonPos, End: l.rewriteExpr(pkg, e.End)}
 	case *ast.StructLiteralExpr:
 		fields := make([]ast.StructLiteralField, 0, len(e.Fields))
 		for _, field := range e.Fields {
@@ -611,6 +625,12 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 			elements = append(elements, l.rewriteExpr(pkg, element))
 		}
 		return &ast.ArrayLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type), LBrace: e.LBrace, Elements: elements}
+	case *ast.SliceLiteralExpr:
+		elements := make([]ast.Expression, 0, len(e.Elements))
+		for _, element := range e.Elements {
+			elements = append(elements, l.rewriteExpr(pkg, element))
+		}
+		return &ast.SliceLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type), LBrace: e.LBrace, Elements: elements}
 	case *ast.PropagateExpr:
 		return &ast.PropagateExpr{Inner: l.rewriteExpr(pkg, e.Inner), QuestionPos: e.QuestionPos}
 	case *ast.HandleExpr:
