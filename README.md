@@ -1,170 +1,229 @@
 # yar
 
-A compiler for the yar programming language, written in Go. Yar generates native executables through LLVM IR and clang.
+A compiled language with explicit error handling, enums with payloads, and a multi-package module system. Yar compiles to native executables through LLVM IR and clang.
 
-- **Multi-file packages** with imports and `pub` exports
-- **Structs, enums, fixed arrays, slices, maps** with full type checking
-- **Explicit error handling** via `!T` return types, `?` propagation, and `or |err| { ... }`
-- **Exhaustive match expressions** for enum variants
-- **Standard library** with `strings`, `utf8`, and `conv` packages
-- **Zero external Go dependencies** — pure standard library implementation
+```yar
+package main
 
-> **Note**: This is v0 work. Methods, generics, and closures are not yet implemented.
+import "strings"
 
-## Prerequisites
+fn greet(name str) !void {
+    if strings.contains(name, " ") {
+        return error.InvalidName
+    }
+    print("hello, ")
+    print(name)
+    print("\n")
+}
 
-- **Go 1.26.0** or later
-- **clang** (for linking LLVM IR to native executables)
+fn main() !i32 {
+    greet("world")?
+    return 0
+}
+```
 
-### Installing clang
+```bash
+$ yar run greet.yar
+hello, world
+```
 
-| Platform              | Command                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| macOS                 | Xcode Command Line Tools (ships with clang)                                                |
-| Linux (Debian/Ubuntu) | `apt install clang`                                                                        |
-| Linux (Fedora)        | `dnf install clang`                                                                        |
-| Windows               | Download from [releases.llvm.org](https://releases.llvm.org) or `winget install LLVM.LLVM` |
+## What yar has
+
+- Structs, enums with payloads, exhaustive `match`
+- Typed pointers, fixed arrays, slices, maps
+- Multi-file packages with `import` and `pub` exports
+- Error handling: `!T` return types, `?` propagation, `or |err| { ... }`
+- Standard library: `strings`, `utf8`, `conv`
+- Compiles to native code (no interpreter, no VM)
+- Zero external Go dependencies
+
+## What yar does not have (yet)
+
+Methods, generics, closures, interfaces, garbage collection. See the [language spec](docs/YAR.md) for current scope.
 
 ## Install
+
+Requires **Go 1.26+** and **clang**.
 
 ```bash
 go build -o ./bin/yar ./cmd/yar
 ```
 
-Or run directly without building:
+<details>
+<summary>Installing clang</summary>
 
-```bash
-go run ./cmd/yar <command> <file>
+| Platform      | Command                                                                      |
+| ------------- | ---------------------------------------------------------------------------- |
+| macOS         | Included with Xcode Command Line Tools                                       |
+| Debian/Ubuntu | `apt install clang`                                                          |
+| Fedora        | `dnf install clang`                                                          |
+| Windows       | `winget install LLVM.LLVM` or [releases.llvm.org](https://releases.llvm.org) |
+
+Set `CC` to use a specific version: `CC=clang-17 yar build main.yar`
+
+</details>
+
+## Commands
+
+```
+yar <command> <file> [-o output]
 ```
 
-## Quickstart
+| Command   | Description                                       |
+| --------- | ------------------------------------------------- |
+| `check`   | Type-check without generating code                |
+| `emit-ir` | Print LLVM IR to stdout                           |
+| `build`   | Compile to a native executable (default: `a.out`) |
+| `run`     | Compile and execute                               |
 
-Create a file `hello.yar`:
+## Language tour
+
+### Error handling
+
+Functions that can fail return `!T`. Callers must handle the error — the compiler enforces this.
 
 ```yar
-package main
+fn parse(input str) !i32 {
+    if len(input) == 0 {
+        return error.Empty
+    }
+    return 42
+}
 
-fn main() i32 {
-    print("hello, world\n")
+fn main() !i32 {
+    // propagate with ?
+    value := parse("test")?
+
+    // or handle locally
+    fallback := parse("") or |err| {
+        print("using default\n")
+        return 0
+    }
+
     return 0
 }
 ```
 
-Build and run:
+### Enums and match
 
-```bash
-go run ./cmd/yar build hello.yar -o hello
-./hello
+Enums are closed variant types. Cases can carry payloads. `match` is exhaustive.
+
+```yar
+enum Expr {
+    Int { value i32 }
+    Name { text str }
+}
+
+fn eval(e Expr) i32 {
+    match e {
+    case Expr.Int(v) {
+        return v.value
+    }
+    case Expr.Name(v) {
+        return len(v.text)
+    }
+    }
+}
 ```
 
-Or compile and run in one step:
+### Packages
 
-```bash
-go run ./cmd/yar run hello.yar
+Packages are directories of `.yar` files. Exported declarations use `pub`.
+
+```yar
+// lexer/lexer.yar
+package lexer
+
+pub fn classify(ch i32) str {
+    if ch >= 48 {
+        if ch <= 57 {
+            return "digit"
+        }
+    }
+    return "other"
+}
 ```
 
-## Usage
+```yar
+// main.yar
+package main
 
-```
-yar <check|emit-ir|build|run> <file> [-o output]
-```
+import "lexer"
 
-### Commands
-
-| Command   | Description                                    |
-| --------- | ---------------------------------------------- |
-| `check`   | Type-check the program without generating code |
-| `emit-ir` | Output LLVM IR to stdout                       |
-| `build`   | Compile to a native executable                 |
-| `run`     | Compile and execute immediately                |
-
-### Examples
-
-```bash
-# Type-check a program
-go run ./cmd/yar check myprogram.yar
-
-# View generated LLVM IR
-go run ./cmd/yar emit-ir myprogram.yar
-
-# Build with custom output name
-go run ./cmd/yar build myprogram.yar -o myprogram
-
-# Compile and run
-go run ./cmd/yar run myprogram.yar
+fn main() i32 {
+    kind := lexer.classify(65)
+    print(kind)
+    print("\n")
+    return 0
+}
 ```
 
-## Configuration
+### Pointers and recursive data
 
-| Variable | Description                                                 | Required | Default      |
-| -------- | ----------------------------------------------------------- | -------- | ------------ |
-| `CC`     | Path to clang binary or specific version (e.g., `clang-17`) | No       | System clang |
+```yar
+struct Node {
+    value i32
+    next *Node
+}
 
-### Example
-
-```bash
-CC=clang-17 go run ./cmd/yar build testdata/hello/main.yar -o hello
+fn main() i32 {
+    tail := &Node{value: 2, next: nil}
+    head := &Node{value: 1, next: tail}
+    print_int((*head).value)
+    print("\n")
+    return 0
+}
 ```
 
-## Troubleshooting
+### Maps
 
-### Language is v0 experimental
+Map indexing returns `!V` — missing keys are errors, not silent zero values.
 
-This is early-stage work. Methods, generics, and closures are not yet implemented. See [docs/YAR.md](docs/YAR.md) for the current language specification.
+```yar
+fn main() !i32 {
+    m := map[str]i32{"x": 1, "y": 2}
+    v := m["x"]?
+    print_int(v)
+    print("\n")
 
-### Requires external toolchain (clang)
-
-Compilation depends on system clang for linking LLVM IR to native executables. Set the `CC` environment variable to use a specific version:
-
-```bash
-CC=clang-17 go run ./cmd/yar build myprogram.yar
+    m["z"] = 3
+    delete(m, "x")
+    return 0
+}
 ```
-
-### No package manager integration
-
-The yar compiler is standalone with zero external Go dependencies. The system must provide clang separately.
 
 ## Development
 
-### Run tests
-
 ```bash
-go test ./...
-```
-
-With full flags:
-
-```bash
+# Run tests
 go test -race -count=1 -v -timeout=120s ./...
-```
 
-### Lint
-
-```bash
+# Lint
 golangci-lint run --fix ./...
 ```
 
 ### Project structure
 
 ```
-cmd/yar/           CLI entry point
+cmd/yar/          CLI entry point
 internal/
-  lexer/           Tokenizer
-  parser/          Syntax analysis
-  ast/             Abstract syntax tree
-  checker/         Semantic analysis and type checking
-  codegen/         LLVM IR generation
-  compiler/        Compilation orchestration
-  runtime/         C runtime source
-  stdlib/          Embedded standard library
-testdata/          Test programs covering language features
-docs/              Language specification and design documents
+  lexer/          Tokenizer
+  parser/         Syntax analysis
+  ast/            AST node types
+  checker/        Type checking and semantic analysis
+  codegen/        LLVM IR generation
+  compiler/       Pipeline orchestration and package loading
+  runtime/        Embedded C runtime
+  stdlib/         Embedded standard library (yar source)
+testdata/         Test programs
+docs/             Language spec and design docs
 ```
 
-## Contributing
+## Docs
 
-Not documented. Check the repository for contribution guidelines.
+- [Language specification](docs/YAR.md) — what the compiler implements today
+- [Language design](docs/language/) — proposals, decisions, roadmap
 
 ## License
 
-Not documented. Check the repository for license information.
+[MIT](LICENSE)
