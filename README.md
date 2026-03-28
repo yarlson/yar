@@ -18,7 +18,7 @@ down to executables through LLVM IR and `clang`.
 
 ## Quick Example
 
-```yar
+```
 package main
 
 import "strings"
