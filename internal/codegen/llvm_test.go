@@ -69,6 +69,39 @@ fn main() i32 {
 	}
 }
 
+func TestGenerateLowersShortCircuitBoolOperators(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+fn left() bool {
+	return true
+}
+
+fn right() bool {
+	return false
+}
+
+fn main() i32 {
+	if left() && right() || left() {
+		return 1
+	}
+	return 0
+}
+`)
+
+	if !strings.Contains(ir, "logic.rhs") {
+		t.Fatalf("expected short-circuit rhs block in IR:\n%s", ir)
+	}
+	if !strings.Contains(ir, "logic.end") {
+		t.Fatalf("expected short-circuit end block in IR:\n%s", ir)
+	}
+	if !strings.Contains(ir, "phi i1") {
+		t.Fatalf("expected phi for short-circuit boolean result in IR:\n%s", ir)
+	}
+}
+
 func TestGenerateDeclaresMemoryRuntimeHelpers(t *testing.T) {
 	t.Parallel()
 

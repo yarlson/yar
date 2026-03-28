@@ -293,15 +293,16 @@ func sanitizeLabel(name string) string {
 }
 
 type functionEmitter struct {
-	g          *Generator
-	fn         *ast.FunctionDecl
-	sig        checker.Signature
-	builder    strings.Builder
-	tempID     int
-	labelID    int
-	terminated bool
-	scopes     []map[string]localSlot
-	loops      []loopContext
+	g            *Generator
+	fn           *ast.FunctionDecl
+	sig          checker.Signature
+	builder      strings.Builder
+	tempID       int
+	labelID      int
+	currentLabel string
+	terminated   bool
+	scopes       []map[string]localSlot
+	loops        []loopContext
 }
 
 type localSlot struct {
@@ -813,6 +814,10 @@ func (f *functionEmitter) genHandle(expr *ast.HandleExpr) exprValue {
 }
 
 func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
+	if expr.Operator == token.AmpAmp || expr.Operator == token.PipePipe {
+		return f.genShortCircuitBinary(expr)
+	}
+
 	left := f.genExpression(expr.Left)
 	right := f.genExpression(expr.Right)
 	out := f.newTemp("tmp")
@@ -853,6 +858,39 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 	default:
 		panic("unsupported binary operator")
 	}
+}
+
+func (f *functionEmitter) genShortCircuitBinary(expr *ast.BinaryExpr) exprValue {
+	left := f.genExpression(expr.Left)
+	rhsLabel := f.newLabel("logic.rhs")
+	shortLabel := f.newLabel("logic.short")
+	endLabel := f.newLabel("logic.end")
+	shortValue := "0"
+	if expr.Operator == token.PipePipe {
+		shortValue = "1"
+	}
+
+	if expr.Operator == token.AmpAmp {
+		fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", left.ref, rhsLabel, shortLabel)
+	} else {
+		fmt.Fprintf(&f.builder, "  br i1 %s, label %%%s, label %%%s\n", left.ref, shortLabel, rhsLabel)
+	}
+	f.terminated = true
+
+	f.emitLabel(shortLabel)
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(rhsLabel)
+	right := f.genExpression(expr.Right)
+	rhsResultLabel := f.currentLabel
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(endLabel)
+	out := f.newTemp("logic")
+	fmt.Fprintf(&f.builder, "  %%%s = phi i1 [%s, %%%s], [%s, %%%s]\n", out, shortValue, shortLabel, right.ref, rhsResultLabel)
+	return exprValue{ref: "%" + out, typ: checker.TypeBool}
 }
 
 func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
@@ -1090,6 +1128,7 @@ func (f *functionEmitter) newLabel(prefix string) string {
 
 func (f *functionEmitter) emitLabel(label string) {
 	fmt.Fprintf(&f.builder, "%s:\n", label)
+	f.currentLabel = label
 	f.terminated = false
 }
 

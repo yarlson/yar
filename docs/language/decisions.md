@@ -52,6 +52,13 @@ Heap-backed features must use one runtime-managed memory model: user code does
 not manually free storage, and allocation failure is an unrecoverable runtime
 failure rather than part of the ordinary `error` model.
 
+### Boolean operators are short-circuiting
+
+Status: accepted
+
+`&&` and `||` are supported for `bool` operands and lower to explicit
+short-circuit control flow rather than eager evaluation.
+
 ---
 
 ## Rejected

@@ -92,7 +92,18 @@ func (l *Lexer) Lex() []token.Token {
 			case ']':
 				tokens = append(tokens, token.Token{Kind: token.RBracket, Text: "]", Pos: pos})
 			case '|':
-				tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
+				if l.matchRune('|') {
+					tokens = append(tokens, token.Token{Kind: token.PipePipe, Text: "||", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
+				}
+			case '&':
+				if l.matchRune('&') {
+					tokens = append(tokens, token.Token{Kind: token.AmpAmp, Text: "&&", Pos: pos})
+				} else {
+					l.diag.Add(pos, "unexpected character %q", r)
+					tokens = append(tokens, token.Token{Kind: token.Illegal, Text: string(r), Pos: pos})
+				}
 			case '+':
 				tokens = append(tokens, token.Token{Kind: token.Plus, Text: "+", Pos: pos})
 			case '-':

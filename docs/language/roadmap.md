@@ -26,6 +26,7 @@ Current baseline already includes:
 - primitive types plus `error`
 - fixed-size arrays
 - `if`, `else`, `for`, `break`, `continue`
+- boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
 - LLVM-based native code generation
 
@@ -40,20 +41,11 @@ avoiding a large jump in complexity.
 
 ### Candidate focus areas
 
-#### 1. Boolean operator completion
-
-Add:
-
-- `&&`
-- `||`
-
-This fills an obvious gap in expression and condition writing.
-
-#### 2. Broader expression completeness
+#### 1. Broader expression completeness
 
 Consider whether additional expression polish is needed, but keep scope tight.
 
-#### 3. Language consistency pass
+#### 2. Language consistency pass
 
 Tighten rough edges in:
 

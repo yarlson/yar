@@ -8,6 +8,7 @@
 - Top-level declarations may be `struct` or `fn`.
 - Local variables are introduced with `:=` or `var`, scoped by blocks, and may be reassigned only after declaration.
 - Raw errorable values cannot be bound, assigned, passed as arguments, used in conditions, used in unary or binary operators, or accessed through fields or indexing.
+- `&&` and `||` short-circuit in source order and require non-errorable `bool` operands.
 - Errorable results must be handled immediately with direct `return`, `?`, or `or |err| { ... }`.
 - `?` is front-end sugar for explicit error inspection and return from the current function.
 - `or |err| { ... }` is front-end sugar for explicit local error inspection and handler control flow.

@@ -27,6 +27,8 @@ const (
 	LBracket
 	RBracket
 	Pipe
+	AmpAmp
+	PipePipe
 	Plus
 	Minus
 	Star
@@ -98,6 +100,10 @@ func (k Kind) String() string {
 		return "]"
 	case Pipe:
 		return "|"
+	case AmpAmp:
+		return "&&"
+	case PipePipe:
+		return "||"
 	case Plus:
 		return "+"
 	case Minus:

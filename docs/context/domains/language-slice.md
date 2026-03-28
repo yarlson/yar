@@ -51,6 +51,7 @@
 - Postfix error propagation with `expr?`
 - Local error handling with `expr or |err| { ... }`
 - Unary operators: `-`, `!`
+- Short-circuit boolean operators: `&&`, `||`
 - Binary arithmetic: `+`, `-`, `*`, `/`, `%`
 - Binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 
@@ -66,6 +67,7 @@
 - `if` and `for` conditions must be non-errorable `bool` expressions.
 - Arithmetic and relational operators require matching integer operands after literal coercion.
 - Equality and inequality are supported for integers and `bool`.
+- `&&` and `||` require `bool` operands and evaluate the right operand only when needed.
 - Unary `-` requires an integer operand.
 - Unary `!` requires a `bool` operand.
 - Field access requires a struct value and a known field.

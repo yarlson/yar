@@ -839,6 +839,14 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 	}
 
 	switch binary.Operator {
+	case token.AmpAmp, token.PipePipe:
+		if left.Base != TypeBool || right.Base != TypeBool {
+			c.diag.Add(binary.OpPos, "logical operators require bool operands")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeBool}
+		c.info.ExprTypes[expr] = et
+		return et
 	case token.Plus, token.Minus, token.Star, token.Slash, token.Percent:
 		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
 		if !ok {

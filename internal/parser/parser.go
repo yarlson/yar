@@ -380,7 +380,7 @@ func (p *Parser) parseExpression() ast.Expression {
 }
 
 func (p *Parser) parseHandle() ast.Expression {
-	expr := p.parseEquality()
+	expr := p.parseLogicalOr()
 	if !p.at(token.Or) {
 		return expr
 	}
@@ -397,6 +397,38 @@ func (p *Parser) parseHandle() ast.Expression {
 		ErrPos:  errTok.Pos,
 		Handler: handler,
 	}
+}
+
+func (p *Parser) parseLogicalOr() ast.Expression {
+	expr := p.parseLogicalAnd()
+	for p.at(token.PipePipe) {
+		op := p.current()
+		p.advance()
+		right := p.parseLogicalAnd()
+		expr = &ast.BinaryExpr{
+			Left:     expr,
+			Operator: op.Kind,
+			OpPos:    op.Pos,
+			Right:    right,
+		}
+	}
+	return expr
+}
+
+func (p *Parser) parseLogicalAnd() ast.Expression {
+	expr := p.parseEquality()
+	for p.at(token.AmpAmp) {
+		op := p.current()
+		p.advance()
+		right := p.parseEquality()
+		expr = &ast.BinaryExpr{
+			Left:     expr,
+			Operator: op.Kind,
+			OpPos:    op.Pos,
+			Right:    right,
+		}
+	}
+	return expr
 }
 
 func (p *Parser) parseEquality() ast.Expression {

@@ -182,6 +182,7 @@ Implemented expressions:
 - indexing
 - unary `-`
 - unary `!`
+- short-circuit boolean operators: `&&`, `||`
 - binary arithmetic: `+`, `-`, `*`, `/`, `%`
 - binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 - postfix error propagation: `expr?`
@@ -200,6 +201,13 @@ Supported escapes:
 - `\t`
 - `\\`
 - `\"`
+
+### Boolean Operators
+
+- `a && b` evaluates `b` only when `a` is `true`
+- `a || b` evaluates `b` only when `a` is `false`
+- both operands must be non-errorable `bool`
+- the result type is `bool`
 
 ## Error Model
 
@@ -354,8 +362,6 @@ The compiler does not currently implement:
 - methods
 - enums
 - slices
-- `&&`
-- `||`
 - pattern matching
 - exceptions
 - automatic recovery

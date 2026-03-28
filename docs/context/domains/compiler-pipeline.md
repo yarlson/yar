@@ -10,7 +10,7 @@
 - `internal/lexer` tokenizes source text, including control-flow, aggregate, and punctuation tokens, handles `//` comments and string escapes, and produces lexical diagnostics.
 - `internal/parser` builds the AST for one source file, including top-level `struct` declarations, loops, aggregate literals, lvalue forms, and sugar nodes for `?` and `or |err| { ... }`, and appends parser diagnostics to lexer diagnostics.
 - `internal/checker` validates package, struct, and function shape, tracks scopes, resolves builtin and user function signatures, resolves user-defined and array types, assigns expression types, validates loop and assignment-target rules, validates error-sugar legality, and records ordered error names.
-- `internal/codegen` lowers the checked AST into LLVM IR, expanding error sugar into explicit checks, branches, and returns, lowering loops and aggregate values, generating the exported `main` wrapper around `yar.main`, and declaring the shared runtime allocation helpers used by future heap-backed features.
+- `internal/codegen` lowers the checked AST into LLVM IR, expanding error sugar and short-circuit boolean operators into explicit checks, branches, and returns, lowering loops and aggregate values, generating the exported `main` wrapper around `yar.main`, and declaring the shared runtime allocation helpers used by future heap-backed features.
 - `internal/runtime` exposes embedded runtime C source to the build step, including builtin I/O, panic behavior, and the shared allocation/trap boundary.
 
 ## Stage Contracts

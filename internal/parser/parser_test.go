@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"yar/internal/ast"
+	"yar/internal/token"
 )
 
 func TestParsePropagateExpr(t *testing.T) {
@@ -77,6 +78,43 @@ fn main() i32 {
 	}
 	if len(handle.Handler.Stmts) != 2 {
 		t.Fatalf("unexpected handler statement count: %d", len(handle.Handler.Stmts))
+	}
+}
+
+func TestParseBoolOperatorPrecedence(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+fn main() i32 {
+	x := true || false && false
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	stmt, ok := program.Functions[0].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[0].Body.Stmts[0])
+	}
+
+	orExpr, ok := stmt.Value.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("expected binary expression, got %T", stmt.Value)
+	}
+	if orExpr.Operator != token.PipePipe {
+		t.Fatalf("expected || at root, got %s", orExpr.Operator)
+	}
+
+	andExpr, ok := orExpr.Right.(*ast.BinaryExpr)
+	if !ok {
+		t.Fatalf("expected && on right side, got %T", orExpr.Right)
+	}
+	if andExpr.Operator != token.AmpAmp {
+		t.Fatalf("expected && on right side, got %s", andExpr.Operator)
 	}
 }
 

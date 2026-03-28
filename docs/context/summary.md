@@ -27,7 +27,7 @@ invoke `clang` with an embedded runtime to produce or run a native executable.
 - The repository contains one deployable unit: the `yar` CLI compiler.
 - Programs are single-file `package main` sources with top-level `struct` and `fn` declarations.
 - The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, user-defined structs, and fixed arrays.
-- The language supports `:=`, `var`, assignment to locals/fields/indices, `if` / `else`, `for`, `break`, `continue`, struct literals, array literals, field access, indexing, unary `-`, unary `!`, integer arithmetic including `%`, integer and boolean comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
+- The language supports `:=`, `var`, assignment to locals/fields/indices, `if` / `else`, `for`, `break`, `continue`, struct literals, array literals, field access, indexing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
 - Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, and `len(array)`.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
@@ -39,7 +39,7 @@ invoke `clang` with an embedded runtime to produce or run a native executable.
 - Propagate errors with direct `return` or postfix `?`.
 - Handle errors locally with `or |err| { ... }`.
 - Support aggregate values and return types with structs and fixed arrays.
-- Support loops and branch-based control flow for small real programs.
+- Support loops and branch-based control flow for small real programs, including short-circuit boolean logic.
 - Expose a runtime-managed allocation boundary internally for future heap-backed features.
 
 ## Tech Stack

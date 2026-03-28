@@ -200,6 +200,64 @@ fn main() !i32 {
 	}
 }
 
+func TestCheckBoolOperatorsValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	ok := true
+	ready := false
+	debug := true
+	if ok && ready || debug {
+		return 1
+	}
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckBoolOperatorsWithPropagateValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn maybe(ok bool) !bool {
+	return ok
+}
+
+fn main() !i32 {
+	ready := true
+	if maybe(true)? && ready {
+		return 1
+	}
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckV02FeaturesInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -259,6 +317,37 @@ fn main() i32 {
 }
 `,
 			substr: "struct \"User\" has no field \"name\"",
+		},
+		{
+			name: "logical operators require bool operands",
+			src: `
+package main
+
+fn main() i32 {
+	x := 1 && 2
+	return 0
+}
+`,
+			substr: "logical operators require bool operands",
+		},
+		{
+			name: "logical operators reject errorable operands",
+			src: `
+package main
+
+fn maybe() !bool {
+	return true
+}
+
+fn main() !i32 {
+	ok := true
+	if maybe() && ok {
+		return 1
+	}
+	return 0
+}
+`,
+			substr: "binary operators cannot use errorable operands",
 		},
 	}
 

@@ -1,6 +1,6 @@
 # Proposal: Boolean Operators `&&` and `||`
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -44,7 +44,7 @@ x := 1 && 2
 Invalid because `&&` requires boolean operands.
 
 ```yar
-x := maybe()? && ok
+x := maybe() && ok
 ```
 
 Invalid because raw errorable values cannot be used directly in binary operators.
@@ -107,7 +107,7 @@ None currently.
 
 ## 13. Decision
 
-Pending.
+Accepted and implemented.
 
 ## 14. Implementation Checklist
 
