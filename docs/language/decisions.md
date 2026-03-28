@@ -96,6 +96,14 @@ YAR exposes host filesystem access through stdlib packages rather than new
 syntax-level builtins. `path` stays pure yar code, while the small `fs` surface
 lowers to runtime shims with stable user-visible error names.
 
+### Sorting helpers
+
+Status: accepted
+
+YAR exposes deterministic in-place sorting through a small stdlib `sort`
+package rather than new builtins or syntax. The initial surface is
+`sort.strings([]str)`, `sort.i32s([]i32)`, and `sort.i64s([]i64)`.
+
 ---
 
 ## Rejected
@@ -150,7 +158,7 @@ Status: accepted
 The compiler embeds a standard library written in yar. Stdlib packages are
 resolved as a fallback when an import path does not match a local directory.
 Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`,
-`path`, `fs`.
+`sort`, `path`, `fs`, `process`, `env`, `stdio`.
 
 ### Text and UTF-8 helpers
 

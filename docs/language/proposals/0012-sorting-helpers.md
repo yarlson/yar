@@ -1,6 +1,6 @@
 # Proposal: Sorting Helpers
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -193,15 +193,16 @@ programs while staying within the current language model.
 
 ## 13. Decision
 
-Proposed.
+Accepted and implemented.
 
 This is a small library proposal that complements map key extraction and host
-filesystem access in the larger self-hosting track.
+filesystem access in the larger self-hosting track while staying entirely in
+the stdlib.
 
 ## 14. Implementation Checklist
 
-- stdlib package implementation
-- integration tests for sorted output
-- documentation updates
-- `current-state.md` update
-- `decisions.md` update
+- [x] stdlib package implementation
+- [x] integration tests for sorted output
+- [x] documentation updates
+- [x] `current-state.md` update
+- [x] `decisions.md` update

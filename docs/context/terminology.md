@@ -38,7 +38,7 @@ package graph — The directed acyclic graph of packages rooted at the entry `pa
 
 unhandled error — An errorable `main` result that reaches the generated native wrapper, which prints an error message and exits with code `1`.
 
-stdlib — The embedded standard library of yar packages (`strings`, `utf8`, `conv`) compiled through the same pipeline as user code.
+stdlib — The embedded standard library of yar packages (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) compiled through the same pipeline as user code.
 
 internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to stdlib packages and rejected in user code by the package lowerer.
 

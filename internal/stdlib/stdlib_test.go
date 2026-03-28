@@ -8,6 +8,12 @@ func TestHasStrings(t *testing.T) {
 	}
 }
 
+func TestHasSort(t *testing.T) {
+	if !Has("sort") {
+		t.Fatal("expected sort to be a stdlib package")
+	}
+}
+
 func TestHasHostPackages(t *testing.T) {
 	for _, pkg := range []string{"fs", "path"} {
 		if !Has(pkg) {
@@ -43,6 +49,16 @@ func TestReadDirStrings(t *testing.T) {
 
 func TestReadFileStrings(t *testing.T) {
 	src, err := ReadFile("strings", "strings.yar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src == "" {
+		t.Fatal("expected non-empty source")
+	}
+}
+
+func TestReadFileSort(t *testing.T) {
+	src, err := ReadFile("sort", "sort.yar")
 	if err != nil {
 		t.Fatal(err)
 	}

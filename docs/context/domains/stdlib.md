@@ -71,6 +71,19 @@ Functions:
 
 Depends on `strings.from_byte` for digit character construction.
 
+### `sort`
+
+Deterministic in-place sorting helpers for compiler and tooling code.
+
+Functions:
+
+- `strings(values []str) void` — ascending bytewise lexicographic order
+- `i32s(values []i32) void` — ascending numeric order
+- `i64s(values []i64) void` — ascending numeric order
+
+Current implementation note: all three helpers use simple in-place insertion
+sort written in yar itself.
+
 ### `path`
 
 Pure path helpers for host-facing tooling code.
@@ -156,7 +169,7 @@ Functions:
 ## Constraints
 
 - Stdlib packages have access to internal builtins (`chr`, `i32_to_i64`, `i64_to_i32`) that are not available to user code. The `conv` package exposes these as public wrappers. Other stdlib packages (e.g., `strings`) also call them directly.
-- Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs — acceptable for the current stage.
+- Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs, and `sort` currently uses simple O(n^2) insertion sort — acceptable for the current stage.
 - Stdlib packages are not versioned separately from the compiler.
 - The `fs` runtime boundary is currently POSIX-oriented (`stat`, `opendir`, `mkdir`, `remove`, `TMPDIR`) rather than a full cross-platform abstraction.
 - The `process` runtime boundary is also POSIX-oriented in the first version (`fork`, `execvp`, `waitpid`, `mkstemp`) and currently captures child stdout/stderr through temporary files before copying them into runtime-managed strings.
@@ -172,7 +185,7 @@ Functions:
 ## Testing
 
 - `internal/stdlib/stdlib_test.go` covers embedding: `Has`, `ReadDir`, `ReadFile`.
-- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, `TestStdlibConvFixtureProgram`, `TestStdlibFSPathFixtureProgram`, and `TestStdlibProcessEnvFixtureProgram` compile and run programs using stdlib functions.
+- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, `TestStdlibConvFixtureProgram`, `TestStdlibSortFixtureProgram`, `TestStdlibFSPathFixtureProgram`, and `TestStdlibProcessEnvFixtureProgram` compile and run programs using stdlib functions.
 - `TestUnhandledHostFilesystemErrorMain`, `TestUnhandledHostProcessErrorMain`, and `TestUnhandledHostProcessInvalidArgumentMain` verify that propagated host failures surface stable error names at the native `main` wrapper.
 - `TestLocalPackageShadowsStdlib` verifies the shadowing behavior.
-- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, `testdata/stdlib_conv/main.yar`, `testdata/stdlib_fs_path/main.yar`, and `testdata/stdlib_process_env/main.yar` are the representative fixtures.
+- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, `testdata/stdlib_conv/main.yar`, `testdata/stdlib_sort/main.yar`, `testdata/stdlib_fs_path/main.yar`, and `testdata/stdlib_process_env/main.yar` are the representative fixtures.

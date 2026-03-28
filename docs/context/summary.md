@@ -19,7 +19,7 @@ embedded runtime to produce or run a native executable.
 - `internal/checker` owns semantic validation, local scope tracking, user-defined struct and enum metadata, type inference for integer literals, builtin signatures, and error-code assignment on the lowered package graph.
 - `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, aggregate values, loops, package-qualified symbols, host-backed stdlib calls, the generated native `main` wrapper, and declarations for the shared runtime allocation helpers.
 - `internal/runtime` embeds the small C runtime source that provides builtin I/O, panic behavior, string operations, POSIX-oriented host filesystem and process calls, environment lookup, stderr output, and the shared allocation/trap boundary during linking.
-- `internal/stdlib` embeds the standard library written in yar (including `strings`, `utf8`, `conv`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
+- `internal/stdlib` embeds the standard library written in yar (including `strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
 
 ## Core Flow
 
@@ -36,7 +36,7 @@ embedded runtime to produce or run a native executable.
 - The language supports `:=`, `var`, assignment to locals/fields/indices/dereferences, `if` / `else`, `for`, `break`, `continue`, `match` over enum values, struct literals, enum constructors, array literals, slice literals, pointer address-of and dereference, `nil`, field access, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean/pointer comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
 - String operations include `len(str)`, `str == str`, `str != str`, `str + str` (concatenation), `s[i]` (byte indexing returning `i32`), and `s[i:j]` (byte slicing returning `str`).
 - Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, `len(array-or-slice-or-map-or-str)`, `append(slice, value)`, `has(map, key)`, `delete(map, key)`, and `keys(map)`. Three additional builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the standard library and not available to user code.
-- An embedded standard library provides higher-level yar packages (`strings`, `utf8`, `conv`, `path`, `fs`, `process`, `env`, `stdio`) that are imported like regular packages and resolved as a fallback when local packages are not found. `path` provides pure path helpers, `fs` exposes host-backed text file and directory operations with explicit `error` behavior, `process` provides argv and child-process execution, `env` exposes environment lookup, and `stdio` provides stderr output.
+- An embedded standard library provides higher-level yar packages (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) that are imported like regular packages and resolved as a fallback when local packages are not found. `sort` provides in-place ascending helpers for `[]str`, `[]i32`, and `[]i64`; `path` provides pure path helpers; `fs` exposes host-backed text file and directory operations with explicit `error` behavior; `process` provides argv and child-process execution; `env` exposes environment lookup; and `stdio` provides stderr output.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
 ## Capabilities
@@ -49,6 +49,7 @@ embedded runtime to produce or run a native executable.
 - Model closed variants with enums, payload-carrying enum cases, and exhaustive `match`.
 - Support aggregate values and return types with structs, fixed arrays, slices, and maps.
 - Enumerate map keys through snapshot slices with `keys(map[K]V) []K`.
+- Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow for small real programs, including short-circuit boolean logic.
 - Expose a runtime-managed allocation boundary for slices, pointers, and other heap-backed features.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from yar programs.
@@ -60,4 +61,4 @@ embedded runtime to produce or run a native executable.
 - Textual LLVM IR generation
 - External `clang` invocation for compile and link
 - Embedded C runtime source for builtin functions and shared allocation helpers
-- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, slice behavior, pointer behavior, enum and exhaustive `match`, map key enumeration, multi-package imports, the v0.2 control-flow and aggregate surface, stdlib host filesystem/path behavior, and stdlib host process/environment behavior
+- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, slice behavior, pointer behavior, enum and exhaustive `match`, map key enumeration, stdlib sorting helpers, multi-package imports, the v0.2 control-flow and aggregate surface, stdlib host filesystem/path behavior, and stdlib host process/environment behavior

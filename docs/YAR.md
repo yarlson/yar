@@ -634,6 +634,20 @@ Available functions:
 - `conv.itoa(n i32) str` — convert an i32 to its base-10 decimal string
 - `conv.itoa64(n i64) str` — convert an i64 to its base-10 decimal string
 
+### `sort`
+
+```yar
+import "sort"
+```
+
+Available functions:
+
+- `sort.strings(values []str) void` — sort a string slice in place by ascending bytewise lexicographic order
+- `sort.i32s(values []i32) void` — sort an i32 slice in place in ascending order
+- `sort.i64s(values []i64) void` — sort an i64 slice in place in ascending order
+
+Current implementation note: these helpers use a simple in-place insertion sort.
+
 ### `path`
 
 ```yar
