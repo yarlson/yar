@@ -74,6 +74,13 @@ Status: accepted
 YAR supports `[]T`, slice literals, `s[i:j]`, indexing, `len(slice)`, and
 explicit `append(slice, value)` reassignment with runtime bounds checks.
 
+### Typed pointers and recursive data
+
+Status: accepted
+
+YAR supports explicit `*T` pointers, `&expr`, `*expr`, `nil`, and recursive
+data through pointer indirection rather than direct inline containment.
+
 ---
 
 ## Rejected

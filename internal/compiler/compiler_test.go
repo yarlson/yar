@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 )
 
 func TestCompile(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "divide.yar"))
+	src, err := os.ReadFile(fixturePath("divide"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestCompile(t *testing.T) {
 }
 
 func TestBuildAndRun(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "divide.yar"))
+	src, err := os.ReadFile(fixturePath("divide"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,7 @@ func TestBuildAndRun(t *testing.T) {
 }
 
 func TestUnhandledErrorMain(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "unhandled_error.yar"))
+	src, err := os.ReadFile(fixturePath("unhandled_error"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestUnhandledErrorMain(t *testing.T) {
 func TestI64Program(t *testing.T) {
 	t.Parallel()
 
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "i64.yar"))
+	src, err := os.ReadFile(fixturePath("i64"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestI64Program(t *testing.T) {
 }
 
 func TestPanicProgram(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "panic.yar"))
+	src, err := os.ReadFile(fixturePath("panic"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestPanicProgram(t *testing.T) {
 func TestV02FixtureProgram(t *testing.T) {
 	t.Parallel()
 
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "structs_and_loops.yar"))
+	src, err := os.ReadFile(fixturePath("structs_and_loops"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func TestV02FixtureProgram(t *testing.T) {
 func TestBoolOperatorFixtureProgram(t *testing.T) {
 	t.Parallel()
 
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "bool_operators.yar"))
+	src, err := os.ReadFile(fixturePath("bool_operators"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func TestBoolOperatorFixtureProgram(t *testing.T) {
 func TestSliceFixtureProgram(t *testing.T) {
 	t.Parallel()
 
-	src, err := os.ReadFile(filepath.Join("..", "..", "testdata", "slices.yar"))
+	src, err := os.ReadFile(fixturePath("slices"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +204,23 @@ func TestSliceFixtureProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := output, "3\n9\n1\n2\n4\n4\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestPointerFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(fixturePath("pointers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "3\n2\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
 	}
 }
@@ -447,6 +465,27 @@ func TestBuildAndRunImportFixtureProgram(t *testing.T) {
 	}
 	if got, want := output, "ok\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestBuildPathAllSamplePrograms(t *testing.T) {
+	samples, err := sampleProgramPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, sample := range samples {
+		sample := sample
+		t.Run(sample, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			outPath := filepath.Join(tmpDir, "program")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			if err := BuildPath(ctx, sample, outPath); err != nil {
+				t.Fatalf("build sample %q: %v", sample, err)
+			}
+		})
 	}
 }
 
@@ -740,6 +779,19 @@ func buildAndRunPath(t *testing.T, path string) (string, error) {
 		return "", err
 	}
 	return output.String(), nil
+}
+
+func fixturePath(name string) string {
+	return filepath.Join("..", "..", "testdata", name, "main.yar")
+}
+
+func sampleProgramPaths() ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "testdata", "*", "main.yar"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func writeSourceFile(t *testing.T, path, src string) {

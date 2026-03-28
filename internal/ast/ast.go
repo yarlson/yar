@@ -247,6 +247,16 @@ func (e *BoolLiteral) Pos() token.Position {
 
 func (*BoolLiteral) exprNode() {}
 
+type NilLiteral struct {
+	LitPos token.Position
+}
+
+func (e *NilLiteral) Pos() token.Position {
+	return e.LitPos
+}
+
+func (*NilLiteral) exprNode() {}
+
 type ErrorLiteral struct {
 	Name   string
 	ErrPos token.Position

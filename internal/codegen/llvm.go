@@ -222,6 +222,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 		return "i32"
 	}
 
+	if _, ok := checker.ParsePointerType(typ); ok {
+		return "ptr"
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
 	}
@@ -353,10 +356,9 @@ func (f *functionEmitter) emit() string {
 	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.sig.FullName), strings.Join(params, ", "))
 	f.emitLabel("entry")
 	for i, param := range f.fn.Params {
-		slot := f.newTemp("slot")
-		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(f.sig.Params[i]))
-		fmt.Fprintf(&f.builder, "  store %s %%arg%d, ptr %%%s\n", f.g.llvmType(f.sig.Params[i]), i, slot)
-		f.bindLocal(param.Name, localSlot{typ: f.sig.Params[i], ptr: "%" + slot})
+		slot := f.newLocalSlot(f.sig.Params[i], false)
+		fmt.Fprintf(&f.builder, "  store %s %%arg%d, ptr %s\n", f.g.llvmType(f.sig.Params[i]), i, slot)
+		f.bindLocal(param.Name, localSlot{typ: f.sig.Params[i], ptr: slot})
 	}
 
 	f.genBlock(f.fn.Body)
@@ -404,20 +406,18 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		f.genBlock(s)
 	case *ast.LetStmt:
 		value := f.genExpression(s.Value)
-		slot := f.newTemp("slot")
-		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(value.typ))
-		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, slot)
-		f.bindLocal(s.Name, localSlot{typ: value.typ, ptr: "%" + slot})
+		slot := f.newLocalSlot(value.typ, false)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(value.typ), value.ref, slot)
+		f.bindLocal(s.Name, localSlot{typ: value.typ, ptr: slot})
 	case *ast.VarStmt:
 		typ := f.localType(stmt)
-		slot := f.newTemp("slot")
-		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(typ))
+		slot := f.newLocalSlot(typ, false)
 		value := f.g.zeroValue(typ)
 		if s.Value != nil {
 			value = f.genExpression(s.Value).ref
 		}
-		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(typ), value, slot)
-		f.bindLocal(s.Name, localSlot{typ: typ, ptr: "%" + slot})
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value, slot)
+		f.bindLocal(s.Name, localSlot{typ: typ, ptr: slot})
 	case *ast.AssignStmt:
 		ptr, typ := f.addressOfTarget(s.Target)
 		value := f.genExpression(s.Value)
@@ -622,6 +622,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 			return exprValue{ref: "1", typ: checker.TypeBool}
 		}
 		return exprValue{ref: "0", typ: checker.TypeBool}
+	case *ast.NilLiteral:
+		return exprValue{ref: "null", typ: f.exprType(expr)}
 	case *ast.StringLiteral:
 		return f.emitStringValue(e.Value)
 	case *ast.GroupExpr:
@@ -654,9 +656,18 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 }
 
 func (f *functionEmitter) genUnary(expr ast.Expression, unary *ast.UnaryExpr) exprValue {
-	value := f.genExpression(unary.Inner)
 	switch unary.Operator {
+	case token.Amp:
+		ptr, typ := f.addressOfExpr(unary.Inner)
+		return exprValue{ref: ptr, typ: checker.MakePointerType(typ)}
+	case token.Star:
+		value := f.genExpression(unary.Inner)
+		pointer, _ := checker.ParsePointerType(value.typ)
+		load := f.newTemp("deref")
+		fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", load, f.g.llvmType(pointer.Elem), value.ref)
+		return exprValue{ref: "%" + load, typ: pointer.Elem}
 	case token.Minus:
+		value := f.genExpression(unary.Inner)
 		out := f.newTemp("neg")
 		typ := f.exprType(expr)
 		if typ == checker.TypeUntypedInt {
@@ -665,6 +676,7 @@ func (f *functionEmitter) genUnary(expr ast.Expression, unary *ast.UnaryExpr) ex
 		fmt.Fprintf(&f.builder, "  %%%s = sub %s 0, %s\n", out, f.g.llvmType(typ), value.ref)
 		return exprValue{ref: "%" + out, typ: typ}
 	case token.Bang:
+		value := f.genExpression(unary.Inner)
 		out := f.newTemp("not")
 		fmt.Fprintf(&f.builder, "  %%%s = xor i1 %s, true\n", out, value.ref)
 		return exprValue{ref: "%" + out, typ: checker.TypeBool}
@@ -1077,6 +1089,10 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	if sig.Errorable {
 		callType = f.g.resultTypeName(sig.Return)
 	}
+	if sig.Return == checker.TypeVoid && !sig.Errorable {
+		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
+		return exprValue{typ: checker.TypeVoid}
+	}
 	if sig.Return == checker.TypeNoReturn {
 		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
 		f.builder.WriteString("  unreachable\n")
@@ -1099,6 +1115,17 @@ func (f *functionEmitter) addressOfTarget(target ast.Expression) (string, checke
 	return ptr, typ
 }
 
+func (f *functionEmitter) addressOfExpr(expr ast.Expression) (string, checker.Type) {
+	if ptr, typ, ok := f.addressOfLValueExpr(expr); ok {
+		return ptr, typ
+	}
+
+	value := f.genExpression(expr)
+	ptr := f.emitAllocType(value.typ, false)
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(value.typ), value.ref, ptr)
+	return ptr, value.typ
+}
+
 func (f *functionEmitter) addressOfLValueExpr(expr ast.Expression) (string, checker.Type, bool) {
 	switch e := expr.(type) {
 	case *ast.IdentExpr:
@@ -1107,6 +1134,15 @@ func (f *functionEmitter) addressOfLValueExpr(expr ast.Expression) (string, chec
 			return "", checker.TypeInvalid, false
 		}
 		return slot.ptr, slot.typ, true
+	case *ast.GroupExpr:
+		return f.addressOfLValueExpr(e.Inner)
+	case *ast.UnaryExpr:
+		if e.Operator != token.Star {
+			return "", checker.TypeInvalid, false
+		}
+		value := f.genExpression(e.Inner)
+		pointer, _ := checker.ParsePointerType(value.typ)
+		return value.ref, pointer.Elem, true
 	case *ast.SelectorExpr:
 		basePtr, baseType, ok := f.addressOfLValueExpr(e.Inner)
 		if !ok {
@@ -1146,6 +1182,10 @@ func (f *functionEmitter) addressOfAggregateExpr(expr ast.Expression) (string, c
 	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(value.typ))
 	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, slot)
 	return "%" + slot, value.typ
+}
+
+func (f *functionEmitter) newLocalSlot(typ checker.Type, zeroed bool) string {
+	return f.emitAllocType(typ, zeroed)
 }
 
 func (f *functionEmitter) loadValue(ptr string, typ checker.Type) exprValue {
@@ -1297,6 +1337,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 	case checker.TypeStr:
 		return "zeroinitializer"
 	default:
+		if _, ok := checker.ParsePointerType(typ); ok {
+			return "null"
+		}
 		if _, ok := checker.ParseArrayType(typ); ok {
 			return "zeroinitializer"
 		}

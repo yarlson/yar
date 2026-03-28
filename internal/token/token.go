@@ -20,6 +20,7 @@ const (
 	Question
 	Comma
 	Dot
+	Amp
 	LParen
 	RParen
 	LBrace
@@ -57,6 +58,7 @@ const (
 	Return
 	True
 	False
+	Nil
 	Error
 )
 
@@ -88,6 +90,8 @@ func (k Kind) String() string {
 		return ","
 	case Dot:
 		return "."
+	case Amp:
+		return "&"
 	case LParen:
 		return "("
 	case RParen:
@@ -160,6 +164,8 @@ func (k Kind) String() string {
 		return "true"
 	case False:
 		return "false"
+	case Nil:
+		return "nil"
 	case Error:
 		return "error"
 	default:

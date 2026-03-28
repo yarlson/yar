@@ -23,12 +23,13 @@
 
 ## Allocation Boundary
 
-- The compiler now emits declarations for shared runtime allocation helpers even though no user-facing heap syntax is implemented yet.
+- The compiler emits declarations for shared runtime allocation helpers and now uses them for user-visible pointer-supporting features.
 - This establishes one allocation/trap boundary for future heap-backed features rather than separate per-feature runtime entry points.
-- Slice literals and `append` reuse that same allocation boundary, with `append` lowering to allocate-and-copy growth in LLVM IR.
+- Slice literals, `append`, pointer composite literals, and local/parameter storage used by address-taking all reuse that same allocation boundary.
+- Pointer composite literals lower by allocating storage for the pointed-to value and storing the literal into that storage.
 - Allocation failure is currently treated as an unrecoverable runtime failure, not a YAR `error` value.
 
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

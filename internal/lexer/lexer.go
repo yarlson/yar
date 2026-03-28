@@ -85,6 +85,12 @@ func (l *Lexer) Lex() []token.Token {
 				tokens = append(tokens, token.Token{Kind: token.Comma, Text: ",", Pos: pos})
 			case '.':
 				tokens = append(tokens, token.Token{Kind: token.Dot, Text: ".", Pos: pos})
+			case '&':
+				if l.matchRune('&') {
+					tokens = append(tokens, token.Token{Kind: token.AmpAmp, Text: "&&", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Amp, Text: "&", Pos: pos})
+				}
 			case '(':
 				tokens = append(tokens, token.Token{Kind: token.LParen, Text: "(", Pos: pos})
 			case ')':
@@ -102,13 +108,6 @@ func (l *Lexer) Lex() []token.Token {
 					tokens = append(tokens, token.Token{Kind: token.PipePipe, Text: "||", Pos: pos})
 				} else {
 					tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
-				}
-			case '&':
-				if l.matchRune('&') {
-					tokens = append(tokens, token.Token{Kind: token.AmpAmp, Text: "&&", Pos: pos})
-				} else {
-					l.diag.Add(pos, "unexpected character %q", r)
-					tokens = append(tokens, token.Token{Kind: token.Illegal, Text: string(r), Pos: pos})
 				}
 			case '+':
 				tokens = append(tokens, token.Token{Kind: token.Plus, Text: "+", Pos: pos})
@@ -307,6 +306,8 @@ func lookupKeyword(text string) token.Kind {
 		return token.True
 	case "false":
 		return token.False
+	case "nil":
+		return token.Nil
 	case "error":
 		return token.Error
 	default:

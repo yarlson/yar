@@ -145,6 +145,15 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 }
 
 func (p *Parser) parseTypeRef() ast.TypeRef {
+	if p.at(token.Star) {
+		star := p.expect(token.Star, "expected '*'")
+		inner := p.parseTypeRef()
+		return ast.TypeRef{
+			Name: "*" + inner.Name,
+			Pos:  star.Pos,
+		}
+	}
+
 	if p.at(token.LBracket) {
 		lbracket := p.expect(token.LBracket, "expected '['")
 		if p.at(token.RBracket) {
@@ -218,14 +227,14 @@ func (p *Parser) parseStatement() ast.Statement {
 		if p.peek().Kind == token.ColonAssign {
 			return p.parseShortDecl()
 		}
-		if p.isAssignmentStart() {
-			return p.parseAssign()
-		}
 	}
 
 	expr := p.parseExpression()
 	if expr == nil {
 		return nil
+	}
+	if p.at(token.Assign) {
+		return p.parseAssign(expr)
 	}
 	return &ast.ExprStmt{Expr: expr}
 }
@@ -262,43 +271,12 @@ func (p *Parser) parseVarDecl() ast.Statement {
 	}
 }
 
-func (p *Parser) parseAssign() ast.Statement {
-	target := p.parseAssignmentTarget()
+func (p *Parser) parseAssign(target ast.Expression) ast.Statement {
 	p.expect(token.Assign, "expected '=' in assignment")
 	value := p.parseExpression()
 	return &ast.AssignStmt{
 		Target: target,
 		Value:  value,
-	}
-}
-
-func (p *Parser) parseAssignmentTarget() ast.Expression {
-	nameTok := p.expect(token.Ident, "expected assignment target")
-	var expr ast.Expression = &ast.IdentExpr{Name: nameTok.Text, NamePos: nameTok.Pos}
-
-	for {
-		switch p.current().Kind {
-		case token.Dot:
-			dotTok := p.expect(token.Dot, "expected '.'")
-			fieldTok := p.expect(token.Ident, "expected field name")
-			expr = &ast.SelectorExpr{
-				Inner:   expr,
-				DotPos:  dotTok.Pos,
-				Name:    fieldTok.Text,
-				NamePos: fieldTok.Pos,
-			}
-		case token.LBracket:
-			lbracket := p.expect(token.LBracket, "expected '['")
-			index := p.parseExpression()
-			p.expect(token.RBracket, "expected ']'")
-			expr = &ast.IndexExpr{
-				Inner:       expr,
-				LBracketPos: lbracket.Pos,
-				Index:       index,
-			}
-		default:
-			return expr
-		}
 	}
 }
 
@@ -328,7 +306,7 @@ func (p *Parser) parseIf() ast.Statement {
 func (p *Parser) parseFor() ast.Statement {
 	forTok := p.expect(token.For, "expected for")
 
-	if p.at(token.Var) || (p.at(token.Ident) && (p.peek().Kind == token.ColonAssign || p.isAssignmentStart())) {
+	if p.at(token.Var) || (p.at(token.Ident) && p.peek().Kind == token.ColonAssign) {
 		init := p.parseForClauseStmt(true)
 		if p.at(token.Semicolon) {
 			p.advance()
@@ -352,7 +330,32 @@ func (p *Parser) parseFor() ast.Statement {
 		}
 	}
 
-	cond := p.parseExpression()
+	first := p.parseExpression()
+	if first != nil && p.at(token.Assign) {
+		init := p.parseAssign(first)
+		if p.at(token.Semicolon) {
+			p.advance()
+			cond := p.parseExpression()
+			p.expect(token.Semicolon, "expected ';' after for condition")
+			post := p.parseForClauseStmt(false)
+			body := p.parseBlock()
+			return &ast.ForStmt{
+				ForPos: forTok.Pos,
+				Init:   init,
+				Cond:   cond,
+				Post:   post,
+				Body:   body,
+			}
+		}
+		p.diag.Add(forTok.Pos, "for declarations and assignments require ';' clauses")
+		body := p.parseBlock()
+		return &ast.ForStmt{
+			ForPos: forTok.Pos,
+			Body:   body,
+		}
+	}
+
+	cond := first
 	if p.at(token.Semicolon) {
 		p.diag.Add(forTok.Pos, "for init clause must be a declaration or assignment")
 		for !p.at(token.LBrace) && !p.at(token.EOF) {
@@ -383,14 +386,14 @@ func (p *Parser) parseForClauseStmt(allowDecl bool) ast.Statement {
 			}
 			return p.parseShortDecl()
 		}
-		if p.isAssignmentStart() {
-			return p.parseAssign()
-		}
 		fallthrough
 	default:
 		expr := p.parseExpression()
 		if expr == nil {
 			return nil
+		}
+		if p.at(token.Assign) {
+			return p.parseAssign(expr)
 		}
 		return &ast.ExprStmt{Expr: expr}
 	}
@@ -538,7 +541,7 @@ func (p *Parser) parseMultiplicative() ast.Expression {
 }
 
 func (p *Parser) parseUnary() ast.Expression {
-	if p.at(token.Bang) || p.at(token.Minus) {
+	if p.at(token.Bang) || p.at(token.Minus) || p.at(token.Star) || p.at(token.Amp) {
 		op := p.current()
 		p.advance()
 		return &ast.UnaryExpr{
@@ -611,6 +614,9 @@ func (p *Parser) parsePrimary() ast.Expression {
 	case token.False:
 		p.advance()
 		return &ast.BoolLiteral{Value: false, LitPos: tok.Pos}
+	case token.Nil:
+		p.advance()
+		return &ast.NilLiteral{LitPos: tok.Pos}
 	case token.Error:
 		p.advance()
 		p.expect(token.Dot, "expected '.' after error")
@@ -741,31 +747,6 @@ func typeRefFromExpression(expr ast.Expression) (ast.TypeRef, bool) {
 	default:
 		return ast.TypeRef{}, false
 	}
-}
-
-func (p *Parser) isAssignmentStart() bool {
-	if p.current().Kind != token.Ident {
-		return false
-	}
-	depth := 0
-	for i := p.index + 1; i < len(p.tokens); i++ {
-		switch p.tokens[i].Kind {
-		case token.Assign:
-			return depth == 0
-		case token.LBracket:
-			depth++
-		case token.RBracket:
-			if depth > 0 {
-				depth--
-			}
-		case token.Dot, token.Ident:
-		default:
-			if depth == 0 {
-				return false
-			}
-		}
-	}
-	return false
 }
 
 func (p *Parser) looksLikeStructLiteral() bool {

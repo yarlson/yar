@@ -20,6 +20,7 @@
 - `void`
 - `noreturn`
 - `error`
+- typed pointer types
 - user-defined struct types
 - fixed array types
 - slice types
@@ -30,7 +31,7 @@
 - `:=` bindings with inferred type from the assigned expression
 - `var name Type`
 - `var name Type = expr`
-- Reassignment to an existing local, struct field, array index, or slice index
+- Reassignment to an existing local, struct field, array index, slice index, or dereferenced pointer
 - `if`, `else`, and `else if`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
@@ -46,6 +47,7 @@
 - Integer literals with coercion into `i32` or `i64`
 - String literals with `\n`, `\t`, `\\`, and `\"` escapes
 - Boolean literals
+- `nil`
 - `error.Name` literals in return position
 - Struct literals
 - Array literals
@@ -55,9 +57,11 @@
 - Field access
 - Indexing
 - Slicing with `s[i:j]`
+- Address-of with `&expr` on addressable values and composite literals
+- Dereference with `*expr`
 - Postfix error propagation with `expr?`
 - Local error handling with `expr or |err| { ... }`
-- Unary operators: `-`, `!`
+- Unary operators: `-`, `!`, `&`, `*`
 - Short-circuit boolean operators: `&&`, `||`
 - Binary arithmetic: `+`, `-`, `*`, `/`, `%`
 - Binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
@@ -72,20 +76,24 @@
 - Import cycles are rejected.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
 - Struct fields, array elements, and slice elements cannot use `void`, `noreturn`, or an unknown type.
-- Recursive struct containment is rejected.
+- Pointer targets cannot use `void`, `noreturn`, or an unknown type.
+- Direct recursive struct containment is rejected, but recursive shapes through `*T` remain valid.
 - `noreturn` functions cannot also be errorable and cannot contain `return`.
 - Plain `error` is a valid parameter or return type for non-`main` functions.
 - Non-`void` functions must return on every reachable path.
 - `if` and `for` conditions must be non-errorable `bool` expressions.
 - Arithmetic and relational operators require matching integer operands after literal coercion.
-- Equality and inequality are supported for integers and `bool`.
+- Equality and inequality are supported for integers, `bool`, same-typed pointers, and pointer-vs-`nil`.
 - `&&` and `||` require `bool` operands and evaluate the right operand only when needed.
 - Unary `-` requires an integer operand.
 - Unary `!` requires a `bool` operand.
+- Address-of requires an addressable operand or a composite literal.
+- Dereference requires a non-errorable pointer operand.
 - Field access requires a struct value and a known field.
 - Indexing requires an array or slice value and an integer index.
 - Slicing requires a slice value and integer bounds.
 - Slice fields do not count as recursive inline containment, so recursive shapes such as `[]Node` fields are allowed.
+- `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because there is no pointer type to infer.
 - Out-of-range slice indexing and slicing trap at runtime.
 - `len` requires an array or slice argument and returns `i32`.
 - `append` requires `append([]T, T)` and returns `[]T`.

@@ -124,6 +124,40 @@ fn main() i32 {
 	}
 }
 
+func TestGenerateLowersPointers(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+struct Node {
+	value i32
+	next *Node
+}
+
+fn main() i32 {
+	tail := &Node{value: 2, next: nil}
+	head := &Node{value: 1, next: tail}
+	if (*head).next == nil {
+		return 1
+	}
+	next := (*head).next
+	return (*next).value
+}
+`)
+
+	for _, want := range []string{
+		"%yar.struct.Node = type { i32, ptr }",
+		"call ptr @yar_alloc(i64",
+		"icmp eq ptr",
+		"load ptr, ptr",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, ir)
+		}
+	}
+}
+
 func TestEmitAllocHelpers(t *testing.T) {
 	t.Parallel()
 

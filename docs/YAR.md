@@ -55,6 +55,7 @@ Implemented types:
 - `void`
 - `noreturn`
 - `error`
+- typed pointer types such as `*Node` and `*[4]i32`
 - user-defined `struct` types
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
@@ -77,7 +78,9 @@ Current restrictions:
 - array elements cannot use `noreturn`
 - slice elements cannot use `void`
 - slice elements cannot use `noreturn`
-- recursive struct containment is rejected
+- pointer targets cannot use `void`
+- pointer targets cannot use `noreturn`
+- direct recursive struct containment is rejected, but recursive shapes through pointers are valid
 
 ## Declarations
 
@@ -116,6 +119,15 @@ Supported struct operations:
 - empty literals: `User{}`
 - field assignment: `user.name = "eve"`
 
+Recursive data is modeled through pointer indirection:
+
+```yar
+struct Node {
+    value i32
+    next *Node
+}
+```
+
 There are no:
 
 - methods
@@ -153,6 +165,7 @@ Supported array operations:
 - array literals
 - indexing
 - index assignment
+- taking addresses of addressable elements with `&array[i]`
 - `len(array)`
 
 ## Slices
@@ -174,6 +187,7 @@ Supported slice operations:
 - indexing
 - index assignment
 - slicing with `s[i:j]`
+- taking addresses of addressable elements with `&slice[i]`
 - `len(slice)`
 - `append(slice, value)` returning an updated slice
 
@@ -212,6 +226,38 @@ fn main() i32 {
 }
 ```
 
+## Pointers
+
+Pointers are explicit and typed:
+
+```yar
+struct Node {
+    value i32
+    next *Node
+}
+
+fn set_value(node *Node, value i32) void {
+    (*node).value = value
+}
+```
+
+Supported pointer operations:
+
+- pointer types: `*T`
+- address-of on addressable values: `&x`, `&items[0]`, `&(*node).next`
+- address-of on composite literals: `&Node{value: 1, next: nil}`
+- `nil`
+- dereference: `*ptr`
+- dereference assignment: `*ptr = value`
+- pointer equality and inequality against `nil` or the same pointer type
+
+Current pointer restrictions:
+
+- there is no implicit dereference; use `(*ptr).field`, not `ptr.field`
+- `nil` is only valid in pointer-typed contexts, so `p := nil` is rejected
+- pointers do not support arithmetic, casts, or raw address exposure
+- `*void` and `*noreturn` are rejected
+
 ## Statements
 
 Implemented statements:
@@ -219,7 +265,7 @@ Implemented statements:
 - block statements: `{ ... }`
 - short local declarations: `x := expr`
 - typed local declarations: `var name Type` and `var name Type = expr`
-- assignment to locals, struct fields, array indices, and slice indices
+- assignment to locals, struct fields, array indices, slice indices, and dereferenced pointers
 - `if`
 - `if` / `else`
 - `else if`
@@ -239,6 +285,7 @@ Implemented expressions:
 - integer literals
 - string literals
 - boolean literals
+- `nil`
 - struct literals
 - array literals
 - slice literals
@@ -249,6 +296,8 @@ Implemented expressions:
 - slicing
 - unary `-`
 - unary `!`
+- unary `&`
+- unary `*`
 - short-circuit boolean operators: `&&`, `||`
 - binary arithmetic: `+`, `-`, `*`, `/`, `%`
 - binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`

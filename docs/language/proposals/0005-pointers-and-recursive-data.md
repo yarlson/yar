@@ -1,6 +1,6 @@
 # Proposal: Pointers and Recursive Data
 
-Status: proposed
+Status: accepted and implemented
 
 ## 1. Summary
 
@@ -206,4 +206,4 @@ imports, enums, and slices still do not let YAR model its own AST cleanly.
 - runtime allocation support
 - diagnostics
 - tests
-- `current-state.md` update
+- documentation updates

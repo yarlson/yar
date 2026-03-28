@@ -418,6 +418,10 @@ func (l *packageLowerer) validateExportedDeclarations() {
 }
 
 func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref ast.TypeRef, ownerKind, ownerName string) {
+	if pointer, ok := checker.ParsePointerType(checker.Type(ref.Name)); ok {
+		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos}, ownerKind, ownerName)
+		return
+	}
 	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
 		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos}, ownerKind, ownerName)
 		return
@@ -498,6 +502,10 @@ func canonicalDeclName(pkg *ast.Package, name string) string {
 }
 
 func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef) ast.TypeRef {
+	if pointer, ok := checker.ParsePointerType(checker.Type(ref.Name)); ok {
+		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos})
+		return ast.TypeRef{Name: string(checker.MakePointerType(checker.Type(inner.Name))), Pos: ref.Pos}
+	}
 	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
 		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos})
 		return ast.TypeRef{Name: string(checker.MakeArrayType(array.Len, checker.Type(inner.Name))), Pos: ref.Pos}
@@ -593,6 +601,8 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 		return &ast.StringLiteral{Value: e.Value, LitPos: e.LitPos}
 	case *ast.BoolLiteral:
 		return &ast.BoolLiteral{Value: e.Value, LitPos: e.LitPos}
+	case *ast.NilLiteral:
+		return &ast.NilLiteral{LitPos: e.LitPos}
 	case *ast.ErrorLiteral:
 		return &ast.ErrorLiteral{Name: e.Name, ErrPos: e.ErrPos}
 	case *ast.GroupExpr:

@@ -125,6 +125,114 @@ fn main() i32 {
 	}
 }
 
+func TestParsePointerForms(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+struct Node {
+	value i32
+	next *Node
+}
+
+fn set_value(node *Node, value i32) void {
+	(*node).value = value
+}
+
+fn main() i32 {
+	tail := &Node{value: 2, next: nil}
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := program.Structs[0].Fields[1].Type.Name, "*Node"; got != want {
+		t.Fatalf("unexpected pointer field type: got %q want %q", got, want)
+	}
+	if got, want := program.Functions[0].Params[0].Type.Name, "*Node"; got != want {
+		t.Fatalf("unexpected pointer param type: got %q want %q", got, want)
+	}
+
+	assign, ok := program.Functions[0].Body.Stmts[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("expected assignment statement, got %T", program.Functions[0].Body.Stmts[0])
+	}
+	target, ok := assign.Target.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("expected selector assignment target, got %T", assign.Target)
+	}
+	group, ok := target.Inner.(*ast.GroupExpr)
+	if !ok {
+		t.Fatalf("expected grouped dereference base, got %T", target.Inner)
+	}
+	deref, ok := group.Inner.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("expected unary dereference, got %T", group.Inner)
+	}
+	if deref.Operator != token.Star {
+		t.Fatalf("expected dereference operator, got %s", deref.Operator)
+	}
+
+	stmt, ok := program.Functions[1].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[1].Body.Stmts[0])
+	}
+	addr, ok := stmt.Value.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("expected unary address-of expression, got %T", stmt.Value)
+	}
+	if addr.Operator != token.Amp {
+		t.Fatalf("expected address-of operator, got %s", addr.Operator)
+	}
+	lit, ok := addr.Inner.(*ast.StructLiteralExpr)
+	if !ok {
+		t.Fatalf("expected struct literal under address-of, got %T", addr.Inner)
+	}
+	nilValue, ok := lit.Fields[1].Value.(*ast.NilLiteral)
+	if !ok {
+		t.Fatalf("expected nil literal field value, got %T", lit.Fields[1].Value)
+	}
+	if nilValue == nil {
+		t.Fatal("expected nil literal")
+	}
+}
+
+func TestParseForClausePointerAssignment(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+struct Node {
+	value i32
+}
+
+fn main() i32 {
+	node := &Node{value: 0}
+	for (*node).value = 0; (*node).value < 1; (*node).value = (*node).value + 1 {
+	}
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	loop, ok := program.Functions[0].Body.Stmts[1].(*ast.ForStmt)
+	if !ok {
+		t.Fatalf("expected for statement, got %T", program.Functions[0].Body.Stmts[1])
+	}
+	if _, ok := loop.Init.(*ast.AssignStmt); !ok {
+		t.Fatalf("expected pointer assignment init clause, got %T", loop.Init)
+	}
+	if _, ok := loop.Post.(*ast.AssignStmt); !ok {
+		t.Fatalf("expected pointer assignment post clause, got %T", loop.Post)
+	}
+}
+
 func TestParseBoolOperatorPrecedence(t *testing.T) {
 	t.Parallel()
 

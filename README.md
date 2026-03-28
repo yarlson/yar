@@ -57,7 +57,7 @@ After that, use:
 ### Type-check a program
 
 ```bash
-go run ./cmd/yar check testdata/hello.yar
+go run ./cmd/yar check testdata/hello/main.yar
 ```
 
 If the program is valid, this prints nothing and exits with code `0`.
@@ -65,7 +65,7 @@ If the program is valid, this prints nothing and exits with code `0`.
 ### Emit LLVM IR
 
 ```bash
-go run ./cmd/yar emit-ir testdata/hello.yar > hello.ll
+go run ./cmd/yar emit-ir testdata/hello/main.yar > hello.ll
 ```
 
 This writes textual LLVM IR to `hello.ll`.
@@ -73,7 +73,7 @@ This writes textual LLVM IR to `hello.ll`.
 ### Build an executable
 
 ```bash
-go run ./cmd/yar build testdata/hello.yar -o hello
+go run ./cmd/yar build testdata/hello/main.yar -o hello
 ```
 
 This does all of the following:
@@ -87,13 +87,13 @@ This does all of the following:
 The flag order also works like this:
 
 ```bash
-go run ./cmd/yar build -o hello testdata/hello.yar
+go run ./cmd/yar build -o hello testdata/hello/main.yar
 ```
 
 ### Run a program directly
 
 ```bash
-go run ./cmd/yar run testdata/hello.yar
+go run ./cmd/yar run testdata/hello/main.yar
 ```
 
 This builds to a temporary executable and runs it immediately.
@@ -101,7 +101,7 @@ This builds to a temporary executable and runs it immediately.
 ### Run a v0.2 program
 
 ```bash
-go run ./cmd/yar run testdata/structs_and_loops.yar
+go run ./cmd/yar run testdata/structs_and_loops/main.yar
 ```
 
 This exercises structs, fixed arrays, `for`, `else`, `break`, `continue`,
@@ -130,7 +130,7 @@ fn main() !i32 {
 Build and run it:
 
 ```bash
-go run ./cmd/yar run testdata/divide.yar
+go run ./cmd/yar run testdata/divide/main.yar
 ```
 
 ## Manual Compile + Link Flow
@@ -140,7 +140,7 @@ If you want to see the real artifact boundary, `yar` can be used in two explicit
 ### 1. Emit LLVM IR
 
 ```bash
-go run ./cmd/yar emit-ir testdata/hello.yar > hello.ll
+go run ./cmd/yar emit-ir testdata/hello/main.yar > hello.ll
 ```
 
 ### 2. Link the IR with the runtime using `clang`
@@ -230,13 +230,13 @@ Those functions are implemented in the runtime C source.
 - [internal/checker/checker.go](internal/checker/checker.go): semantic analysis and type checking
 - [internal/codegen/llvm.go](internal/codegen/llvm.go): LLVM IR generation
 - [internal/runtime/runtime_source.txt](internal/runtime/runtime_source.txt): tiny runtime source used during linking
-- [testdata/hello.yar](testdata/hello.yar): hello world example
-- [testdata/add.yar](testdata/add.yar): arithmetic example
-- [testdata/divide.yar](testdata/divide.yar): error propagation example
-- [testdata/i64.yar](testdata/i64.yar): `i64` type-check and codegen example
-- [testdata/unhandled_error.yar](testdata/unhandled_error.yar): unhandled error wrapper example
-- [testdata/panic.yar](testdata/panic.yar): panic runtime example
-- [testdata/structs_and_loops.yar](testdata/structs_and_loops.yar): v0.2 structs, arrays, and control-flow example
+- [testdata/hello/main.yar](testdata/hello/main.yar): hello world example
+- [testdata/add/main.yar](testdata/add/main.yar): arithmetic example
+- [testdata/divide/main.yar](testdata/divide/main.yar): error propagation example
+- [testdata/i64/main.yar](testdata/i64/main.yar): `i64` type-check and codegen example
+- [testdata/unhandled_error/main.yar](testdata/unhandled_error/main.yar): unhandled error wrapper example
+- [testdata/panic/main.yar](testdata/panic/main.yar): panic runtime example
+- [testdata/structs_and_loops/main.yar](testdata/structs_and_loops/main.yar): v0.2 structs, arrays, and control-flow example
 
 ## Verify The Repository
 

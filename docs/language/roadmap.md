@@ -26,6 +26,7 @@ Current baseline already includes:
 - primitive types plus `error`
 - fixed-size arrays
 - slices
+- typed pointers and recursive data
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
@@ -87,8 +88,8 @@ The minimal runtime-managed memory model is now an accepted design foundation.
 
 - future heap-backed features should reuse the shared allocation boundary
 - allocation failure is outside the ordinary `error` model
-- this is groundwork, not a claim that pointers, maps, or string concatenation
-  are already shipped
+- this is already used by slices and pointers, and remains groundwork for maps,
+  richer string operations, and later heap-backed features
 
 ---
 

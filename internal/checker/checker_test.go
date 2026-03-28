@@ -317,6 +317,44 @@ fn main() i32 {
 	}
 }
 
+func TestCheckPointersValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct Node {
+	value i32
+	next *Node
+}
+
+fn set_value(node *Node, value i32) void {
+	(*node).value = value
+}
+
+fn main() i32 {
+	tail := &Node{value: 2, next: nil}
+	head := &Node{value: 1, next: tail}
+	set_value(head, 3)
+	if (*head).next != nil {
+		next := (*head).next
+		return (*next).value + (*head).value
+	}
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckV02FeaturesInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -460,6 +498,69 @@ fn main() !i32 {
 }
 `,
 			substr: "binary operators cannot use errorable operands",
+		},
+		{
+			name: "direct recursive pointerless struct rejected",
+			src: `
+package main
+
+struct Bad {
+	next Bad
+}
+
+fn main() i32 {
+	return 0
+}
+`,
+			substr: "struct \"Bad\" cannot contain itself recursively",
+		},
+		{
+			name: "void pointer rejected",
+			src: `
+package main
+
+fn main() i32 {
+	var p *void
+	return 0
+}
+`,
+			substr: "pointer target type \"void\" is not allowed",
+		},
+		{
+			name: "dereference requires pointer",
+			src: `
+package main
+
+fn main() i32 {
+	x := *1
+	return x
+}
+`,
+			substr: "dereference requires a pointer operand",
+		},
+		{
+			name: "address of temporary rejected",
+			src: `
+package main
+
+fn main() i32 {
+	x := &(1 + 2)
+	return 0
+}
+`,
+			substr: "address-of requires an addressable operand or composite literal",
+		},
+		{
+			name: "nil requires pointer context",
+			src: `
+package main
+
+fn main() i32 {
+	p := nil
+	return 0
+}
+`,
+			substr: "cannot infer type from nil without a pointer context",
 		},
 	}
 

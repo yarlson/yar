@@ -22,6 +22,7 @@ const (
 	TypeI64        Type = "i64"
 	TypeStr        Type = "str"
 	TypeError      Type = "error"
+	TypeNil        Type = "nil"
 	TypeUntypedInt Type = "untyped-int"
 )
 
@@ -102,12 +103,20 @@ type SliceType struct {
 	Elem Type
 }
 
+type PointerType struct {
+	Elem Type
+}
+
 func MakeArrayType(length int, elem Type) Type {
 	return Type(fmt.Sprintf("[%d]%s", length, elem))
 }
 
 func MakeSliceType(elem Type) Type {
 	return Type("[]" + string(elem))
+}
+
+func MakePointerType(elem Type) Type {
+	return Type("*" + string(elem))
 }
 
 func ParseArrayType(typ Type) (ArrayType, bool) {
@@ -140,6 +149,18 @@ func ParseSliceType(typ Type) (SliceType, bool) {
 		return SliceType{}, false
 	}
 	return SliceType{Elem: elem}, true
+}
+
+func ParsePointerType(typ Type) (PointerType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "*") {
+		return PointerType{}, false
+	}
+	elem := Type(text[1:])
+	if elem == TypeInvalid {
+		return PointerType{}, false
+	}
+	return PointerType{Elem: elem}, true
 }
 
 func IsBuiltinFunction(name string) bool {
@@ -334,6 +355,9 @@ func (c *Checker) structDependencies(typ Type) []string {
 	if _, ok := ParseSliceType(typ); ok {
 		return nil
 	}
+	if _, ok := ParsePointerType(typ); ok {
+		return nil
+	}
 	if _, ok := c.info.Structs[string(typ)]; ok {
 		return []string{string(typ)}
 	}
@@ -403,6 +427,10 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		if value.Base == TypeInvalid {
 			return
 		}
+		if value.Base == TypeNil {
+			c.diag.Add(s.Value.Pos(), "cannot infer type from nil without a pointer context")
+			return
+		}
 		if value.Base == TypeUntypedInt {
 			defaultType := c.defaultUntypedIntegerType(s.Value)
 			if defaultType == TypeInvalid {
@@ -433,7 +461,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			if value.Base == TypeInvalid {
 				return
 			}
-			value = c.coerceUntypedInteger(s.Value, value, declaredType)
+			value = c.coerceValue(s.Value, value, declaredType)
 			if value.Base != declaredType {
 				c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, declaredType)
 				return
@@ -451,7 +479,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		if value.Base == TypeInvalid {
 			return
 		}
-		value = c.coerceUntypedInteger(s.Value, value, targetType)
+		value = c.coerceValue(s.Value, value, targetType)
 		if value.Base != targetType {
 			c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, targetType)
 		}
@@ -524,61 +552,12 @@ func (c *Checker) checkCondition(expr ast.Expression, typeMessage, errorMessage 
 }
 
 func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
-	switch t := target.(type) {
-	case *ast.IdentExpr:
-		typ, ok := c.lookupLocal(t.Name)
-		if !ok {
-			c.diag.Add(t.NamePos, "unknown local %q", t.Name)
-			return TypeInvalid
-		}
+	typ, ok := c.checkAddressableExpr(target, false)
+	if ok {
 		return typ
-	case *ast.SelectorExpr:
-		base := c.checkAssignmentTarget(t.Inner)
-		if base == TypeInvalid {
-			return TypeInvalid
-		}
-		info, ok := c.info.Structs[string(base)]
-		if !ok {
-			c.diag.Add(t.DotPos, "field access requires a struct value")
-			return TypeInvalid
-		}
-		field, _, ok := info.Field(t.Name)
-		if !ok {
-			c.diag.Add(t.NamePos, "struct %q has no field %q", info.Name, t.Name)
-			return TypeInvalid
-		}
-		return field.Type
-	case *ast.IndexExpr:
-		base := c.checkAssignmentTarget(t.Inner)
-		if base == TypeInvalid {
-			return TypeInvalid
-		}
-		elemType, ok := sequenceElementType(base)
-		if !ok {
-			c.diag.Add(t.LBracketPos, "indexing requires an array or slice value")
-			return TypeInvalid
-		}
-		indexType := c.checkExpression(t.Index)
-		if indexType.Errorable {
-			c.diag.Add(t.Index.Pos(), "index expression cannot be errorable")
-			return TypeInvalid
-		}
-		if !isIntegerType(indexType.Base) {
-			c.diag.Add(t.Index.Pos(), "index expression must be an integer")
-			return TypeInvalid
-		}
-		if indexType.Base == TypeUntypedInt {
-			indexType = c.coerceUntypedInteger(t.Index, indexType, TypeI32)
-			if indexType.Base == TypeUntypedInt {
-				c.diag.Add(t.Index.Pos(), "index expression must fit in i32")
-				return TypeInvalid
-			}
-		}
-		return elemType
-	default:
-		c.diag.Add(target.Pos(), "invalid assignment target")
-		return TypeInvalid
 	}
+	c.diag.Add(target.Pos(), "invalid assignment target")
+	return TypeInvalid
 }
 
 func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
@@ -620,7 +599,7 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 		c.diag.Add(stmt.Value.Pos(), "return requires a value")
 		return
 	}
-	value = c.coerceUntypedInteger(stmt.Value, value, sig.Return)
+	value = c.coerceValue(stmt.Value, value, sig.Return)
 	if value.Base != sig.Return {
 		c.diag.Add(stmt.Value.Pos(), "cannot return %s from function returning %s", value.Base, sig.Return)
 	}
@@ -650,6 +629,10 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		return et
 	case *ast.BoolLiteral:
 		et := ExprType{Base: TypeBool}
+		c.info.ExprTypes[expr] = et
+		return et
+	case *ast.NilLiteral:
+		et := ExprType{Base: TypeNil}
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.ErrorLiteral:
@@ -688,14 +671,36 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 }
 
 func (c *Checker) checkUnary(expr ast.Expression, unary *ast.UnaryExpr) ExprType {
-	inner := c.checkExpression(unary.Inner)
-	if inner.Errorable {
-		c.diag.Add(unary.OpPos, "unary operators cannot use errorable operands")
-		return ExprType{Base: TypeInvalid}
-	}
-
 	switch unary.Operator {
+	case token.Amp:
+		typ, ok := c.checkAddressableExpr(unary.Inner, true)
+		if !ok {
+			c.diag.Add(unary.OpPos, "address-of requires an addressable operand or composite literal")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: MakePointerType(typ)}
+		c.info.ExprTypes[expr] = et
+		return et
+	case token.Star:
+		inner := c.checkExpression(unary.Inner)
+		if inner.Errorable {
+			c.diag.Add(unary.OpPos, "dereference cannot use an errorable operand")
+			return ExprType{Base: TypeInvalid}
+		}
+		pointer, ok := ParsePointerType(inner.Base)
+		if !ok {
+			c.diag.Add(unary.OpPos, "dereference requires a pointer operand")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: pointer.Elem}
+		c.info.ExprTypes[expr] = et
+		return et
 	case token.Minus:
+		inner := c.checkExpression(unary.Inner)
+		if inner.Errorable {
+			c.diag.Add(unary.OpPos, "unary operators cannot use errorable operands")
+			return ExprType{Base: TypeInvalid}
+		}
 		if !isIntegerType(inner.Base) {
 			c.diag.Add(unary.OpPos, "unary - requires an integer operand")
 			return ExprType{Base: TypeInvalid}
@@ -703,6 +708,11 @@ func (c *Checker) checkUnary(expr ast.Expression, unary *ast.UnaryExpr) ExprType
 		c.info.ExprTypes[expr] = inner
 		return inner
 	case token.Bang:
+		inner := c.checkExpression(unary.Inner)
+		if inner.Errorable {
+			c.diag.Add(unary.OpPos, "unary operators cannot use errorable operands")
+			return ExprType{Base: TypeInvalid}
+		}
 		if inner.Base != TypeBool {
 			c.diag.Add(unary.OpPos, "unary ! requires a bool operand")
 			return ExprType{Base: TypeInvalid}
@@ -823,7 +833,7 @@ func (c *Checker) checkStructLiteral(expr ast.Expression, lit *ast.StructLiteral
 		if value.Base == TypeInvalid {
 			continue
 		}
-		value = c.coerceUntypedInteger(field.Value, value, fieldInfo.Type)
+		value = c.coerceValue(field.Value, value, fieldInfo.Type)
 		if value.Base != fieldInfo.Type {
 			c.diag.Add(field.Value.Pos(), "cannot assign %s to %s", value.Base, fieldInfo.Type)
 		}
@@ -850,7 +860,7 @@ func (c *Checker) checkArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralEx
 		if value.Base == TypeInvalid {
 			continue
 		}
-		value = c.coerceUntypedInteger(element, value, array.Elem)
+		value = c.coerceValue(element, value, array.Elem)
 		if value.Base != array.Elem {
 			c.diag.Add(element.Pos(), "cannot assign %s to %s", value.Base, array.Elem)
 		}
@@ -874,7 +884,7 @@ func (c *Checker) checkSliceLiteral(expr ast.Expression, lit *ast.SliceLiteralEx
 		if value.Base == TypeInvalid {
 			continue
 		}
-		value = c.coerceUntypedInteger(element, value, sliceType.Elem)
+		value = c.coerceValue(element, value, sliceType.Elem)
 		if value.Base != sliceType.Elem {
 			c.diag.Add(element.Pos(), "cannot assign %s to %s", value.Base, sliceType.Elem)
 		}
@@ -930,7 +940,7 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q requires a value", name)
 			return ExprType{Base: TypeInvalid}
 		}
-		valueArg = c.coerceUntypedInteger(call.Args[1], valueArg, sliceType.Elem)
+		valueArg = c.coerceValue(call.Args[1], valueArg, sliceType.Elem)
 		if valueArg.Base != sliceType.Elem {
 			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q must be %s, got %s", name, sliceType.Elem, valueArg.Base)
 			return ExprType{Base: TypeInvalid}
@@ -967,7 +977,7 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		if i >= len(sig.Params) {
 			continue
 		}
-		argType = c.coerceUntypedInteger(arg, argType, sig.Params[i])
+		argType = c.coerceValue(arg, argType, sig.Params[i])
 		if argType.Base != sig.Params[i] {
 			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, name, sig.Params[i], argType.Base)
 		}
@@ -1032,12 +1042,27 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			c.info.ExprTypes[expr] = et
 			return et
 		}
+		if left.Base == TypeNil && isPointerType(right.Base) {
+			left = c.coerceValue(binary.Left, left, right.Base)
+		}
+		if right.Base == TypeNil && isPointerType(left.Base) {
+			right = c.coerceValue(binary.Right, right, left.Base)
+		}
+		if isPointerType(left.Base) || isPointerType(right.Base) {
+			if left.Base != right.Base || !isPointerType(left.Base) {
+				c.diag.Add(binary.OpPos, "comparison operands must have the same type")
+				return ExprType{Base: TypeInvalid}
+			}
+			et := ExprType{Base: TypeBool}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
 		if left.Base != right.Base {
 			c.diag.Add(binary.OpPos, "comparison operands must have the same type")
 			return ExprType{Base: TypeInvalid}
 		}
 		if left.Base != TypeBool {
-			c.diag.Add(binary.OpPos, "comparison is only supported for bool and integers in v0.2")
+			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, and pointers in v0.2")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeBool}
@@ -1053,6 +1078,15 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch Type(ref.Name) {
 	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr, TypeError:
 		return Type(ref.Name)
+	}
+
+	if pointer, ok := ParsePointerType(Type(ref.Name)); ok {
+		elemType := c.resolveTypeRef(ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos})
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "pointer target type %q is not allowed", pointer.Elem)
+			return TypeInvalid
+		}
+		return MakePointerType(elemType)
 	}
 
 	if text, ok := parseSliceTypeName(ref.Name); ok {
@@ -1230,6 +1264,11 @@ func formatErrorName(name string) string {
 	return fmt.Sprintf("error.%s", name)
 }
 
+func isPointerType(typ Type) bool {
+	_, ok := ParsePointerType(typ)
+	return ok
+}
+
 func sequenceElementType(typ Type) (Type, bool) {
 	if array, ok := ParseArrayType(typ); ok {
 		return array.Elem, true
@@ -1247,6 +1286,102 @@ func isSequenceType(typ Type) bool {
 
 func isIntegerType(typ Type) bool {
 	return typ == TypeI32 || typ == TypeI64 || typ == TypeUntypedInt
+}
+
+func (c *Checker) checkAddressableExpr(expr ast.Expression, allowCompositeLiteral bool) (Type, bool) {
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		typ, ok := c.lookupLocal(e.Name)
+		if !ok {
+			c.diag.Add(e.NamePos, "unknown local %q", e.Name)
+			return TypeInvalid, false
+		}
+		return typ, true
+	case *ast.GroupExpr:
+		typ, ok := c.checkAddressableExpr(e.Inner, allowCompositeLiteral)
+		if ok {
+			c.info.ExprTypes[expr] = ExprType{Base: typ}
+		}
+		return typ, ok
+	case *ast.SelectorExpr:
+		base, ok := c.checkAddressableExpr(e.Inner, false)
+		if !ok {
+			return TypeInvalid, false
+		}
+		info, ok := c.info.Structs[string(base)]
+		if !ok {
+			c.diag.Add(e.DotPos, "field access requires a struct value")
+			return TypeInvalid, false
+		}
+		field, _, ok := info.Field(e.Name)
+		if !ok {
+			c.diag.Add(e.NamePos, "struct %q has no field %q", info.Name, e.Name)
+			return TypeInvalid, false
+		}
+		return field.Type, true
+	case *ast.IndexExpr:
+		base, ok := c.checkAddressableExpr(e.Inner, false)
+		if !ok {
+			return TypeInvalid, false
+		}
+		elemType, ok := sequenceElementType(base)
+		if !ok {
+			c.diag.Add(e.LBracketPos, "indexing requires an array or slice value")
+			return TypeInvalid, false
+		}
+		indexType := c.checkExpression(e.Index)
+		if indexType.Errorable {
+			c.diag.Add(e.Index.Pos(), "index expression cannot be errorable")
+			return TypeInvalid, false
+		}
+		if !isIntegerType(indexType.Base) {
+			c.diag.Add(e.Index.Pos(), "index expression must be an integer")
+			return TypeInvalid, false
+		}
+		if indexType.Base == TypeUntypedInt {
+			indexType = c.coerceUntypedInteger(e.Index, indexType, TypeI32)
+			if indexType.Base == TypeUntypedInt {
+				c.diag.Add(e.Index.Pos(), "index expression must fit in i32")
+				return TypeInvalid, false
+			}
+		}
+		return elemType, true
+	case *ast.UnaryExpr:
+		if e.Operator != token.Star {
+			return TypeInvalid, false
+		}
+		inner := c.checkExpression(e.Inner)
+		if inner.Errorable {
+			c.diag.Add(e.OpPos, "dereference cannot use an errorable operand")
+			return TypeInvalid, false
+		}
+		pointer, ok := ParsePointerType(inner.Base)
+		if !ok {
+			c.diag.Add(e.OpPos, "dereference requires a pointer operand")
+			return TypeInvalid, false
+		}
+		return pointer.Elem, true
+	case *ast.StructLiteralExpr:
+		if !allowCompositeLiteral {
+			return TypeInvalid, false
+		}
+		typ := c.checkStructLiteral(expr, e)
+		return typ.Base, typ.Base != TypeInvalid
+	case *ast.ArrayLiteralExpr:
+		if !allowCompositeLiteral {
+			return TypeInvalid, false
+		}
+		typ := c.checkArrayLiteral(expr, e)
+		return typ.Base, typ.Base != TypeInvalid
+	case *ast.SliceLiteralExpr:
+		if !allowCompositeLiteral {
+			return TypeInvalid, false
+		}
+		typ := c.checkSliceLiteral(expr, e)
+		return typ.Base, typ.Base != TypeInvalid
+	default:
+		return TypeInvalid, false
+	}
 }
 
 func (c *Checker) checkSliceBound(expr ast.Expression) bool {
@@ -1293,6 +1428,18 @@ func (c *Checker) coerceUntypedInteger(expr ast.Expression, exprType ExprType, t
 	}
 	c.setExprType(expr, ExprType{Base: target})
 	return ExprType{Base: target}
+}
+
+func (c *Checker) coerceValue(expr ast.Expression, exprType ExprType, target Type) ExprType {
+	if exprType.Base == TypeNil {
+		if !isPointerType(target) {
+			return exprType
+		}
+		coerced := ExprType{Base: target}
+		c.setExprType(expr, coerced)
+		return coerced
+	}
+	return c.coerceUntypedInteger(expr, exprType, target)
 }
 
 func (c *Checker) coerceBinaryIntegers(leftExpr ast.Expression, left ExprType, rightExpr ast.Expression, right ExprType) (coercedIntegers, bool) {
