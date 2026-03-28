@@ -10,9 +10,13 @@ embedded runtime to produce or run a native executable.
 ## Architecture
 
 - `cmd/yar` exposes the `check`, `emit-ir`, `build`, and `run` commands.
+- `internal/token` defines the token type set and source positions shared across stages.
+- `internal/diag` defines the diagnostic type and accumulator for source-positioned problems.
+- `internal/ast` defines all AST node types and the `Package`/`PackageGraph` structures for multi-package compilation.
 - `internal/compiler` orchestrates package loading, import graph validation, AST lowering for multi-package builds, semantic checking, IR generation, external linking, and process execution.
-- `internal/parser` and `internal/lexer` turn source text into file ASTs and diagnostics.
-- `internal/checker` owns semantic validation, local scope tracking, user-defined struct metadata, type inference for integer literals, builtin signatures, and error-code assignment on the lowered package graph.
+- `internal/lexer` tokenizes source text into the token stream and lexical diagnostics.
+- `internal/parser` builds file ASTs from the token stream and appends parser diagnostics.
+- `internal/checker` owns semantic validation, local scope tracking, user-defined struct and enum metadata, type inference for integer literals, builtin signatures, and error-code assignment on the lowered package graph.
 - `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, aggregate values, loops, package-qualified symbols, the generated native `main` wrapper, and declarations for the shared runtime allocation helpers.
 - `internal/runtime` embeds the small C runtime source that provides builtin I/O, panic behavior, and the shared allocation/trap boundary during linking.
 
@@ -50,4 +54,4 @@ embedded runtime to produce or run a native executable.
 - Textual LLVM IR generation
 - External `clang` invocation for compile and link
 - Embedded C runtime source for builtin functions and shared allocation helpers
-- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, slice behavior, pointer behavior, and the v0.2 control-flow and aggregate surface
+- Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, slice behavior, pointer behavior, enum and exhaustive `match`, multi-package imports, and the v0.2 control-flow and aggregate surface

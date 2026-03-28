@@ -32,4 +32,4 @@
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

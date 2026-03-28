@@ -80,9 +80,11 @@ Current restrictions:
 - array elements cannot use `noreturn`
 - slice elements cannot use `void`
 - slice elements cannot use `noreturn`
+- enum payload fields cannot use `void`
+- enum payload fields cannot use `noreturn`
 - pointer targets cannot use `void`
 - pointer targets cannot use `noreturn`
-- direct recursive struct containment is rejected, but recursive shapes through pointers are valid
+- direct recursive struct or enum containment is rejected, but recursive shapes through pointers are valid
 
 ## Declarations
 
@@ -148,8 +150,8 @@ pub fn lookup() User {
 }
 ```
 
-Exported declarations cannot expose package-local struct types through public
-fields, parameters, or return types.
+Exported declarations cannot expose package-local types (struct or enum) through
+public fields, parameters, or return types.
 
 ## Enums
 
@@ -524,8 +526,8 @@ Out-of-range slice indexing and invalid slice ranges trap with a runtime failure
 The compiler does not currently implement:
 
 - methods
-- enums
 - import aliases
-- pattern matching
+- generics
+- closures or lambdas
 - exceptions
 - automatic recovery

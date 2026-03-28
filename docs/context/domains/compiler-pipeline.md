@@ -3,6 +3,9 @@
 ## Responsibility Split
 
 - `cmd/yar` is thin CLI wiring. It parses command names and basic arguments, compiles an entry file or package directory, formats diagnostics, and sets a timeout for `build` and `run`.
+- `internal/token` defines the token type set, token values, and source positions used by the lexer, parser, and downstream stages.
+- `internal/diag` defines the diagnostic type and accumulator used to collect source-positioned parse and semantic problems.
+- `internal/ast` defines all AST node types (declarations, statements, expressions), the `Program` file-level container, and the `Package`/`PackageGraph` types used by multi-package compilation.
 - `internal/compiler` is the orchestration boundary. It exposes:
   - `Compile(src)` for in-memory single-file parse, semantic check, and IR generation used by focused tests
   - `CompilePath(path)` for package loading, lowering, semantic check, and IR generation from disk

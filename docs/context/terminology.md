@@ -28,6 +28,12 @@ handler sugar — `or |err| { ... }`, which checks an error-producing expression
 
 direct propagation — Returning an errorable call expression unchanged from a function with the same errorable result type.
 
-builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, or `len`.
+builtin — A compiler-owned operation with checker-defined behavior: `print`, `print_int`, `panic`, `len`, or `append`.
+
+enum — A user-defined closed variant type with named cases, each case optionally carrying a payload of named fields.
+
+match — An exhaustive statement that branches on the case of an enum value, binding payload fields when present.
+
+package graph — The directed acyclic graph of packages rooted at the entry `package main`, resolved by `internal/compiler` before lowering into a single checked program.
 
 unhandled error — An errorable `main` result that reaches the generated native wrapper, which prints an error message and exits with code `1`.

@@ -8,7 +8,7 @@
 - Packages may span multiple `.yar` files in one directory.
 - Imports are explicit `import "path"` declarations after the package clause.
 - Imported names stay package-qualified; imports do not inject unqualified exported names into local scope.
-- Top-level declarations may be `struct` or `fn`, optionally prefixed with `pub`.
+- Top-level declarations may be `struct`, `enum`, or `fn`, optionally prefixed with `pub`.
 - Cross-package references may use only exported top-level declarations.
 - Exported declarations may not expose package-local struct types in their public surface.
 - Import cycles are rejected.

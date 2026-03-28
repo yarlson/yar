@@ -6,17 +6,20 @@
 - an LLVM IR backend
 - a tiny C runtime for builtins
 
-Current scope is intentionally small: single-file `package main` programs, top-level functions, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`/`error`, `:=` declarations, assignment, `if`, `return`, function calls, explicit `!T` errorable returns, plain `error` values, `?` propagation sugar, `or |err| { ... }` local error handling, and `error.Name`.
+Current scope includes multi-package programs with `import` and `pub` exports, top-level `struct`, `enum`, and `fn` declarations, `i32`/`i64`/`bool`/`str`/`void`/`noreturn`/`error`, typed pointers, fixed arrays, slices, `:=` and `var` declarations, assignment, `if`/`else`, `for` loops with `break`/`continue`, exhaustive `match` over enums, function calls, explicit `!T` errorable returns, plain `error` values, `?` propagation sugar, `or |err| { ... }` local error handling, short-circuit `&&`/`||`, and `error.Name`.
 
 ## Status
 
 This is v0 work. The compiler can already:
 
-- parse and type-check a small language slice
+- parse and type-check multi-package programs
 - emit LLVM IR text
 - link an executable with `clang`
 - run the produced binary
 - lower `?` and `or |err| { ... }` into explicit error checks and control flow
+- compile structs, enums with payload cases, fixed arrays, slices, and typed pointers
+- lower exhaustive `match` over enums into tagged-union dispatch
+- resolve multi-package imports with `pub` export validation
 
 ## Requirements
 
@@ -98,7 +101,15 @@ go run ./cmd/yar run testdata/hello/main.yar
 
 This builds to a temporary executable and runs it immediately.
 
-### Run a v0.2 program
+### Run a multi-package program
+
+```bash
+go run ./cmd/yar run testdata/imports_ok/
+```
+
+This exercises multi-package imports with `pub` exports and package-qualified calls.
+
+### Run a structs and loops program
 
 ```bash
 go run ./cmd/yar run testdata/structs_and_loops/main.yar
@@ -181,28 +192,32 @@ x := divide(10, 2) or |err| {
 
 These forms are syntax sugar. The compiler lowers them into explicit temporaries, error checks, branches, and returns.
 
-## v0.2 Surface
+## Current Language Surface
 
 The current language supports:
 
-- top-level `struct` and `fn` declarations
+- multi-file packages with `import` and `pub` exports
+- top-level `struct`, `enum`, and `fn` declarations
+- user-defined enums with plain and payload-carrying cases
+- exhaustive `match` over enum values with payload binding
 - fixed arrays such as `[3]User`
+- slices such as `[]i32` with `append`, `len`, and runtime bounds checks
+- typed pointers with `&`, `*`, and `nil`
 - `if` / `else` / `else if`
 - `for cond { ... }` and `for init; cond; post { ... }`
 - `break` and `continue`
 - `var` declarations in addition to `:=`
 - field access and field assignment
 - indexing and index assignment
-- unary `-`, unary `!`, and `%`
-- `len(array)`
+- unary `-`, unary `!`, `&`, `*`, and `%`
+- short-circuit `&&` and `||`
+- `len(array-or-slice)` and `append(slice, value)`
 
 Still not implemented:
 
-- imports
 - methods
-- slices
-- `&&`
-- `||`
+- generics
+- closures or lambdas
 
 ## How Builtins Work
 
@@ -211,32 +226,44 @@ The current builtins are:
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T) i32`
+- `len([N]T | []T) i32`
+- `append([]T, T) []T`
 
-Generated LLVM IR calls two runtime functions:
+Generated LLVM IR calls runtime functions:
 
 - `yar_print`
 - `yar_print_int`
 - `yar_panic`
+- `yar_alloc` / `yar_alloc_zeroed`
+- `yar_slice_index_check` / `yar_slice_range_check`
 
 Those functions are implemented in the runtime C source.
 
 ## Project Layout
 
 - [cmd/yar/main.go](cmd/yar/main.go): CLI entrypoint
+- [internal/token/token.go](internal/token/token.go): token types and source positions
+- [internal/diag/diag.go](internal/diag/diag.go): diagnostic reporting
+- [internal/ast/ast.go](internal/ast/ast.go): AST node types and package graph structures
 - [internal/compiler/compiler.go](internal/compiler/compiler.go): compile, build, and run orchestration
+- [internal/compiler/packages.go](internal/compiler/packages.go): multi-package loading and lowering
 - [internal/lexer/lexer.go](internal/lexer/lexer.go): tokenization
 - [internal/parser/parser.go](internal/parser/parser.go): parser
 - [internal/checker/checker.go](internal/checker/checker.go): semantic analysis and type checking
 - [internal/codegen/llvm.go](internal/codegen/llvm.go): LLVM IR generation
 - [internal/runtime/runtime_source.txt](internal/runtime/runtime_source.txt): tiny runtime source used during linking
-- [testdata/hello/main.yar](testdata/hello/main.yar): hello world example
-- [testdata/add/main.yar](testdata/add/main.yar): arithmetic example
-- [testdata/divide/main.yar](testdata/divide/main.yar): error propagation example
-- [testdata/i64/main.yar](testdata/i64/main.yar): `i64` type-check and codegen example
-- [testdata/unhandled_error/main.yar](testdata/unhandled_error/main.yar): unhandled error wrapper example
-- [testdata/panic/main.yar](testdata/panic/main.yar): panic runtime example
-- [testdata/structs_and_loops/main.yar](testdata/structs_and_loops/main.yar): v0.2 structs, arrays, and control-flow example
+- [testdata/hello/](testdata/hello/): hello world
+- [testdata/add/](testdata/add/): arithmetic
+- [testdata/divide/](testdata/divide/): error propagation with `?`
+- [testdata/i64/](testdata/i64/): `i64` type-check and codegen
+- [testdata/bool_operators/](testdata/bool_operators/): short-circuit `&&` and `||`
+- [testdata/unhandled_error/](testdata/unhandled_error/): unhandled error wrapper
+- [testdata/panic/](testdata/panic/): panic runtime behavior
+- [testdata/structs_and_loops/](testdata/structs_and_loops/): structs, arrays, and control flow
+- [testdata/slices/](testdata/slices/): slice operations with `append` and bounds checks
+- [testdata/pointers/](testdata/pointers/): pointer dereference and address-of
+- [testdata/enums/](testdata/enums/): enum definitions and exhaustive `match`
+- [testdata/imports_ok/](testdata/imports_ok/): multi-package imports
 
 ## Verify The Repository
 
