@@ -1,8 +1,24 @@
 # yar
 
-A compiled language with explicit error handling, enums with payloads, and a multi-package module system. Yar compiles to native executables through LLVM IR and clang.
+`yar` takes a hard line on program shape: errors are explicit, variants are
+closed, and output is native. It is for people who want a language that makes
+failure handling visible, keeps data modeling strict, and compiles all the way
+down to executables through LLVM IR and `clang`.
 
-```
+## Why yar
+
+- Errors are part of the function contract, not a side channel.
+- Enums are closed and `match` is exhaustive, so branching stays honest.
+- Packages are explicit, exported APIs are deliberate, and cross-package access
+  stays visible in the source.
+- The compiler produces LLVM IR and native executables. There is no interpreter
+  and no VM boundary.
+- The standard library is written in yar and compiled through the same pipeline
+  as user code.
+
+## Quick Example
+
+```yar
 package main
 
 import "strings"
@@ -23,30 +39,64 @@ fn main() !i32 {
 ```
 
 ```bash
-$ yar run greet.yar
+./bin/yar run greet.yar
 hello, world
 ```
 
-## What yar has
+## What it already does
 
-- Structs, enums with payloads, exhaustive `match`
-- Typed pointers, fixed arrays, slices, maps
-- Multi-file packages with `import` and `pub` exports
-- Error handling: `!T` return types, `?` propagation, `or |err| { ... }`
-- Standard library: `strings`, `utf8`, `conv`
-- Compiles to native code (no interpreter, no VM)
-- Zero external Go dependencies
+Yar currently supports:
 
-## What yar does not have (yet)
+- Top-level `struct`, `enum`, and `fn` declarations
+- `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`
+- Typed pointers, fixed arrays, slices, and maps
+- Multi-file packages rooted at an entry `package main`
+- `if`, `for`, `break`, `continue`, `return`, and exhaustive `match`
+- String indexing, slicing, concatenation, and equality
+- Native builds, IR emission, and direct execution from the CLI
 
-Methods, generics, closures, interfaces, garbage collection. See the [language spec](docs/YAR.md) for current scope.
+The embedded standard library currently includes:
+
+- `strings` — string helpers and `parse_i64`
+- `utf8` — decoding and rune classification
+- `conv` — numeric and byte/string conversion helpers
+- `sort` — in-place sorting for `[]str`, `[]i32`, and `[]i64`
+- `path` — path normalization and joining
+- `fs` — text file and directory operations
+- `process` — argv access and child-process execution
+- `env` — environment lookup
+- `stdio` — stderr output
+
+## What it does not try to do
+
+Yar does not currently have:
+
+- Methods
+- Generics
+- Closures
+- Interfaces
+- Garbage collection
+
+The language and standard library are intentionally constrained. The compiler
+is the source of truth for implemented behavior.
 
 ## Install
 
-Requires **Go 1.26+** and **clang**.
+Requirements:
+
+- Go 1.26+
+- `clang`
+
+Build the CLI:
 
 ```bash
 go build -o ./bin/yar ./cmd/yar
+```
+
+Use `CC` to override the compiler command if needed:
+
+```bash
+CC=clang-17 ./bin/yar build main.yar
 ```
 
 <details>
@@ -59,152 +109,51 @@ go build -o ./bin/yar ./cmd/yar
 | Fedora        | `dnf install clang`                                                          |
 | Windows       | `winget install LLVM.LLVM` or [releases.llvm.org](https://releases.llvm.org) |
 
-Set `CC` to use a specific version: `CC=clang-17 yar build main.yar`
-
 </details>
 
 ## Commands
 
-```
-yar <command> <file> [-o output]
+```text
+yar <command> <path> [-o output]
 ```
 
-| Command   | Description                                       |
+| Command   | What it does                                      |
 | --------- | ------------------------------------------------- |
-| `check`   | Type-check without generating code                |
+| `check`   | Parse and type-check without generating a binary  |
 | `emit-ir` | Print LLVM IR to stdout                           |
-| `build`   | Compile to a native executable (default: `a.out`) |
-| `run`     | Compile and execute                               |
+| `build`   | Compile to a native executable                    |
+| `run`     | Compile and execute a temporary native executable |
 
-## Language tour
+## Why this repo matters
 
-### Error handling
+Use yar when you want:
 
-Functions that can fail return `!T`. Callers must handle the error — the compiler enforces this.
+- A language and compiler you can actually read end to end
+- A language with explicit failures instead of implicit exception flow
+- Native executables without a VM boundary
+- A current implementation that already covers packages, enums, maps,
+  pointers, and host-backed stdlib calls
 
-```
-fn parse(input str) !i32 {
-    if len(input) == 0 {
-        return error.Empty
-    }
-    return 42
-}
-
-fn main() !i32 {
-    // propagate with ?
-    value := parse("test")?
-
-    // or handle locally
-    fallback := parse("") or |err| {
-        print("using default\n")
-        return 0
-    }
-
-    return 0
-}
-```
-
-### Enums and match
-
-Enums are closed variant types. Cases can carry payloads. `match` is exhaustive.
-
-```
-enum Expr {
-    Int { value i32 }
-    Name { text str }
-}
-
-fn eval(e Expr) i32 {
-    match e {
-    case Expr.Int(v) {
-        return v.value
-    }
-    case Expr.Name(v) {
-        return len(v.text)
-    }
-    }
-}
-```
-
-### Packages
-
-Packages are directories of `.yar` files. Exported declarations use `pub`.
-
-```
-// lexer/lexer.yar
-package lexer
-
-pub fn classify(ch i32) str {
-    if ch >= 48 {
-        if ch <= 57 {
-            return "digit"
-        }
-    }
-    return "other"
-}
-```
-
-```
-// main.yar
-package main
-
-import "lexer"
-
-fn main() i32 {
-    kind := lexer.classify(65)
-    print(kind)
-    print("\n")
-    return 0
-}
-```
-
-### Pointers and recursive data
-
-```
-struct Node {
-    value i32
-    next *Node
-}
-
-fn main() i32 {
-    tail := &Node{value: 2, next: nil}
-    head := &Node{value: 1, next: tail}
-    print_int((*head).value)
-    print("\n")
-    return 0
-}
-```
-
-### Maps
-
-Map indexing returns `!V` — missing keys are errors, not silent zero values.
-
-```
-fn main() !i32 {
-    m := map[str]i32{"x": 1, "y": 2}
-    v := m["x"]?
-    print_int(v)
-    print("\n")
-
-    m["z"] = 3
-    delete(m, "x")
-    return 0
-}
-```
+The implemented surface is intentionally explicit. See
+[docs/YAR.md](docs/YAR.md) for the exact behavior the compiler supports today.
 
 ## Development
 
-```bash
-# Run tests
-go test -race -count=1 -v -timeout=120s ./...
+Run tests:
 
-# Lint
+```bash
+go test -race -count=1 -v -timeout=120s ./...
+```
+
+Run lint:
+
+```bash
 golangci-lint run --fix ./...
 ```
 
-### Project structure
+Repository layout:
 
-```
+```text
 cmd/yar/          CLI entry point
 internal/
   lexer/          Tokenizer
@@ -215,14 +164,15 @@ internal/
   compiler/       Pipeline orchestration and package loading
   runtime/        Embedded C runtime
   stdlib/         Embedded standard library (yar source)
-testdata/         Test programs
-docs/             Language spec and design docs
+testdata/         Representative sample programs
+docs/             Language and design documentation
 ```
 
-## Docs
+## Documentation
 
-- [Language specification](docs/YAR.md) — what the compiler implements today
-- [Language design](docs/language/) — proposals, decisions, roadmap
+- [Language reference](docs/YAR.md) — what the compiler implements today
+- [Language design docs](docs/language/) — proposals, decisions, and process
+- [Context docs](docs/context/) — current architecture, runtime, and compiler behavior
 
 ## License
 

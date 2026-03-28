@@ -57,9 +57,9 @@
 ### String Runtime
 
 - `yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr,
-  long long b_len)` compares two strings by length then bytes.
+long long b_len)` compares two strings by length then bytes.
 - `yar_str_concat(const char *a_ptr, long long a_len, const char *b_ptr,
-  long long b_len)` allocates and returns a new string containing the
+long long b_len)` allocates and returns a new string containing the
   concatenation of both inputs.
 - `yar_str_index_check(long long index, long long len)` traps on out-of-range
   string indexing.
