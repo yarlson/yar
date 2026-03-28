@@ -114,6 +114,39 @@ This area should be approached carefully because it has many interactions with:
 
 ---
 
+## v0.5 candidate capability: self-hosting preparation
+
+The language is now close to being able to express a self-hosted frontend in
+memory. The next likely milestone is to close the remaining boundary gaps so
+compiler and tooling programs become practical end to end.
+
+### Candidate focus
+
+- host filesystem and path access for package loading and artifact output
+- host process, environment, stderr, and argv support for compiler CLI work
+- map key enumeration so compiler maps can be traversed without maintaining
+  duplicate side slices everywhere
+- deterministic sorting helpers for stable diagnostics, package order, and error
+  code assignment
+
+### Candidate proposal set
+
+- `0009-host-filesystem-and-path-utilities.md`
+- `0010-host-process-and-environment.md`
+- `0011-map-key-enumeration.md`
+- `0012-sorting-helpers.md`
+
+### v0.5 likely non-goals
+
+- methods
+- generics
+- a full stream or descriptor API
+- shell syntax or pipelines
+- full map iterator protocols
+- advanced module or package-manager design
+
+---
+
 ## Backlog
 
 These are interesting but not currently committed:
