@@ -316,6 +316,8 @@ func lookupKeyword(text string) token.Kind {
 		return token.Nil
 	case "error":
 		return token.Error
+	case "map":
+		return token.Map
 	default:
 		return token.Ident
 	}

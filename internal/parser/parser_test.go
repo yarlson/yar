@@ -497,3 +497,73 @@ fn main() i32 {
 		t.Fatalf("unexpected callee name: got %q want %q", got, want)
 	}
 }
+
+func TestParseMapLiteral(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	m := map[str]i32{"a": 1, "b": 2}
+	return 0
+}
+`
+	program, diags := Parse(src)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", diags)
+	}
+
+	if len(program.Functions) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(program.Functions))
+	}
+	fn := program.Functions[0]
+	if len(fn.Body.Stmts) < 1 {
+		t.Fatal("expected at least 1 statement")
+	}
+	letStmt, ok := fn.Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", fn.Body.Stmts[0])
+	}
+	mapLit, ok := letStmt.Value.(*ast.MapLiteralExpr)
+	if !ok {
+		t.Fatalf("expected map literal, got %T", letStmt.Value)
+	}
+	if got, want := mapLit.Type.Name, "map[str]i32"; got != want {
+		t.Fatalf("unexpected map type: got %q want %q", got, want)
+	}
+	if got, want := len(mapLit.Pairs), 2; got != want {
+		t.Fatalf("unexpected pair count: got %d want %d", got, want)
+	}
+}
+
+func TestParseMapTypeRef(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn lookup(m map[str]i32) i32 {
+	return 0
+}
+
+fn main() i32 {
+	return 0
+}
+`
+	program, diags := Parse(src)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", diags)
+	}
+
+	if len(program.Functions) != 2 {
+		t.Fatalf("expected 2 functions, got %d", len(program.Functions))
+	}
+	fn := program.Functions[0]
+	if len(fn.Params) != 1 {
+		t.Fatalf("expected 1 param, got %d", len(fn.Params))
+	}
+	if got, want := fn.Params[0].Type.Name, "map[str]i32"; got != want {
+		t.Fatalf("unexpected param type: got %q want %q", got, want)
+	}
+}

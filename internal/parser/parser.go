@@ -213,6 +213,18 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		}
 	}
 
+	if p.at(token.Map) {
+		mapTok := p.expect(token.Map, "expected map")
+		p.expect(token.LBracket, "expected '[' after map")
+		keyType := p.parseTypeRef()
+		p.expect(token.RBracket, "expected ']' after map key type")
+		valueType := p.parseTypeRef()
+		return ast.TypeRef{
+			Name: "map[" + keyType.Name + "]" + valueType.Name,
+			Pos:  mapTok.Pos,
+		}
+	}
+
 	tok := p.current()
 	if tok.Kind != token.Ident && tok.Kind != token.Error {
 		tok = p.expect(token.Ident, "expected type name")
@@ -728,6 +740,8 @@ func (p *Parser) parsePrimary() ast.Expression {
 		return &ast.GroupExpr{Inner: inner}
 	case token.LBracket:
 		return p.parseSequenceLiteral()
+	case token.Map:
+		return p.parseMapLiteral()
 	default:
 		p.errorCurrent("expected expression")
 		p.advance()
@@ -790,6 +804,35 @@ func (p *Parser) parseSequenceLiteral() ast.Expression {
 		}
 	}
 	p.expect(token.RBrace, "expected '}' after array literal")
+	return expr
+}
+
+func (p *Parser) parseMapLiteral() ast.Expression {
+	typeRef := p.parseTypeRef()
+	lbrace := p.expect(token.LBrace, "expected '{' after map type")
+	expr := &ast.MapLiteralExpr{Type: typeRef, LBrace: lbrace.Pos}
+
+	for !p.at(token.RBrace) && !p.at(token.EOF) {
+		keyPos := p.current().Pos
+		key := p.parseExpression()
+		p.expect(token.Colon, "expected ':' after map key")
+		valuePos := p.current().Pos
+		value := p.parseExpression()
+		expr.Pairs = append(expr.Pairs, ast.MapLiteralPair{
+			Key:      key,
+			KeyPos:   keyPos,
+			Value:    value,
+			ValuePos: valuePos,
+		})
+		if !p.at(token.Comma) {
+			break
+		}
+		p.advance()
+		if p.at(token.RBrace) {
+			break
+		}
+	}
+	p.expect(token.RBrace, "expected '}' after map literal")
 	return expr
 }
 

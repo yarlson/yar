@@ -35,6 +35,12 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		}
 	}
 
+	for _, et := range info.ExprTypes {
+		if et.Errorable {
+			g.usedResultType[et.Base] = true
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString("; yar v0.2\n")
 	b.WriteString("source_filename = \"yar\"\n\n")
@@ -123,6 +129,12 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_slice_index_check(i64, i64)\n")
 	b.WriteString("declare void @yar_slice_range_check(i64, i64, i64)\n")
 	b.WriteString("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n")
+	b.WriteString("declare ptr @yar_map_new(i32, i32, i32)\n")
+	b.WriteString("declare void @yar_map_set(ptr, ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_map_get(ptr, ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_map_has(ptr, ptr)\n")
+	b.WriteString("declare void @yar_map_delete(ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_map_len(ptr)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -234,6 +246,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 	if _, ok := checker.ParsePointerType(typ); ok {
 		return "ptr"
 	}
+	if _, ok := checker.ParseMapType(typ); ok {
+		return "ptr"
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
 	}
@@ -333,6 +348,9 @@ func (g *Generator) typeSize(typ checker.Type) int {
 	if _, ok := checker.ParseSliceType(typ); ok {
 		return 16
 	}
+	if _, ok := checker.ParseMapType(typ); ok {
+		return 8
+	}
 	if info, ok := g.info.Structs[string(typ)]; ok {
 		size := 0
 		align := 1
@@ -373,6 +391,9 @@ func (g *Generator) typeAlign(typ checker.Type) int {
 		return g.typeAlign(array.Elem)
 	}
 	if _, ok := checker.ParseSliceType(typ); ok {
+		return 8
+	}
+	if _, ok := checker.ParseMapType(typ); ok {
 		return 8
 	}
 	if info, ok := g.info.Structs[string(typ)]; ok {
@@ -443,6 +464,21 @@ func escapeLLVMString(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func mapKeyKind(keyType checker.Type) int {
+	switch keyType {
+	case checker.TypeBool:
+		return 0
+	case checker.TypeI32:
+		return 1
+	case checker.TypeI64:
+		return 2
+	case checker.TypeStr:
+		return 3
+	default:
+		return 1
+	}
 }
 
 func sanitizeLabel(name string) string {
@@ -571,6 +607,16 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value, slot)
 		f.bindLocal(s.Name, localSlot{typ: typ, ptr: slot})
 	case *ast.AssignStmt:
+		if indexExpr, ok := s.Target.(*ast.IndexExpr); ok {
+			innerType := f.exprType(indexExpr.Inner)
+			if mapType, ok := checker.ParseMapType(innerType); ok {
+				mapValue := f.genExpression(indexExpr.Inner)
+				keyValue := f.genExpression(indexExpr.Index)
+				value := f.genExpression(s.Value)
+				f.emitMapSet(mapValue.ref, mapType.Key, keyValue, mapType.Value, value)
+				return
+			}
+		}
 		ptr, typ := f.addressOfTarget(s.Target)
 		value := f.genExpression(s.Value)
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value.ref, ptr)
@@ -872,6 +918,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.genArrayLiteral(expr, e)
 	case *ast.SliceLiteralExpr:
 		return f.genSliceLiteral(expr, e)
+	case *ast.MapLiteralExpr:
+		return f.genMapLiteral(expr, e)
 	case *ast.CallExpr:
 		return f.genCall(e)
 	default:
@@ -965,6 +1013,11 @@ func (f *functionEmitter) genSelector(expr *ast.SelectorExpr) exprValue {
 }
 
 func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
+	innerType := f.exprType(expr.Inner)
+	if mapType, ok := checker.ParseMapType(innerType); ok {
+		return f.genMapLookup(expr, mapType)
+	}
+
 	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
 	if array, ok := checker.ParseArrayType(baseType); ok {
 		index := f.genExpression(expr.Index)
@@ -980,6 +1033,52 @@ func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
 	load := f.newTemp("elem")
 	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", load, f.g.llvmType(slice.Elem), ptr)
 	return exprValue{ref: "%" + load, typ: slice.Elem}
+}
+
+func (f *functionEmitter) genMapLookup(expr *ast.IndexExpr, mapType checker.MapType) exprValue {
+	mapValue := f.genExpression(expr.Inner)
+	keyValue := f.genExpression(expr.Index)
+
+	keySlot := f.newTemp("map.key.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", keySlot, f.g.llvmType(mapType.Key))
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(mapType.Key), keyValue.ref, keySlot)
+
+	valSlot := f.newTemp("map.val.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", valSlot, f.g.llvmType(mapType.Value))
+
+	found := f.newTemp("map.found")
+	fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_map_get(ptr %s, ptr %%%s, ptr %%%s)\n", found, mapValue.ref, keySlot, valSlot)
+
+	isFound := f.newTemp("map.is_found")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %%%s, 0\n", isFound, found)
+
+	okLabel := f.newLabel("map.ok")
+	missLabel := f.newLabel("map.miss")
+	endLabel := f.newLabel("map.end")
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isFound, okLabel, missLabel)
+	f.terminated = true
+
+	f.emitLabel(okLabel)
+	okVal := f.newTemp("map.val")
+	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %%%s\n", okVal, f.g.llvmType(mapType.Value), valSlot)
+	okResult := f.emitSuccessResult(mapType.Value, "%"+okVal)
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+	okResultLabel := f.currentLabel
+
+	f.emitLabel(missLabel)
+	missingKeyCode := f.g.info.ErrorCodes["MissingKey"]
+	missResult := f.emitErrorCodeResult(mapType.Value, fmt.Sprintf("%d", missingKeyCode))
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+	missResultLabel := f.currentLabel
+
+	f.emitLabel(endLabel)
+	result := f.newTemp("map.result")
+	resultType := f.g.resultTypeName(mapType.Value)
+	fmt.Fprintf(&f.builder, "  %%%s = phi %s [%s, %%%s], [%s, %%%s]\n", result, resultType, okResult, okResultLabel, missResult, missResultLabel)
+
+	return exprValue{ref: "%" + result, typ: mapType.Value}
 }
 
 func (f *functionEmitter) genSlice(expr ast.Expression, sliceExpr *ast.SliceExpr) exprValue {
@@ -1048,6 +1147,38 @@ func (f *functionEmitter) genSliceLiteral(expr ast.Expression, lit *ast.SliceLit
 	length := fmt.Sprintf("%d", len(lit.Elements))
 	ref := f.emitSliceValue(dataPtr, length, length)
 	return exprValue{ref: ref, typ: typ}
+}
+
+func (f *functionEmitter) genMapLiteral(expr ast.Expression, lit *ast.MapLiteralExpr) exprValue {
+	typ := f.exprType(expr)
+	mapType, _ := checker.ParseMapType(typ)
+
+	keyKind := mapKeyKind(mapType.Key)
+	keySize := f.g.typeSize(mapType.Key)
+	valueSize := f.g.typeSize(mapType.Value)
+
+	mapPtr := f.newTemp("map.new")
+	fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_map_new(i32 %d, i32 %d, i32 %d)\n", mapPtr, keyKind, keySize, valueSize)
+
+	for _, pair := range lit.Pairs {
+		keyValue := f.genExpression(pair.Key)
+		valValue := f.genExpression(pair.Value)
+		f.emitMapSet("%"+mapPtr, mapType.Key, keyValue, mapType.Value, valValue)
+	}
+
+	return exprValue{ref: "%" + mapPtr, typ: typ}
+}
+
+func (f *functionEmitter) emitMapSet(mapRef string, keyType checker.Type, key exprValue, valueType checker.Type, value exprValue) {
+	keySlot := f.newTemp("map.key.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", keySlot, f.g.llvmType(keyType))
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(keyType), key.ref, keySlot)
+
+	valSlot := f.newTemp("map.val.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", valSlot, f.g.llvmType(valueType))
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(valueType), value.ref, valSlot)
+
+	fmt.Fprintf(&f.builder, "  call void @yar_map_set(ptr %s, ptr %%%s, ptr %%%s)\n", mapRef, keySlot, valSlot)
 }
 
 func (f *functionEmitter) genPropagate(expr *ast.PropagateExpr) exprValue {
@@ -1243,8 +1374,36 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		if array, ok := checker.ParseArrayType(f.exprType(expr.Args[0])); ok {
 			return exprValue{ref: fmt.Sprintf("%d", array.Len), typ: checker.TypeI32}
 		}
+		if _, ok := checker.ParseMapType(f.exprType(expr.Args[0])); ok {
+			lenResult := f.newTemp("map.len")
+			fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_map_len(ptr %s)\n", lenResult, arg.ref)
+			return exprValue{ref: "%" + lenResult, typ: checker.TypeI32}
+		}
 		length := f.extractSliceField(arg.ref, 1, "slice.len")
 		return exprValue{ref: length.ref, typ: checker.TypeI32}
+	}
+	if sig.Name == "has" && sig.Builtin {
+		mapArg := f.genExpression(expr.Args[0])
+		keyArg := f.genExpression(expr.Args[1])
+		mapType, _ := checker.ParseMapType(f.exprType(expr.Args[0]))
+		keySlot := f.newTemp("map.key.slot")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", keySlot, f.g.llvmType(mapType.Key))
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(mapType.Key), keyArg.ref, keySlot)
+		hasResult := f.newTemp("map.has")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_map_has(ptr %s, ptr %%%s)\n", hasResult, mapArg.ref, keySlot)
+		boolResult := f.newTemp("map.has.bool")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %%%s, 0\n", boolResult, hasResult)
+		return exprValue{ref: "%" + boolResult, typ: checker.TypeBool}
+	}
+	if sig.Name == "delete" && sig.Builtin {
+		mapArg := f.genExpression(expr.Args[0])
+		keyArg := f.genExpression(expr.Args[1])
+		mapType, _ := checker.ParseMapType(f.exprType(expr.Args[0]))
+		keySlot := f.newTemp("map.key.slot")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", keySlot, f.g.llvmType(mapType.Key))
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(mapType.Key), keyArg.ref, keySlot)
+		fmt.Fprintf(&f.builder, "  call void @yar_map_delete(ptr %s, ptr %%%s)\n", mapArg.ref, keySlot)
+		return exprValue{typ: checker.TypeVoid}
 	}
 	if sig.Name == "append" && sig.Builtin {
 		sliceValue := f.genExpression(expr.Args[0])
@@ -1613,6 +1772,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 		}
 		if _, ok := checker.ParseSliceType(typ); ok {
 			return "zeroinitializer"
+		}
+		if _, ok := checker.ParseMapType(typ); ok {
+			return "null"
 		}
 		if _, ok := g.info.Enums[string(typ)]; ok {
 			return "zeroinitializer"

@@ -63,6 +63,196 @@ void *yar_alloc(long long size) {
     return ptr;
 }
 
+/* --- map runtime --- */
+
+#define YAR_MAP_INIT_CAP 8
+#define YAR_MAP_LOAD_NUM 3
+#define YAR_MAP_LOAD_DEN 4
+
+/* key kinds passed from codegen */
+#define YAR_KEY_BOOL  0
+#define YAR_KEY_I32   1
+#define YAR_KEY_I64   2
+#define YAR_KEY_STR   3
+
+typedef struct {
+    const char *ptr;
+    long long   len;
+} yar_str;
+
+typedef struct {
+    unsigned char *entries;  /* bucket array: each bucket is (1 byte used + key_size + value_size) */
+    int32_t        count;
+    int32_t        cap;
+    int32_t        key_size;
+    int32_t        value_size;
+    int32_t        bucket_size;
+    int32_t        key_kind;
+} yar_map;
+
+static uint64_t yar_map_hash(const void *key, int32_t key_kind, int32_t key_size) {
+    uint64_t h = 14695981039346656037ULL;
+    if (key_kind == YAR_KEY_STR) {
+        const yar_str *s = (const yar_str *)key;
+        const unsigned char *data = (const unsigned char *)s->ptr;
+        long long len = s->len;
+        for (long long i = 0; i < len; i++) {
+            h ^= data[i];
+            h *= 1099511628211ULL;
+        }
+    } else {
+        const unsigned char *data = (const unsigned char *)key;
+        for (int32_t i = 0; i < key_size; i++) {
+            h ^= data[i];
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
+static int yar_map_keys_equal(const void *a, const void *b, int32_t key_kind, int32_t key_size) {
+    if (key_kind == YAR_KEY_STR) {
+        const yar_str *sa = (const yar_str *)a;
+        const yar_str *sb = (const yar_str *)b;
+        if (sa->len != sb->len) return 0;
+        if (sa->len == 0) return 1;
+        for (long long i = 0; i < sa->len; i++) {
+            if (sa->ptr[i] != sb->ptr[i]) return 0;
+        }
+        return 1;
+    }
+    const unsigned char *pa = (const unsigned char *)a;
+    const unsigned char *pb = (const unsigned char *)b;
+    for (int32_t i = 0; i < key_size; i++) {
+        if (pa[i] != pb[i]) return 0;
+    }
+    return 1;
+}
+
+void *yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size) {
+    yar_map *m = (yar_map *)malloc(sizeof(yar_map));
+    if (!m) { yar_trap_oom(); }
+    m->count = 0;
+    m->cap = YAR_MAP_INIT_CAP;
+    m->key_size = key_size;
+    m->value_size = value_size;
+    m->bucket_size = 1 + key_size + value_size;
+    m->key_kind = key_kind;
+    m->entries = (unsigned char *)calloc((size_t)m->cap, (size_t)m->bucket_size);
+    if (!m->entries) { yar_trap_oom(); }
+    return m;
+}
+
+static void yar_map_grow(yar_map *m);
+
+static unsigned char *yar_map_find_slot(yar_map *m, const void *key, uint64_t hash, int *found) {
+    int32_t mask = m->cap - 1;
+    int32_t idx = (int32_t)(hash & (uint64_t)mask);
+    for (;;) {
+        unsigned char *bucket = m->entries + (int64_t)idx * m->bucket_size;
+        if (bucket[0] == 0) {
+            *found = 0;
+            return bucket;
+        }
+        if (yar_map_keys_equal(bucket + 1, key, m->key_kind, m->key_size)) {
+            *found = 1;
+            return bucket;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+void yar_map_set(void *map_ptr, const void *key, const void *value) {
+    yar_map *m = (yar_map *)map_ptr;
+    if ((int64_t)(m->count + 1) * YAR_MAP_LOAD_DEN > (int64_t)m->cap * YAR_MAP_LOAD_NUM) {
+        yar_map_grow(m);
+    }
+    uint64_t hash = yar_map_hash(key, m->key_kind, m->key_size);
+    int found;
+    unsigned char *bucket = yar_map_find_slot(m, key, hash, &found);
+    if (!found) {
+        bucket[0] = 1;
+        for (int32_t i = 0; i < m->key_size; i++) bucket[1 + i] = ((const unsigned char *)key)[i];
+        m->count++;
+    }
+    unsigned char *val_dst = bucket + 1 + m->key_size;
+    const unsigned char *val_src = (const unsigned char *)value;
+    for (int32_t i = 0; i < m->value_size; i++) val_dst[i] = val_src[i];
+}
+
+int32_t yar_map_get(void *map_ptr, const void *key, void *value_out) {
+    yar_map *m = (yar_map *)map_ptr;
+    uint64_t hash = yar_map_hash(key, m->key_kind, m->key_size);
+    int found;
+    unsigned char *bucket = yar_map_find_slot(m, key, hash, &found);
+    if (!found) return 0;
+    unsigned char *val_src = bucket + 1 + m->key_size;
+    unsigned char *val_dst = (unsigned char *)value_out;
+    for (int32_t i = 0; i < m->value_size; i++) val_dst[i] = val_src[i];
+    return 1;
+}
+
+int32_t yar_map_has(void *map_ptr, const void *key) {
+    yar_map *m = (yar_map *)map_ptr;
+    uint64_t hash = yar_map_hash(key, m->key_kind, m->key_size);
+    int found;
+    yar_map_find_slot(m, key, hash, &found);
+    return found ? 1 : 0;
+}
+
+void yar_map_delete(void *map_ptr, const void *key) {
+    yar_map *m = (yar_map *)map_ptr;
+    uint64_t hash = yar_map_hash(key, m->key_kind, m->key_size);
+    int found;
+    unsigned char *bucket = yar_map_find_slot(m, key, hash, &found);
+    if (!found) return;
+    /* mark deleted and rehash forward entries */
+    bucket[0] = 0;
+    m->count--;
+    int32_t mask = m->cap - 1;
+    int32_t idx = (int32_t)((hash & (uint64_t)mask) + 1) & mask;
+    for (;;) {
+        unsigned char *next = m->entries + (int64_t)idx * m->bucket_size;
+        if (next[0] == 0) break;
+        /* remove and reinsert */
+        unsigned char tmp[256];
+        unsigned char *key_tmp = (m->bucket_size <= 256) ? tmp : (unsigned char *)malloc((size_t)m->bucket_size);
+        if (!key_tmp) { yar_trap_oom(); }
+        for (int32_t i = 0; i < m->bucket_size; i++) key_tmp[i] = next[i];
+        next[0] = 0;
+        m->count--;
+        /* reinsert */
+        uint64_t rh = yar_map_hash(key_tmp + 1, m->key_kind, m->key_size);
+        int rf;
+        unsigned char *dst = yar_map_find_slot(m, key_tmp + 1, rh, &rf);
+        for (int32_t i = 0; i < m->bucket_size; i++) dst[i] = key_tmp[i];
+        m->count++;
+        if (key_tmp != tmp) free(key_tmp);
+        idx = (idx + 1) & mask;
+    }
+}
+
+int32_t yar_map_len(void *map_ptr) {
+    yar_map *m = (yar_map *)map_ptr;
+    return m->count;
+}
+
+static void yar_map_grow(yar_map *m) {
+    int32_t old_cap = m->cap;
+    unsigned char *old_entries = m->entries;
+    int32_t new_cap = old_cap * 2;
+    m->cap = new_cap;
+    m->entries = (unsigned char *)calloc((size_t)new_cap, (size_t)m->bucket_size);
+    if (!m->entries) { yar_trap_oom(); }
+    m->count = 0;
+    for (int32_t i = 0; i < old_cap; i++) {
+        unsigned char *bucket = old_entries + (int64_t)i * m->bucket_size;
+        if (bucket[0] == 0) continue;
+        yar_map_set(m, bucket + 1, bucket + 1 + m->key_size);
+    }
+    free(old_entries);
+}
+
 void *yar_alloc_zeroed(long long size) {
     void *ptr;
 

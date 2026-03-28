@@ -142,6 +142,11 @@ type PointerType struct {
 	Elem Type
 }
 
+type MapType struct {
+	Key   Type
+	Value Type
+}
+
 func MakeArrayType(length int, elem Type) Type {
 	return Type(fmt.Sprintf("[%d]%s", length, elem))
 }
@@ -152,6 +157,35 @@ func MakeSliceType(elem Type) Type {
 
 func MakePointerType(elem Type) Type {
 	return Type("*" + string(elem))
+}
+
+func MakeMapType(key, value Type) Type {
+	return Type("map[" + string(key) + "]" + string(value))
+}
+
+func ParseMapType(typ Type) (MapType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "map[") {
+		return MapType{}, false
+	}
+	depth := 0
+	for i := 3; i < len(text); i++ {
+		switch text[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				key := Type(text[4:i])
+				value := Type(text[i+1:])
+				if key == TypeInvalid || value == TypeInvalid {
+					return MapType{}, false
+				}
+				return MapType{Key: key, Value: value}, true
+			}
+		}
+	}
+	return MapType{}, false
 }
 
 func ParseArrayType(typ Type) (ArrayType, bool) {
@@ -200,11 +234,25 @@ func ParsePointerType(typ Type) (PointerType, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "print_int", "panic", "len", "append":
+	case "print", "print_int", "panic", "len", "append", "has", "delete":
 		return true
 	default:
 		return false
 	}
+}
+
+func isMapKeyType(typ Type) bool {
+	switch typ {
+	case TypeBool, TypeI32, TypeI64, TypeStr:
+		return true
+	default:
+		return false
+	}
+}
+
+func isMapType(typ Type) bool {
+	_, ok := ParseMapType(typ)
+	return ok
 }
 
 func Check(program *ast.Program) (Info, []diag.Diagnostic) {
@@ -236,6 +284,20 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				FullName: "append",
 				Params:   []Type{TypeInvalid, TypeInvalid},
 				Return:   TypeInvalid,
+				Builtin:  true,
+			},
+			"has": {
+				Name:     "has",
+				FullName: "has",
+				Params:   []Type{TypeInvalid, TypeInvalid},
+				Return:   TypeBool,
+				Builtin:  true,
+			},
+			"delete": {
+				Name:     "delete",
+				FullName: "delete",
+				Params:   []Type{TypeInvalid, TypeInvalid},
+				Return:   TypeVoid,
 				Builtin:  true,
 			},
 		},
@@ -474,6 +536,9 @@ func (c *Checker) typeDependencies(typ Type) []string {
 	if _, ok := ParsePointerType(typ); ok {
 		return nil
 	}
+	if _, ok := ParseMapType(typ); ok {
+		return nil
+	}
 	if _, ok := c.info.Structs[string(typ)]; ok {
 		return []string{string(typ)}
 	}
@@ -589,6 +654,21 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		c.bindLocal(s.Name, declaredType)
 		c.info.Locals[s] = declaredType
 	case *ast.AssignStmt:
+		if mapAssignType, ok := c.checkMapAssignment(s); ok {
+			if mapAssignType == TypeInvalid {
+				return
+			}
+			value := c.checkExpression(s.Value)
+			value = c.requireNonErrorableValue(s.Value, value, "errorable value cannot be assigned directly")
+			if value.Base == TypeInvalid {
+				return
+			}
+			value = c.coerceValue(s.Value, value, mapAssignType)
+			if value.Base != mapAssignType {
+				c.diag.Add(s.Value.Pos(), "cannot assign %s to %s", value.Base, mapAssignType)
+			}
+			return
+		}
 		targetType := c.checkAssignmentTarget(s.Target)
 		if targetType == TypeInvalid {
 			return
@@ -732,6 +812,34 @@ func (c *Checker) checkCondition(expr ast.Expression, typeMessage, errorMessage 
 	}
 }
 
+func (c *Checker) checkMapAssignment(stmt *ast.AssignStmt) (Type, bool) {
+	indexExpr, ok := stmt.Target.(*ast.IndexExpr)
+	if !ok {
+		return TypeInvalid, false
+	}
+	inner := c.checkExpression(indexExpr.Inner)
+	if inner.Errorable {
+		c.diag.Add(indexExpr.LBracketPos, "indexing cannot use an errorable value")
+		return TypeInvalid, true
+	}
+	mapType, ok := ParseMapType(inner.Base)
+	if !ok {
+		return TypeInvalid, false
+	}
+	keyType := c.checkExpression(indexExpr.Index)
+	if keyType.Errorable {
+		c.diag.Add(indexExpr.Index.Pos(), "map key expression cannot be errorable")
+		return TypeInvalid, true
+	}
+	keyType = c.coerceValue(indexExpr.Index, keyType, mapType.Key)
+	if keyType.Base != mapType.Key {
+		c.diag.Add(indexExpr.Index.Pos(), "map key must be %s, got %s", mapType.Key, keyType.Base)
+		return TypeInvalid, true
+	}
+	c.info.ExprTypes[stmt.Target] = ExprType{Base: mapType.Value}
+	return mapType.Value, true
+}
+
 func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
 	typ, ok := c.checkAddressableExpr(target, false)
 	if ok {
@@ -843,6 +951,8 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		return c.checkArrayLiteral(expr, e)
 	case *ast.SliceLiteralExpr:
 		return c.checkSliceLiteral(expr, e)
+	case *ast.MapLiteralExpr:
+		return c.checkMapLiteral(expr, e)
 	case *ast.CallExpr:
 		return c.checkCall(expr, e)
 	default:
@@ -957,9 +1067,13 @@ func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType
 		return ExprType{Base: TypeInvalid}
 	}
 
+	if mapType, ok := ParseMapType(inner.Base); ok {
+		return c.checkMapIndex(expr, index, mapType)
+	}
+
 	elemType, ok := sequenceElementType(inner.Base)
 	if !ok {
-		c.diag.Add(index.LBracketPos, "indexing requires an array or slice value")
+		c.diag.Add(index.LBracketPos, "indexing requires an array, slice, or map value")
 		return ExprType{Base: TypeInvalid}
 	}
 
@@ -981,6 +1095,23 @@ func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType
 	}
 
 	et := ExprType{Base: elemType}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
+func (c *Checker) checkMapIndex(expr ast.Expression, index *ast.IndexExpr, mapType MapType) ExprType {
+	keyType := c.checkExpression(index.Index)
+	if keyType.Errorable {
+		c.diag.Add(index.Index.Pos(), "map key expression cannot be errorable")
+		return ExprType{Base: TypeInvalid}
+	}
+	keyType = c.coerceValue(index.Index, keyType, mapType.Key)
+	if keyType.Base != mapType.Key {
+		c.diag.Add(index.Index.Pos(), "map key must be %s, got %s", mapType.Key, keyType.Base)
+		return ExprType{Base: TypeInvalid}
+	}
+	c.useErrorName("MissingKey")
+	et := ExprType{Base: mapType.Value, Errorable: true}
 	c.info.ExprTypes[expr] = et
 	return et
 }
@@ -1130,6 +1261,38 @@ func (c *Checker) checkSliceLiteral(expr ast.Expression, lit *ast.SliceLiteralEx
 	return et
 }
 
+func (c *Checker) checkMapLiteral(expr ast.Expression, lit *ast.MapLiteralExpr) ExprType {
+	typ := c.resolveTypeRef(lit.Type)
+	mapType, ok := ParseMapType(typ)
+	if !ok {
+		c.diag.Add(lit.Type.Pos, "map literal requires a map type")
+		return ExprType{Base: TypeInvalid}
+	}
+	for _, pair := range lit.Pairs {
+		keyType := c.checkExpression(pair.Key)
+		keyType = c.requireNonErrorableValue(pair.Key, keyType, "errorable value cannot be used as a map key")
+		if keyType.Base == TypeInvalid {
+			continue
+		}
+		keyType = c.coerceValue(pair.Key, keyType, mapType.Key)
+		if keyType.Base != mapType.Key {
+			c.diag.Add(pair.Key.Pos(), "cannot use %s as map key type %s", keyType.Base, mapType.Key)
+		}
+		valueType := c.checkExpression(pair.Value)
+		valueType = c.requireNonErrorableValue(pair.Value, valueType, "errorable value cannot be used as a map value")
+		if valueType.Base == TypeInvalid {
+			continue
+		}
+		valueType = c.coerceValue(pair.Value, valueType, mapType.Value)
+		if valueType.Base != mapType.Value {
+			c.diag.Add(pair.Value.Pos(), "cannot assign %s to %s", valueType.Base, mapType.Value)
+		}
+	}
+	et := ExprType{Base: typ}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
 func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 	name, namePos, ok := callName(call.Callee)
 	if ok && name == "len" {
@@ -1142,12 +1305,72 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
 			return ExprType{Base: TypeInvalid}
 		}
-		if !isSequenceType(argType.Base) {
-			c.diag.Add(call.Args[0].Pos(), "len requires an array or slice argument")
+		if !isSequenceType(argType.Base) && !isMapType(argType.Base) {
+			c.diag.Add(call.Args[0].Pos(), "len requires an array, slice, or map argument")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeI32}
-		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{TypeInvalid}, Return: TypeI32, Builtin: true}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{argType.Base}, Return: TypeI32, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "has" {
+		if len(call.Args) != 2 {
+			c.diag.Add(namePos, "function %q expects 2 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		mapArg := c.checkExpression(call.Args[0])
+		if mapArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		mapType, ok := ParseMapType(mapArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "has requires a map as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		keyArg := c.checkExpression(call.Args[1])
+		if keyArg.Errorable {
+			c.diag.Add(call.Args[1].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		keyArg = c.coerceValue(call.Args[1], keyArg, mapType.Key)
+		if keyArg.Base != mapType.Key {
+			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q must be %s, got %s", name, mapType.Key, keyArg.Base)
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeBool}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{mapArg.Base, mapType.Key}, Return: TypeBool, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "delete" {
+		if len(call.Args) != 2 {
+			c.diag.Add(namePos, "function %q expects 2 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		mapArg := c.checkExpression(call.Args[0])
+		if mapArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		mapType, ok := ParseMapType(mapArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "delete requires a map as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		keyArg := c.checkExpression(call.Args[1])
+		if keyArg.Errorable {
+			c.diag.Add(call.Args[1].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		keyArg = c.coerceValue(call.Args[1], keyArg, mapType.Key)
+		if keyArg.Base != mapType.Key {
+			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q must be %s, got %s", name, mapType.Key, keyArg.Base)
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeVoid}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{mapArg.Base, mapType.Key}, Return: TypeVoid, Builtin: true}
 		c.info.ExprTypes[expr] = et
 		return et
 	}
@@ -1335,6 +1558,20 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 			return TypeInvalid
 		}
 		return MakeSliceType(elemType)
+	}
+
+	if text, ok := parseMapTypeName(ref.Name); ok {
+		keyType := c.resolveTypeRef(ast.TypeRef{Name: text.Key, Pos: ref.Pos})
+		if !isMapKeyType(keyType) {
+			c.diag.Add(ref.Pos, "map key type %q is not supported; must be bool, i32, i64, or str", text.Key)
+			return TypeInvalid
+		}
+		valueType := c.resolveTypeRef(ast.TypeRef{Name: text.Value, Pos: ref.Pos})
+		if valueType == TypeVoid || valueType == TypeNoReturn || valueType == TypeInvalid {
+			c.diag.Add(ref.Pos, "map value type %q is not allowed", text.Value)
+			return TypeInvalid
+		}
+		return MakeMapType(keyType, valueType)
 	}
 
 	if text, ok := parseArrayTypeName(ref.Name); ok {
@@ -1641,6 +1878,12 @@ func (c *Checker) checkAddressableExpr(expr ast.Expression, allowCompositeLitera
 		}
 		typ := c.checkSliceLiteral(expr, e)
 		return typ.Base, typ.Base != TypeInvalid
+	case *ast.MapLiteralExpr:
+		if !allowCompositeLiteral {
+			return TypeInvalid, false
+		}
+		typ := c.checkMapLiteral(expr, e)
+		return typ.Base, typ.Base != TypeInvalid
 	default:
 		return TypeInvalid, false
 	}
@@ -1866,4 +2109,33 @@ func parseSliceTypeName(name string) (parsedSliceType, bool) {
 		return parsedSliceType{}, false
 	}
 	return parsedSliceType{Elem: elem}, true
+}
+
+type parsedMapType struct {
+	Key   string
+	Value string
+}
+
+func parseMapTypeName(name string) (parsedMapType, bool) {
+	if !strings.HasPrefix(name, "map[") {
+		return parsedMapType{}, false
+	}
+	depth := 0
+	for i := 3; i < len(name); i++ {
+		switch name[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				key := name[4:i]
+				value := name[i+1:]
+				if key == "" || value == "" {
+					return parsedMapType{}, false
+				}
+				return parsedMapType{Key: key, Value: value}, true
+			}
+		}
+	}
+	return parsedMapType{}, false
 }

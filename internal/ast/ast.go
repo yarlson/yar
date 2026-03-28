@@ -439,6 +439,25 @@ func (e *SliceLiteralExpr) Pos() token.Position {
 
 func (*SliceLiteralExpr) exprNode() {}
 
+type MapLiteralExpr struct {
+	Type   TypeRef
+	LBrace token.Position
+	Pairs  []MapLiteralPair
+}
+
+func (e *MapLiteralExpr) Pos() token.Position {
+	return e.Type.Pos
+}
+
+func (*MapLiteralExpr) exprNode() {}
+
+type MapLiteralPair struct {
+	Key      Expression
+	KeyPos   token.Position
+	Value    Expression
+	ValuePos token.Position
+}
+
 type PropagateExpr struct {
 	Inner       Expression
 	QuestionPos token.Position

@@ -242,6 +242,23 @@ func TestEnumFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestMapFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(fixturePath("maps"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "2\nhas hello\nno missing\n2\n42\n2\nten\n1\ncaught\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildAndRunPropagateSugar(t *testing.T) {
 	t.Parallel()
 

@@ -129,6 +129,19 @@ Too large and too interaction-heavy for the current stage of the language.
 
 ---
 
+### Maps
+
+Status: accepted
+
+Maps are a built-in `map[K]V` associative container. Key types are restricted to
+`bool`, `i32`, `i64`, and `str`. Map lookup returns `!V` with `error.MissingKey`
+on absent keys, keeping missing-key handling explicit and compatible with YAR's
+error model. `has`, `delete`, and `len` are provided as builtins. Maps are
+heap-allocated opaque handles backed by an open-addressing hash table in the
+runtime. The first version has no iteration, ordering guarantees, or set syntax.
+
+---
+
 ## Decision Update Rule
 
 Any meaningful design decision should be recorded here when it becomes accepted,

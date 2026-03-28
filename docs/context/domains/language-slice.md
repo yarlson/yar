@@ -25,6 +25,7 @@
 - user-defined enum types
 - fixed array types
 - slice types
+- map types
 
 ## Statements
 
@@ -32,7 +33,7 @@
 - `:=` bindings with inferred type from the assigned expression
 - `var name Type`
 - `var name Type = expr`
-- Reassignment to an existing local, struct field, array index, slice index, or dereferenced pointer
+- Reassignment to an existing local, struct field, array index, slice index, dereferenced pointer, or map element
 - `if`, `else`, and `else if`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
@@ -55,6 +56,7 @@
 - Enum case constructors such as `TokenKind.Ident` and `Expr.Name{text: "main"}`
 - Array literals
 - Slice literals
+- Map literals
 - Function calls
 - Grouping with parentheses
 - Field access
@@ -98,14 +100,18 @@
 - Field access requires a struct value and a known field.
 - Plain enum cases are values of their enum type.
 - Payload enum cases are constructed with keyed field syntax and produce the enclosing enum type.
-- Indexing requires an array or slice value and an integer index.
+- Indexing an array or slice requires an integer index and returns the element type.
+- Indexing a map requires a key of the map's key type and returns `!V`, yielding `error.MissingKey` on absent keys.
 - Slicing requires a slice value and integer bounds.
 - Slice fields do not count as recursive inline containment, so recursive shapes such as `[]Node` fields are allowed.
 - `match` requires a non-errorable enum value, each arm must use a case from that same enum, and the first version requires exhaustiveness.
 - Payload bindings in `match` arms have a generated payload-struct type, and `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because there is no pointer type to infer.
 - Out-of-range slice indexing and slicing trap at runtime.
-- `len` requires an array or slice argument and returns `i32`.
+- Map key types are restricted to `bool`, `i32`, `i64`, and `str`.
+- Map value types cannot be `void`, `noreturn`, or an unknown type.
+- `m[key] = value` inserts or replaces the entry for `key` in a map.
+- `len` requires an array, slice, or map argument and returns `i32`.
 - `append` requires `append([]T, T)` and returns `[]T`.
 - `error.Name` is only valid as the direct operand of `return` inside an errorable function or a function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned directly, propagated with `?`, or handled with `or |err| { ... }`.
@@ -119,7 +125,9 @@
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T | []T) i32`
+- `len([N]T | []T | map[K]V) i32`
 - `append([]T, T) []T`
+- `has(map[K]V, K) bool`
+- `delete(map[K]V, K) void`
 
 Builtins remain globally available and are not imported.

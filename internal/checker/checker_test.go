@@ -529,7 +529,7 @@ fn main() i32 {
 	return x
 }
 `,
-			substr: "len requires an array or slice argument",
+			substr: "len requires an array, slice, or map argument",
 		},
 		{
 			name: "builtin len cannot be redeclared",
@@ -693,6 +693,197 @@ fn main() i32 {
 }
 `,
 			substr: "cannot infer type from nil without a pointer context",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
+func TestCheckMapFeaturesValid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "map literal and len",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[str]i32{"a": 1}
+	return len(m)
+}
+`,
+		},
+		{
+			name: "map has builtin",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[i32]bool{1: true}
+	if has(m, 1) {
+		return 0
+	}
+	return 1
+}
+`,
+		},
+		{
+			name: "map index with propagation",
+			src: `
+package main
+
+fn main() !i32 {
+	m := map[str]i32{"x": 42}
+	v := m["x"]?
+	return v
+}
+`,
+		},
+		{
+			name: "map assignment",
+			src: `
+package main
+
+fn main() !i32 {
+	m := map[str]i32{}
+	m["k"] = 10
+	return m["k"]?
+}
+`,
+		},
+		{
+			name: "map delete",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[str]i32{"a": 1}
+	delete(m, "a")
+	return len(m)
+}
+`,
+		},
+		{
+			name: "map index with or handler",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[str]i32{}
+	v := m["x"] or |err| {
+		return 0
+	}
+	return v
+}
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) > 0 {
+				messages := make([]string, 0, len(diags))
+				for _, diag := range diags {
+					messages = append(messages, diag.Message)
+				}
+				t.Fatalf("unexpected diagnostics: %s", strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
+func TestCheckMapFeaturesInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "invalid key type array",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[[2]i32]i32{}
+	return 0
+}
+`,
+			substr: "map key type",
+		},
+		{
+			name: "has requires map",
+			src: `
+package main
+
+fn main() i32 {
+	x := has(1, 2)
+	return 0
+}
+`,
+			substr: "has requires a map",
+		},
+		{
+			name: "delete requires map",
+			src: `
+package main
+
+fn main() i32 {
+	delete(1, 2)
+	return 0
+}
+`,
+			substr: "delete requires a map",
+		},
+		{
+			name: "map index returns errorable",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[str]i32{}
+	x := m["k"]
+	return 0
+}
+`,
+			substr: "errorable value cannot be bound to a local",
 		},
 	}
 

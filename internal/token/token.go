@@ -63,6 +63,7 @@ const (
 	False
 	Nil
 	Error
+	Map
 )
 
 func (k Kind) String() string {
@@ -177,6 +178,8 @@ func (k Kind) String() string {
 		return "nil"
 	case Error:
 		return "error"
+	case Map:
+		return "map"
 	default:
 		return fmt.Sprintf("token(%d)", k)
 	}

@@ -61,6 +61,7 @@ Implemented types:
 - user-defined `enum` types
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
+- map types such as `map[str]i32` and `map[i32]bool`
 
 ### Error-Related Types
 
@@ -244,6 +245,44 @@ Slices are views over runtime-managed backing storage. Slicing shares storage,
 and `append` may reuse that storage or allocate a new backing buffer.
 
 Slice indexing and slicing are bounds-checked at runtime and trap on invalid ranges.
+
+## Maps
+
+Maps are built-in associative containers:
+
+```yar
+counts := map[str]i32{"main": 1}
+counts["check"] = 2
+
+if has(counts, "main") {
+    x := counts["main"]?
+    print_int(x)
+}
+
+delete(counts, "check")
+print_int(len(counts))
+```
+
+Supported map operations:
+
+- map types: `map[K]V`
+- map literals: `map[K]V{key1: value1, key2: value2}`
+- element assignment: `m[key] = value`
+- element lookup: `m[key]` returns `!V` (yields `error.MissingKey` if key is absent)
+- `has(m, key)` returns `bool`
+- `delete(m, key)` returns `void`
+- `len(m)` returns `i32`
+
+Supported key types: `bool`, `i32`, `i64`, `str`.
+
+Map values are heap-allocated opaque handles. Map lookups return `!V` and compose
+with `?` and `or |err| { ... }` like any other errorable expression.
+
+There are no:
+
+- iteration
+- ordering guarantees
+- set syntax
 
 ## Functions
 
@@ -502,8 +541,10 @@ Builtins are fixed by the compiler:
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T | []T) i32`
+- `len([N]T | []T | map[K]V) i32`
 - `append([]T, T) []T`
+- `has(map[K]V, K) bool`
+- `delete(map[K]V, K) void`
 
 They are not user-overridable.
 
