@@ -8,19 +8,28 @@ updated.
 
 ## Scope
 
-- One source file per program
-- `package main` only
-- Top-level `struct` and `fn` declarations only
+- Multi-file packages
+- Entry `package main` plus imported packages
+- Top-level `struct` and `fn` declarations, with optional `pub`
 - Native code generation through LLVM IR plus `clang`
 
 ## File Shape
 
-A valid program:
+A valid entry package:
 
 - starts with `package main`
+- may contain one or more `.yar` files in the same directory
+- may contain zero or more `import "path"` declarations after the package clause
 - contains zero or more top-level `struct` declarations
 - contains zero or more top-level `fn` declarations
 - must define `main`
+
+Imported packages:
+
+- live in subdirectories under the entry package root
+- use `import "path"` with slash-separated package paths
+- must declare a package name matching the final import path segment
+- may expose top-level `struct` and `fn` declarations with `pub`
 
 `main` must return either:
 
@@ -107,9 +116,23 @@ Supported struct operations:
 There are no:
 
 - methods
-- visibility modifiers
 - embedding
 - tags
+
+Top-level visibility uses `pub`:
+
+```yar
+pub struct User {
+    id i32
+}
+
+pub fn lookup() User {
+    return User{id: 1}
+}
+```
+
+Exported declarations cannot expose package-local struct types through public
+fields, parameters, or return types.
 
 ## Arrays
 
@@ -144,9 +167,20 @@ Parameters are positional and explicitly typed.
 There are no:
 
 - methods
-- imports
 - generics
 - variadics
+
+Cross-package function calls stay qualified:
+
+```yar
+package main
+
+import "lexer"
+
+fn main() i32 {
+    return lexer.exit_code()
+}
+```
 
 ## Statements
 
@@ -171,6 +205,7 @@ Implemented statements:
 Implemented expressions:
 
 - local identifiers
+- package-qualified function calls
 - integer literals
 - string literals
 - boolean literals
@@ -357,11 +392,10 @@ with status `1`.
 
 The compiler does not currently implement:
 
-- multi-file packages
-- imports
 - methods
 - enums
 - slices
+- import aliases
 - pattern matching
 - exceptions
 - automatic recovery

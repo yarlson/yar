@@ -28,8 +28,8 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		usedResultType: make(map[checker.Type]bool),
 	}
 
-	for fn, sig := range info.Functions {
-		g.functions[fn.Name] = sig
+	for _, sig := range info.Functions {
+		g.functions[sig.FullName] = sig
 		if sig.Errorable {
 			g.usedResultType[sig.Return] = true
 		}
@@ -115,22 +115,25 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 func builtins() map[string]checker.Signature {
 	return map[string]checker.Signature{
 		"print": {
-			Name:    "print",
-			Params:  []checker.Type{checker.TypeStr},
-			Return:  checker.TypeVoid,
-			Builtin: true,
+			Name:     "print",
+			FullName: "print",
+			Params:   []checker.Type{checker.TypeStr},
+			Return:   checker.TypeVoid,
+			Builtin:  true,
 		},
 		"print_int": {
-			Name:    "print_int",
-			Params:  []checker.Type{checker.TypeI32},
-			Return:  checker.TypeVoid,
-			Builtin: true,
+			Name:     "print_int",
+			FullName: "print_int",
+			Params:   []checker.Type{checker.TypeI32},
+			Return:   checker.TypeVoid,
+			Builtin:  true,
 		},
 		"panic": {
-			Name:    "panic",
-			Params:  []checker.Type{checker.TypeStr},
-			Return:  checker.TypeNoReturn,
-			Builtin: true,
+			Name:     "panic",
+			FullName: "panic",
+			Params:   []checker.Type{checker.TypeStr},
+			Return:   checker.TypeNoReturn,
+			Builtin:  true,
 		},
 	}
 }
@@ -282,12 +285,17 @@ func escapeLLVMString(value string) string {
 
 func sanitizeLabel(name string) string {
 	var b strings.Builder
-	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			b.WriteByte(c)
 			continue
 		}
-		b.WriteByte('_')
+		if c == '_' {
+			b.WriteString("__")
+			continue
+		}
+		fmt.Fprintf(&b, "_%02X", c)
 	}
 	return b.String()
 }
@@ -335,7 +343,7 @@ func (f *functionEmitter) emit() string {
 		params = append(params, fmt.Sprintf("%s %%arg%d", f.g.llvmType(f.sig.Params[i]), i))
 	}
 
-	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.fn.Name), strings.Join(params, ", "))
+	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.sig.FullName), strings.Join(params, ", "))
 	f.emitLabel("entry")
 	for i, param := range f.fn.Params {
 		slot := f.newTemp("slot")
@@ -894,20 +902,24 @@ func (f *functionEmitter) genShortCircuitBinary(expr *ast.BinaryExpr) exprValue 
 }
 
 func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
-	if expr.Name == "len" {
+	sig, ok := f.g.info.Calls[expr]
+	if !ok {
+		panic("missing call signature")
+	}
+
+	if sig.Name == "len" && sig.Builtin {
 		_ = f.genExpression(expr.Args[0])
 		array, _ := checker.ParseArrayType(f.exprType(expr.Args[0]))
 		return exprValue{ref: fmt.Sprintf("%d", array.Len), typ: checker.TypeI32}
 	}
 
-	sig := f.g.functions[expr.Name]
 	args := make([]exprValue, 0, len(expr.Args))
 	for _, arg := range expr.Args {
 		args = append(args, f.genExpression(arg))
 	}
 
 	if sig.Builtin {
-		switch expr.Name {
+		switch sig.Name {
 		case "print":
 			ptr := f.newTemp("str.ptr")
 			length := f.newTemp("str.len")
@@ -940,13 +952,13 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		callType = f.g.resultTypeName(sig.Return)
 	}
 	if sig.Return == checker.TypeNoReturn {
-		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(expr.Name), strings.Join(llvmArgs, ", "))
+		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
 		f.builder.WriteString("  unreachable\n")
 		f.terminated = true
 		return exprValue{typ: checker.TypeNoReturn}
 	}
 	tmp := f.newTemp("call")
-	fmt.Fprintf(&f.builder, "  %%%s = call %s %s(%s)\n", tmp, callType, f.g.functionName(expr.Name), strings.Join(llvmArgs, ", "))
+	fmt.Fprintf(&f.builder, "  %%%s = call %s %s(%s)\n", tmp, callType, f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
 	return exprValue{
 		ref: "%" + tmp,
 		typ: sig.Return,

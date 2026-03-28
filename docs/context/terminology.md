@@ -2,7 +2,13 @@
 
 yar — The compiler CLI and the source language implemented in this repository.
 
-program — A parsed source file with a package declaration plus top-level `struct` and `fn` declarations.
+program — A loaded package graph rooted at an entry `package main`.
+
+file AST — A parsed source file with a package declaration, optional imports,
+and top-level `struct` and `fn` declarations.
+
+package — A directory of one or more `.yar` files that declare the same package
+name and share one top-level namespace.
 
 unit — The result of successful compilation before linking; it contains generated LLVM IR and checker metadata.
 

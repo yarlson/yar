@@ -20,8 +20,8 @@ implements today.
 
 Current baseline already includes:
 
-- one-file programs
-- `package main`
+- multi-file packages
+- entry `package main` plus imports
 - top-level `struct` and `fn`
 - primitive types plus `error`
 - fixed-size arrays
@@ -59,8 +59,6 @@ The goal is not lots of new features, but a cleaner and more uniform language.
 
 ### v0.2 likely non-goals
 
-- imports
-- multi-file packages
 - methods
 - enums
 - slices
@@ -70,26 +68,16 @@ The goal is not lots of new features, but a cleaner and more uniform language.
 
 ---
 
-## v0.3 candidate capability: code organization
+## v0.3 candidate capability: richer package ergonomics
 
-The next major missing capability after baseline completeness is code
-organization beyond a single file.
+Core code organization is now implemented. The next package-related work should
+be smaller follow-on improvements rather than the initial package model.
 
 ### Candidate focus
 
-- imports
-- multi-file packages
-- symbol visibility / package boundaries as needed
-
-This milestone should aim to make larger programs possible.
-
-### Explicit caution
-
-Do not start this milestone until:
-
-- name resolution rules are written down
-- package/file ownership semantics are clear
-- builtin and package symbol interactions are specified
+- import aliases if they become necessary
+- clearer package-root and module conventions
+- richer diagnostics around package loading
 
 ---
 
@@ -130,8 +118,6 @@ These are interesting but not currently committed:
 
 - slices
 - methods
-- imports
-- multi-file packages
 - enums / tagged unions
 - richer builtin library
 - more numeric types

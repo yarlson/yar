@@ -7,8 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"yar/internal/diag"
 )
 
 func TestCompile(t *testing.T) {
@@ -357,6 +360,257 @@ fn main() i32 {
 	}
 }
 
+func TestCompilePathMultiFilePackage(t *testing.T) {
+	t.Parallel()
+
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "imports_ok", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+	if unit.IR == "" {
+		t.Fatal("expected LLVM IR")
+	}
+	if !strings.Contains(unit.IR, "@yar.lexer.classify") {
+		t.Fatalf("expected imported package function in IR:\n%s", unit.IR)
+	}
+}
+
+func TestBuildAndRunImportFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "imports_ok", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestCompilePathRejectsUnexportedImport(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	return lib.hidden()
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+fn hidden() i32 {
+	return 0
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "package \"lib\" does not export function \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsImportCycle(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "a"
+
+fn main() i32 {
+	return a.value()
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "a", "a.yar"), `package a
+
+import "b"
+
+pub fn value() i32 {
+	return b.value()
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "b", "b.yar"), `package b
+
+import "a"
+
+pub fn value() i32 {
+	return 0
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "import cycle") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsExportedFunctionUsingHiddenType(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	return 0
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+struct hidden {
+	id i32
+}
+
+pub fn make() hidden {
+	return hidden{id: 1}
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "exported function \"make\" cannot use non-exported type \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsExportedStructUsingHiddenType(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	return 0
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+struct hidden {
+	id i32
+}
+
+pub struct Wrapper {
+	inner hidden
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "exported struct \"Wrapper\" cannot use non-exported type \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathReportsMissingImportAsDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "missing"
+
+fn main() i32 {
+	return 0
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatalf("expected diagnostics, got error: %v", err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "import \"missing\" could not be loaded") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestBuildPathAllowsDistinctPackageNamesThatPreviouslyCollided(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "a/b_c"
+import "a_b/c"
+
+fn main() i32 {
+	left := b_c.make()
+	right := c.make()
+	if left.value == 1 && right.value == 2 {
+		return 0
+	}
+	return 1
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "a", "b_c", "lib.yar"), `package b_c
+
+pub struct Pair {
+	value i32
+}
+
+pub fn make() Pair {
+	return Pair{value: 1}
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "a_b", "c", "lib.yar"), `package c
+
+pub struct Pair {
+	value i32
+}
+
+pub fn make() Pair {
+	return Pair{value: 2}
+}
+`)
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func buildAndRun(t *testing.T, src string) (string, error) {
 	t.Helper()
 
@@ -377,4 +631,45 @@ func buildAndRun(t *testing.T, src string) (string, error) {
 		return "", err
 	}
 	return output.String(), nil
+}
+
+func buildAndRunPath(t *testing.T, path string) (string, error) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, path, outPath); err != nil {
+		return "", err
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return output.String(), nil
+}
+
+func writeSourceFile(t *testing.T, path, src string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func joinDiagnosticMessages(diags []diag.Diagnostic) string {
+	parts := make([]string, 0, len(diags))
+	for _, diagnostic := range diags {
+		parts = append(parts, diagnostic.Message)
+	}
+	return strings.Join(parts, "\n")
 }

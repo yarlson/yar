@@ -32,10 +32,13 @@ type ExprType struct {
 
 type Signature struct {
 	Name      string
+	Package   string
+	FullName  string
 	Params    []Type
 	Return    Type
 	Errorable bool
 	Builtin   bool
+	Exported  bool
 }
 
 type StructField struct {
@@ -44,8 +47,11 @@ type StructField struct {
 }
 
 type StructInfo struct {
-	Name   string
-	Fields []StructField
+	Name     string
+	Package  string
+	FullName string
+	Exported bool
+	Fields   []StructField
 }
 
 func (s StructInfo) Field(name string) (StructField, int, bool) {
@@ -59,6 +65,7 @@ func (s StructInfo) Field(name string) (StructField, int, bool) {
 
 type Info struct {
 	Functions     map[*ast.FunctionDecl]Signature
+	Calls         map[*ast.CallExpr]Signature
 	ExprTypes     map[ast.Expression]ExprType
 	Locals        map[ast.Node]Type
 	Structs       map[string]StructInfo
@@ -119,27 +126,31 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 	c := &Checker{
 		functions: map[string]Signature{
 			"print": {
-				Name:    "print",
-				Params:  []Type{TypeStr},
-				Return:  TypeVoid,
-				Builtin: true,
+				Name:     "print",
+				FullName: "print",
+				Params:   []Type{TypeStr},
+				Return:   TypeVoid,
+				Builtin:  true,
 			},
 			"print_int": {
-				Name:    "print_int",
-				Params:  []Type{TypeI32},
-				Return:  TypeVoid,
-				Builtin: true,
+				Name:     "print_int",
+				FullName: "print_int",
+				Params:   []Type{TypeI32},
+				Return:   TypeVoid,
+				Builtin:  true,
 			},
 			"panic": {
-				Name:    "panic",
-				Params:  []Type{TypeStr},
-				Return:  TypeNoReturn,
-				Builtin: true,
+				Name:     "panic",
+				FullName: "panic",
+				Params:   []Type{TypeStr},
+				Return:   TypeNoReturn,
+				Builtin:  true,
 			},
 		},
 		structs: make(map[string]*ast.StructDecl),
 		info: Info{
 			Functions:  make(map[*ast.FunctionDecl]Signature),
+			Calls:      make(map[*ast.CallExpr]Signature),
 			ExprTypes:  make(map[ast.Expression]ExprType),
 			Locals:     make(map[ast.Node]Type),
 			Structs:    make(map[string]StructInfo),
@@ -203,8 +214,10 @@ func (c *Checker) checkProgram(program *ast.Program) {
 		}
 		sig := Signature{
 			Name:      fn.Name,
+			FullName:  fn.Name,
 			Return:    c.resolveTypeRef(fn.Return),
 			Errorable: fn.ReturnIsBang,
+			Exported:  fn.Exported,
 		}
 		if sig.Return == TypeNoReturn && sig.Errorable {
 			c.diag.Add(fn.Return.Pos, "noreturn functions cannot also be errorable")
@@ -780,9 +793,10 @@ func (c *Checker) checkArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralEx
 }
 
 func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
-	if call.Name == "len" {
+	name, namePos, ok := callName(call.Callee)
+	if ok && name == "len" {
 		if len(call.Args) != 1 {
-			c.diag.Add(call.NamePos, "function %q expects 1 arguments, got %d", call.Name, len(call.Args))
+			c.diag.Add(namePos, "function %q expects 1 arguments, got %d", name, len(call.Args))
 			return ExprType{Base: TypeInvalid}
 		}
 		argType := c.checkExpression(call.Args[0])
@@ -795,17 +809,23 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeI32}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{TypeInvalid}, Return: TypeI32, Builtin: true}
 		c.info.ExprTypes[expr] = et
 		return et
 	}
 
-	sig, ok := c.functions[call.Name]
 	if !ok {
-		c.diag.Add(call.NamePos, "unknown function %q", call.Name)
+		c.diag.Add(call.Pos(), "call target must be a function name")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	sig, ok := c.functions[name]
+	if !ok {
+		c.diag.Add(namePos, "unknown function %q", name)
 		return ExprType{Base: TypeInvalid}
 	}
 	if len(call.Args) != len(sig.Params) {
-		c.diag.Add(call.NamePos, "function %q expects %d arguments, got %d", call.Name, len(sig.Params), len(call.Args))
+		c.diag.Add(namePos, "function %q expects %d arguments, got %d", name, len(sig.Params), len(call.Args))
 	}
 	for i, arg := range call.Args {
 		argType := c.checkExpression(arg)
@@ -814,7 +834,7 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			continue
 		}
 		if argType.Base == TypeNoReturn || argType.Base == TypeVoid {
-			c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, call.Name)
+			c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, name)
 			continue
 		}
 		if i >= len(sig.Params) {
@@ -822,12 +842,21 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		}
 		argType = c.coerceUntypedInteger(arg, argType, sig.Params[i])
 		if argType.Base != sig.Params[i] {
-			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, call.Name, sig.Params[i], argType.Base)
+			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, name, sig.Params[i], argType.Base)
 		}
 	}
 	et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
+	c.info.Calls[call] = sig
 	c.info.ExprTypes[expr] = et
 	return et
+}
+
+func callName(expr ast.Expression) (string, token.Position, bool) {
+	ident, ok := expr.(*ast.IdentExpr)
+	if !ok {
+		return "", token.Position{}, false
+	}
+	return ident.Name, ident.NamePos, true
 }
 
 func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprType {

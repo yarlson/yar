@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 	"yar/internal/compiler"
 	"yar/internal/diag"
@@ -38,12 +37,7 @@ func run() int {
 }
 
 func runCheck(path string) int {
-	src, err := readSourceFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	_, diagnostics, err := compiler.Compile(string(src))
+	_, diagnostics, err := compiler.CompilePath(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -56,12 +50,7 @@ func runCheck(path string) int {
 }
 
 func runEmitIR(path string) int {
-	src, err := readSourceFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	unit, diagnostics, err := compiler.Compile(string(src))
+	unit, diagnostics, err := compiler.CompilePath(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -102,12 +91,7 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: yar build <file> [-o output]")
 		return 2
 	}
-	src, err := readSourceFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	_, diagnostics, err := compiler.Compile(string(src))
+	_, diagnostics, err := compiler.CompilePath(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -119,7 +103,7 @@ func runBuild(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := compiler.Build(ctx, string(src), output); err != nil {
+	if err := compiler.BuildPath(ctx, path, output); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -127,12 +111,7 @@ func runBuild(args []string) int {
 }
 
 func runRun(path string) int {
-	src, err := readSourceFile(path)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	_, diagnostics, err := compiler.Compile(string(src))
+	_, diagnostics, err := compiler.CompilePath(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -144,7 +123,7 @@ func runRun(path string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := compiler.Run(ctx, string(src)); err != nil {
+	if err := compiler.RunPath(ctx, path); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -158,13 +137,4 @@ func printDiagnostics(path string, diagnostics []diag.Diagnostic) {
 		b.WriteByte('\n')
 	}
 	_, _ = os.Stderr.Write(b.Bytes())
-}
-
-func readSourceFile(path string) ([]byte, error) {
-	cleanPath := filepath.Clean(path)
-	if cleanPath == "." {
-		return nil, fmt.Errorf("source path must name a file")
-	}
-
-	return os.ReadFile(cleanPath)
 }

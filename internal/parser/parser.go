@@ -15,7 +15,11 @@ type Parser struct {
 }
 
 func Parse(src string) (*ast.Program, []diag.Diagnostic) {
-	lex := lexer.New(src)
+	return ParseFile("", src)
+}
+
+func ParseFile(path, src string) (*ast.Program, []diag.Diagnostic) {
+	lex := lexer.NewFile(src, path)
 	tokens := lex.Lex()
 
 	p := &Parser{tokens: tokens}
@@ -38,14 +42,23 @@ func (p *Parser) parseProgram() *ast.Program {
 		PackageName: nameTok.Text,
 	}
 
+	for p.at(token.Import) {
+		program.Imports = append(program.Imports, p.parseImport())
+	}
+
 	for !p.at(token.EOF) {
+		exported := false
+		if p.at(token.Pub) {
+			exported = true
+			p.advance()
+		}
 		switch p.current().Kind {
 		case token.Struct:
-			if decl := p.parseStruct(); decl != nil {
+			if decl := p.parseStruct(exported); decl != nil {
 				program.Structs = append(program.Structs, decl)
 			}
 		case token.Fn:
-			if fn := p.parseFunction(); fn != nil {
+			if fn := p.parseFunction(exported); fn != nil {
 				program.Functions = append(program.Functions, fn)
 			}
 		default:
@@ -56,13 +69,24 @@ func (p *Parser) parseProgram() *ast.Program {
 	return program
 }
 
-func (p *Parser) parseStruct() *ast.StructDecl {
+func (p *Parser) parseImport() ast.ImportDecl {
+	importTok := p.expect(token.Import, "expected import")
+	pathTok := p.expect(token.String, "expected import path string")
+	return ast.ImportDecl{
+		ImportPos: importTok.Pos,
+		Path:      pathTok.Text,
+		PathPos:   pathTok.Pos,
+	}
+}
+
+func (p *Parser) parseStruct(exported bool) *ast.StructDecl {
 	structTok := p.expect(token.Struct, "expected struct")
 	nameTok := p.expect(token.Ident, "expected struct name")
 	p.expect(token.LBrace, "expected '{' after struct name")
 
 	decl := &ast.StructDecl{
 		StructPos: structTok.Pos,
+		Exported:  exported,
 		Name:      nameTok.Text,
 		NamePos:   nameTok.Pos,
 	}
@@ -79,7 +103,7 @@ func (p *Parser) parseStruct() *ast.StructDecl {
 	return decl
 }
 
-func (p *Parser) parseFunction() *ast.FunctionDecl {
+func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 	p.expect(token.Fn, "expected fn")
 	nameTok := p.expect(token.Ident, "expected function name")
 	p.expect(token.LParen, "expected '(' after function name")
@@ -109,6 +133,7 @@ func (p *Parser) parseFunction() *ast.FunctionDecl {
 	body := p.parseBlock()
 
 	return &ast.FunctionDecl{
+		Exported:     exported,
 		Name:         nameTok.Text,
 		NamePos:      nameTok.Pos,
 		Params:       params,
@@ -136,7 +161,15 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		return ast.TypeRef{Name: tok.Text, Pos: tok.Pos}
 	}
 	p.advance()
-	return ast.TypeRef{Name: tok.Text, Pos: tok.Pos}
+	name := tok.Text
+	if tok.Kind == token.Ident {
+		for p.at(token.Dot) {
+			p.advance()
+			partTok := p.expect(token.Ident, "expected type name after '.'")
+			name += "." + partTok.Text
+		}
+	}
+	return ast.TypeRef{Name: name, Pos: tok.Pos}
 }
 
 func (p *Parser) parseBlock() *ast.BlockStmt {
@@ -513,11 +546,13 @@ func (p *Parser) parsePostfix() ast.Expression {
 	for {
 		switch {
 		case p.at(token.LParen):
-			ident, ok := expr.(*ast.IdentExpr)
-			if !ok {
+			expr = p.finishCall(expr)
+		case p.at(token.LBrace):
+			typeRef, ok := typeRefFromExpression(expr)
+			if !ok || !p.looksLikeStructLiteral() {
 				return expr
 			}
-			expr = p.finishCall(ident)
+			expr = p.finishStructLiteral(typeRef)
 		case p.at(token.Dot):
 			dotTok := p.expect(token.Dot, "expected '.'")
 			fieldTok := p.expect(token.Ident, "expected field name")
@@ -554,7 +589,7 @@ func (p *Parser) parsePrimary() ast.Expression {
 	case token.Ident:
 		p.advance()
 		if p.at(token.LBrace) && p.looksLikeStructLiteral() {
-			return p.parseStructLiteral(tok)
+			return p.finishStructLiteral(ast.TypeRef{Name: tok.Text, Pos: tok.Pos})
 		}
 		return &ast.IdentExpr{Name: tok.Text, NamePos: tok.Pos}
 	case token.Int:
@@ -593,8 +628,7 @@ func (p *Parser) parsePrimary() ast.Expression {
 	}
 }
 
-func (p *Parser) parseStructLiteral(typeTok token.Token) ast.Expression {
-	typeRef := ast.TypeRef{Name: typeTok.Text, Pos: typeTok.Pos}
+func (p *Parser) finishStructLiteral(typeRef ast.TypeRef) ast.Expression {
 	lbrace := p.expect(token.LBrace, "expected '{'")
 	expr := &ast.StructLiteralExpr{
 		Type:   typeRef,
@@ -644,7 +678,7 @@ func (p *Parser) parseArrayLiteral() ast.Expression {
 	return expr
 }
 
-func (p *Parser) finishCall(name *ast.IdentExpr) ast.Expression {
+func (p *Parser) finishCall(callee ast.Expression) ast.Expression {
 	p.expect(token.LParen, "expected '('")
 	var args []ast.Expression
 	for !p.at(token.RParen) && !p.at(token.EOF) {
@@ -656,9 +690,23 @@ func (p *Parser) finishCall(name *ast.IdentExpr) ast.Expression {
 	}
 	p.expect(token.RParen, "expected ')'")
 	return &ast.CallExpr{
-		Name:    name.Name,
-		NamePos: name.NamePos,
-		Args:    args,
+		Callee: callee,
+		Args:   args,
+	}
+}
+
+func typeRefFromExpression(expr ast.Expression) (ast.TypeRef, bool) {
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		return ast.TypeRef{Name: e.Name, Pos: e.NamePos}, true
+	case *ast.SelectorExpr:
+		inner, ok := typeRefFromExpression(e.Inner)
+		if !ok {
+			return ast.TypeRef{}, false
+		}
+		return ast.TypeRef{Name: inner.Name + "." + e.Name, Pos: inner.Pos}, true
+	default:
+		return ast.TypeRef{}, false
 	}
 }
 

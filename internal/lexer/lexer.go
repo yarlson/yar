@@ -10,6 +10,7 @@ import (
 
 type Lexer struct {
 	src    string
+	file   string
 	offset int
 	line   int
 	column int
@@ -17,8 +18,13 @@ type Lexer struct {
 }
 
 func New(src string) *Lexer {
+	return NewFile(src, "")
+}
+
+func NewFile(src, file string) *Lexer {
 	return &Lexer{
 		src:    src,
+		file:   file,
 		line:   1,
 		column: 1,
 	}
@@ -32,7 +38,7 @@ func (l *Lexer) Lex() []token.Token {
 	var tokens []token.Token
 	for {
 		l.skipTrivia()
-		pos := token.Position{Line: l.line, Column: l.column}
+		pos := token.Position{File: l.file, Line: l.line, Column: l.column}
 		if l.offset >= len(l.src) {
 			tokens = append(tokens, token.Token{Kind: token.EOF, Pos: pos})
 			return tokens
@@ -271,8 +277,12 @@ func lookupKeyword(text string) token.Kind {
 	switch text {
 	case "package":
 		return token.Package
+	case "import":
+		return token.Import
 	case "fn":
 		return token.Fn
+	case "pub":
+		return token.Pub
 	case "let":
 		return token.Let
 	case "var":

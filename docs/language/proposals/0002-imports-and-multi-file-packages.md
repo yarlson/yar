@@ -1,6 +1,6 @@
 # Proposal: Imports and Multi-File Packages
 
-Status: deferred
+Status: accepted
 
 ## 1. Summary
 
@@ -127,6 +127,8 @@ requires a `main` package with `main` returning `i32` or `!i32`.
 
 - package-qualified references such as `token.Kind` and `lexer.classify` are
   valid only when the imported package exports that name
+- exported declarations cannot expose package-local types through public
+  parameters, returns, or struct fields
 - two files in the same package contribute to the same package-level type and
   function namespace
 - duplicate top-level names in one package are invalid, even across files
@@ -229,11 +231,11 @@ carefully.
 
 ## 13. Decision
 
-Deferred.
+Accepted.
 
-This is clearly needed for larger programs and self-hosting, but it should wait
-until the core language surface is more settled and the package model can be
-designed as a coherent whole.
+The compiler now supports multi-file packages, explicit imports, package-
+qualified cross-package references, and `pub` exports for top-level `struct`
+and `fn` declarations.
 
 ## 14. Implementation Checklist
 

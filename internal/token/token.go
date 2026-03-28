@@ -42,7 +42,9 @@ const (
 	BangEqual
 
 	Package
+	Import
 	Fn
+	Pub
 	Let
 	Var
 	Struct
@@ -128,8 +130,12 @@ func (k Kind) String() string {
 		return "!="
 	case Package:
 		return "package"
+	case Import:
+		return "import"
 	case Fn:
 		return "fn"
+	case Pub:
+		return "pub"
 	case Let:
 		return "let"
 	case Var:
@@ -162,6 +168,7 @@ func (k Kind) String() string {
 }
 
 type Position struct {
+	File   string
 	Line   int
 	Column int
 }

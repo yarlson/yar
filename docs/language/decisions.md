@@ -59,6 +59,14 @@ Status: accepted
 `&&` and `||` are supported for `bool` operands and lower to explicit
 short-circuit control flow rather than eager evaluation.
 
+### Imports and multi-file packages
+
+Status: accepted
+
+Packages may span multiple files, imports are explicit, cross-package references
+stay qualified, and top-level declarations are package-local unless marked
+`pub`.
+
 ---
 
 ## Rejected
@@ -98,13 +106,6 @@ Status: deferred
 
 Deferred until there is a stronger need for associated behavior and a clear
 interaction story with structs and future modules.
-
-### Imports / multi-file packages
-
-Status: deferred
-
-Important for larger programs, but deferred until a dedicated code-organization
-milestone.
 
 ### Enums / tagged unions
 

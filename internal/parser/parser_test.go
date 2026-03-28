@@ -219,3 +219,68 @@ fn main() i32 {
 		t.Fatalf("expected selector assignment target, got %T", assign.Target)
 	}
 }
+
+func TestParseImportsPubAndQualifiedCall(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+import "lexer"
+import "token"
+
+pub struct User {
+	id i32
+}
+
+pub fn use_kind(kind token.Kind) i32 {
+	return 0
+}
+
+fn main() i32 {
+	return lexer.exit_code()
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if len(program.Imports) != 2 {
+		t.Fatalf("expected 2 imports, got %d", len(program.Imports))
+	}
+	if got, want := program.Imports[0].Path, "lexer"; got != want {
+		t.Fatalf("unexpected first import path: got %q want %q", got, want)
+	}
+	if !program.Structs[0].Exported {
+		t.Fatal("expected struct to be exported")
+	}
+	if !program.Functions[0].Exported {
+		t.Fatal("expected use_kind to be exported")
+	}
+	if got, want := program.Functions[0].Params[0].Type.Name, "token.Kind"; got != want {
+		t.Fatalf("unexpected qualified param type: got %q want %q", got, want)
+	}
+
+	ret, ok := program.Functions[1].Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok {
+		t.Fatalf("expected return statement, got %T", program.Functions[1].Body.Stmts[0])
+	}
+	call, ok := ret.Value.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expression, got %T", ret.Value)
+	}
+	selector, ok := call.Callee.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("expected qualified callee, got %T", call.Callee)
+	}
+	inner, ok := selector.Inner.(*ast.IdentExpr)
+	if !ok {
+		t.Fatalf("expected package name identifier, got %T", selector.Inner)
+	}
+	if got, want := inner.Name, "lexer"; got != want {
+		t.Fatalf("unexpected callee package: got %q want %q", got, want)
+	}
+	if got, want := selector.Name, "exit_code"; got != want {
+		t.Fatalf("unexpected callee name: got %q want %q", got, want)
+	}
+}

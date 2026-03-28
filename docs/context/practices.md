@@ -3,9 +3,15 @@
 - The repository is organized as a single-project Go module with one user-facing runtime process: the `yar` CLI.
 - Compilation is staged as lex/parse, semantic checking, LLVM IR generation, and optional native linking.
 - Parse and semantic failures are returned as diagnostics; infrastructure failures such as file I/O or `clang` execution are returned as Go errors.
-- Source programs must declare `package main`.
+- Entry programs must declare `package main`.
 - A user-defined `main` function is required, and it must return `i32` or `!i32`.
-- Top-level declarations may be `struct` or `fn`.
+- Packages may span multiple `.yar` files in one directory.
+- Imports are explicit `import "path"` declarations after the package clause.
+- Imported names stay package-qualified; imports do not inject unqualified exported names into local scope.
+- Top-level declarations may be `struct` or `fn`, optionally prefixed with `pub`.
+- Cross-package references may use only exported top-level declarations.
+- Exported declarations may not expose package-local struct types in their public surface.
+- Import cycles are rejected.
 - Local variables are introduced with `:=` or `var`, scoped by blocks, and may be reassigned only after declaration.
 - Raw errorable values cannot be bound, assigned, passed as arguments, used in conditions, used in unary or binary operators, or accessed through fields or indexing.
 - `&&` and `||` short-circuit in source order and require non-errorable `bool` operands.

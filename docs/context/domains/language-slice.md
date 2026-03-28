@@ -2,8 +2,11 @@
 
 ## Source Shape
 
-- A source file starts with a package declaration and is accepted only when the package name is `main`.
-- Top-level declarations may be `struct` or `fn`.
+- A source file starts with a package declaration.
+- Entry builds require a `package main` root package with `main` returning `i32` or `!i32`.
+- A package is one or more files in one directory that declare the same package name.
+- Imports are explicit `import "path"` declarations immediately after the package clause.
+- Top-level declarations may be `struct` or `fn`, optionally prefixed with `pub`.
 - Functions have positional parameters and an explicit return type.
 - Return types may be prefixed with `!` to mark the function as errorable.
 - `let` is not supported; local declarations use `:=` or `var`.
@@ -38,6 +41,7 @@
 ## Expressions
 
 - Local identifier lookup
+- Package-qualified function calls such as `lexer.classify()`
 - Integer literals with coercion into `i32` or `i64`
 - String literals with `\n`, `\t`, `\\`, and `\"` escapes
 - Boolean literals
@@ -57,7 +61,12 @@
 
 ## Semantic Rules
 
-- `main` must exist and return `i32` or `!i32`.
+- Entry `main` must exist and return `i32` or `!i32`.
+- Imported package references must stay qualified.
+- Imported packages expose only `pub` top-level declarations.
+- Exported functions and structs cannot expose non-exported local struct types in parameters, returns, or fields.
+- Duplicate top-level names are rejected package-wide, including across files.
+- Import cycles are rejected.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
 - Struct fields and array elements cannot use `void`, `noreturn`, or an unknown type.
 - Recursive struct containment is rejected.
@@ -86,3 +95,5 @@
 - `print_int(i32) void`
 - `panic(str) noreturn`
 - `len([N]T) i32`
+
+Builtins remain globally available and are not imported.

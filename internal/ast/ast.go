@@ -24,6 +24,7 @@ type Expression interface {
 type Program struct {
 	PackagePos  token.Position
 	PackageName string
+	Imports     []ImportDecl
 	Structs     []*StructDecl
 	Functions   []*FunctionDecl
 }
@@ -37,8 +38,15 @@ type TypeRef struct {
 	Pos  token.Position
 }
 
+type ImportDecl struct {
+	ImportPos token.Position
+	Path      string
+	PathPos   token.Position
+}
+
 type StructDecl struct {
 	StructPos token.Position
+	Exported  bool
 	Name      string
 	NamePos   token.Position
 	Fields    []StructField
@@ -57,6 +65,7 @@ type StructField struct {
 }
 
 type FunctionDecl struct {
+	Exported     bool
 	Name         string
 	NamePos      token.Position
 	Params       []Param
@@ -250,13 +259,12 @@ func (e *ErrorLiteral) Pos() token.Position {
 func (*ErrorLiteral) exprNode() {}
 
 type CallExpr struct {
-	Name    string
-	NamePos token.Position
-	Args    []Expression
+	Callee Expression
+	Args   []Expression
 }
 
 func (e *CallExpr) Pos() token.Position {
-	return e.NamePos
+	return e.Callee.Pos()
 }
 
 func (*CallExpr) exprNode() {}

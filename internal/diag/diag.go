@@ -42,7 +42,11 @@ func Format(path string, diagnostics []Diagnostic) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "%s:%d:%d: %s", path, d.Pos.Line, d.Pos.Column, d.Message)
+		diagPath := path
+		if d.Pos.File != "" {
+			diagPath = d.Pos.File
+		}
+		fmt.Fprintf(&b, "%s:%d:%d: %s", diagPath, d.Pos.Line, d.Pos.Column, d.Message)
 	}
 	return b.String()
 }
