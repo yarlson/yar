@@ -141,7 +141,17 @@ Status: accepted
 
 The compiler embeds a standard library written in yar. Stdlib packages are
 resolved as a fallback when an import path does not match a local directory.
-Local packages take priority over stdlib. The first stdlib package is `strings`.
+Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`.
+
+### Text and UTF-8 helpers
+
+Status: accepted
+
+Helper functions for text-heavy programs live in stdlib packages (`strings`,
+`utf8`, `conv`) rather than as builtins. Three new builtins (`chr`, `i32_to_i64`,
+`i64_to_i32`) provide the minimal compiler-level support needed. The stdlib
+packages provide `utf8.decode`, `utf8.width`, rune classification, integer
+parsing, integer-to-string conversion, and single-byte string construction.
 
 ---
 

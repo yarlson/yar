@@ -555,6 +555,9 @@ Builtins are fixed by the compiler:
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
+- `chr(i32) str` — construct a one-byte string from a byte value (traps if value is outside 0–255)
+- `i32_to_i64(i32) i64` — widen an i32 to i64
+- `i64_to_i32(i64) i32` — truncate an i64 to i32
 
 They are not user-overridable.
 
@@ -596,6 +599,36 @@ Available functions:
 - `strings.trim_left(s str, cutset str) str`
 - `strings.trim_right(s str, cutset str) str`
 - `strings.join(parts []str, sep str) str`
+- `strings.from_byte(i32) str` — construct a single-byte string from a byte value
+- `strings.parse_i64(str) !i64` — parse a base-10 signed integer
+
+### `utf8`
+
+```yar
+import "utf8"
+```
+
+Available functions:
+
+- `utf8.decode(s str, off i32) !i32` — decode the rune at byte offset `off`
+- `utf8.width(s str, off i32) !i32` — byte width of the rune at byte offset `off`
+- `utf8.is_letter(r i32) bool` — classify a decoded rune as a letter or underscore
+- `utf8.is_digit(r i32) bool` — classify a decoded rune as an ASCII digit
+- `utf8.is_space(r i32) bool` — classify a decoded rune as whitespace
+
+UTF-8 errors return `error.InvalidUTF8`. Out-of-range offsets return
+`error.OutOfRange`.
+
+### `conv`
+
+```yar
+import "conv"
+```
+
+Available functions:
+
+- `conv.itoa(n i32) str` — convert an i32 to its base-10 decimal string
+- `conv.itoa64(n i64) str` — convert an i64 to its base-10 decimal string
 
 ## Not Implemented
 

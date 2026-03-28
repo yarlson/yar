@@ -145,3 +145,43 @@ pub fn join(parts []str, sep str) str {
     }
     return result
 }
+
+pub fn from_byte(b i32) str {
+    return chr(b)
+}
+
+fn parse_positive(s str, start i32) !i64 {
+    if start >= len(s) {
+        return error.InvalidInteger
+    }
+    result := i32_to_i64(0)
+    i := start
+    for i < len(s) {
+        b := s[i]
+        if b < 48 || b > 57 {
+            return error.InvalidInteger
+        }
+        d := i32_to_i64(b - 48)
+        prev := result
+        result = result * 10 + d
+        if result < prev {
+            return error.IntegerOverflow
+        }
+        i = i + 1
+    }
+    return result
+}
+
+pub fn parse_i64(s str) !i64 {
+    if len(s) == 0 {
+        return error.InvalidInteger
+    }
+    if s[0] == 45 {
+        pos := parse_positive(s, 1)?
+        return 0 - pos
+    }
+    if s[0] == 43 {
+        return parse_positive(s, 1)
+    }
+    return parse_positive(s, 0)
+}

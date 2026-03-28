@@ -1,6 +1,6 @@
 # Proposal: Text and UTF-8 Helpers
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -251,7 +251,13 @@ language surface. The stdlib infrastructure is in place and proven with the
 
 ## 13. Decision
 
-Pending.
+Accepted.
+
+Implemented with three builtins (`chr`, `i32_to_i64`, `i64_to_i32`) instead of
+the originally proposed single `chr` builtin. The additional integer conversion
+builtins were needed because the language lacks implicit widening/narrowing
+between `i32` and `i64`, making pure-yar implementations of `parse_i64` and
+`itoa64` impossible without them.
 
 This proposal deliberately keeps the helper set small and focused on the needs
 of lexing, parsing, and diagnostics, while leveraging the stdlib infrastructure

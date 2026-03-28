@@ -35,13 +35,42 @@ Functions:
 - `trim_right(s str, cutset str) str` — strip trailing bytes in cutset
 - `join(parts []str, sep str) str` — join slice of strings
 
-Internal helper `contains_byte` is not exported.
+Internal helpers `contains_byte` and `parse_positive` are not exported.
+
+Additional functions (proposal 0008):
+
+- `from_byte(i32) str` — construct a single-byte string (wraps `chr` builtin)
+- `parse_i64(str) !i64` — parse a base-10 signed integer; returns `error.InvalidInteger` or `error.IntegerOverflow`
+
+### `utf8`
+
+UTF-8 decoding and rune classification for lexers and diagnostic code.
+
+Functions:
+
+- `decode(s str, off i32) !i32` — decode the rune at byte offset `off`
+- `width(s str, off i32) !i32` — byte width of the rune at byte offset `off`
+- `is_letter(r i32) bool` — letter or underscore classification (ASCII plus common Unicode letter ranges)
+- `is_digit(r i32) bool` — ASCII digit 0–9
+- `is_space(r i32) bool` — Unicode whitespace codepoints
+
+Errors: `error.InvalidUTF8` for malformed sequences, `error.OutOfRange` for invalid offsets.
+
+### `conv`
+
+Integer-to-string conversion.
+
+Functions:
+
+- `itoa(n i32) str` — base-10 decimal string from i32
+- `itoa64(n i64) str` — base-10 decimal string from i64
+
+Depends on `strings.from_byte` for digit character construction.
 
 ## Constraints
 
-- All stdlib functions use only the public language surface. No compiler-internal backdoors.
-- Performance is naive and correct. Concatenation-heavy functions like `repeat` and `replace` are O(n^2) for large inputs — acceptable for the current stage.
-- `to_lower` and `to_upper` are deferred until a `chr(i32) str` builtin or equivalent exists (proposal 0008).
+- All stdlib functions use only the public language surface plus compiler builtins (`chr`, `i32_to_i64`, `i64_to_i32`). No compiler-internal backdoors.
+- Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs — acceptable for the current stage.
 - Stdlib packages are not versioned separately from the compiler.
 
 ## Adding a New Package
@@ -55,6 +84,6 @@ Internal helper `contains_byte` is not exported.
 ## Testing
 
 - `internal/stdlib/stdlib_test.go` covers embedding: `Has`, `ReadDir`, `ReadFile`.
-- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram` compiles and runs a program using all `strings` functions.
+- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, and `TestStdlibConvFixtureProgram` compile and run programs using stdlib functions.
 - `TestLocalPackageShadowsStdlib` verifies the shadowing behavior.
-- `testdata/stdlib_strings/main.yar` is the representative fixture.
+- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, and `testdata/stdlib_conv/main.yar` are the representative fixtures.

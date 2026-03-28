@@ -138,6 +138,7 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_map_has(ptr, ptr)\n")
 	b.WriteString("declare void @yar_map_delete(ptr, ptr)\n")
 	b.WriteString("declare i32 @yar_map_len(ptr)\n")
+	b.WriteString("declare %yar.str @yar_str_from_byte(i32)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -161,6 +162,27 @@ func builtins() map[string]checker.Signature {
 			FullName: "panic",
 			Params:   []checker.Type{checker.TypeStr},
 			Return:   checker.TypeNoReturn,
+			Builtin:  true,
+		},
+		"chr": {
+			Name:     "chr",
+			FullName: "chr",
+			Params:   []checker.Type{checker.TypeI32},
+			Return:   checker.TypeStr,
+			Builtin:  true,
+		},
+		"i32_to_i64": {
+			Name:     "i32_to_i64",
+			FullName: "i32_to_i64",
+			Params:   []checker.Type{checker.TypeI32},
+			Return:   checker.TypeI64,
+			Builtin:  true,
+		},
+		"i64_to_i32": {
+			Name:     "i64_to_i32",
+			FullName: "i64_to_i32",
+			Params:   []checker.Type{checker.TypeI64},
+			Return:   checker.TypeI32,
 			Builtin:  true,
 		},
 	}
@@ -1594,6 +1616,18 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 			f.builder.WriteString("  unreachable\n")
 			f.terminated = true
 			return exprValue{typ: checker.TypeNoReturn}
+		case "chr":
+			tmp := f.newTemp("chr")
+			fmt.Fprintf(&f.builder, "  %%%s = call %%yar.str @yar_str_from_byte(i32 %s)\n", tmp, args[0].ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeStr}
+		case "i32_to_i64":
+			tmp := f.newTemp("widen")
+			fmt.Fprintf(&f.builder, "  %%%s = sext i32 %s to i64\n", tmp, args[0].ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeI64}
+		case "i64_to_i32":
+			tmp := f.newTemp("narrow")
+			fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %s to i32\n", tmp, args[0].ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeI32}
 		}
 	}
 

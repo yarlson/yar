@@ -101,6 +101,20 @@ void yar_str_index_check(long long index, long long len) {
     }
 }
 
+yar_str yar_str_from_byte(int32_t value) {
+    yar_str result;
+    if (value < 0 || value > 255) {
+        static const char message[] = "runtime failure: chr value out of byte range\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    char *buf = (char *)malloc(1);
+    if (!buf) { yar_trap_oom(); }
+    buf[0] = (char)(unsigned char)value;
+    result.ptr = buf;
+    result.len = 1;
+    return result;
+}
+
 /* --- map runtime --- */
 
 #define YAR_MAP_INIT_CAP 8

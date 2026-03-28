@@ -234,7 +234,7 @@ func ParsePointerType(typ Type) (PointerType, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "print_int", "panic", "len", "append", "has", "delete":
+	case "print", "print_int", "panic", "len", "append", "has", "delete", "chr", "i32_to_i64", "i64_to_i32":
 		return true
 	default:
 		return false
@@ -298,6 +298,27 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				FullName: "delete",
 				Params:   []Type{TypeInvalid, TypeInvalid},
 				Return:   TypeVoid,
+				Builtin:  true,
+			},
+			"chr": {
+				Name:     "chr",
+				FullName: "chr",
+				Params:   []Type{TypeI32},
+				Return:   TypeStr,
+				Builtin:  true,
+			},
+			"i32_to_i64": {
+				Name:     "i32_to_i64",
+				FullName: "i32_to_i64",
+				Params:   []Type{TypeI32},
+				Return:   TypeI64,
+				Builtin:  true,
+			},
+			"i64_to_i32": {
+				Name:     "i64_to_i32",
+				FullName: "i64_to_i32",
+				Params:   []Type{TypeI64},
+				Return:   TypeI32,
 				Builtin:  true,
 			},
 		},

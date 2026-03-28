@@ -879,6 +879,42 @@ func TestStdlibStringsFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestStdlibUTF8FixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_utf8", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "utf8 ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStdlibConvFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_conv", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "conv ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStdlibStringsExtFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_strings_ext", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "strings_ext ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestStringOpsFixtureProgram(t *testing.T) {
 	t.Parallel()
 
