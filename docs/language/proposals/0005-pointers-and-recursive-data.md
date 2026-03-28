@@ -130,7 +130,8 @@ Examples:
 - checker: validate pointee types, dereference typing, assignment-target
   legality, pointer comparisons, and recursive-struct exceptions through `*T`
 - codegen: lower pointers to LLVM pointer values
-- runtime: add allocation support for `new(T)`
+- runtime: add allocation support for `new(T)` using the shared runtime-managed
+  memory model from proposal `0000-minimal-memory-management.md`
 
 The main implementation cost is memory management. The smallest viable version
 is explicit allocation through `new(T)` without exposing manual freeing yet.
@@ -188,7 +189,9 @@ imports, enums, and slices still do not let YAR model its own AST cleanly.
   `new(T)` as the only pointer-construction form initially?
 - Should pointer equality be limited to `== nil` / `!= nil`, or allow same-type
   pointer comparisons generally?
-- What long-term allocation and reclamation story best fits YAR?
+- Should pointer allocation and reclamation be treated as fully settled by
+  proposal `0000-minimal-memory-management.md`, or is any pointer-specific
+  clarification still needed?
 
 ## 13. Decision
 

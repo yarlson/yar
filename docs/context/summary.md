@@ -12,8 +12,8 @@ invoke `clang` with an embedded runtime to produce or run a native executable.
 - `internal/compiler` orchestrates parse, semantic check, IR generation, external linking, and process execution.
 - `internal/parser` and `internal/lexer` turn source text into an AST and diagnostics.
 - `internal/checker` owns semantic validation, local scope tracking, user-defined struct metadata, type inference for integer literals, builtin signatures, and error-code assignment.
-- `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, aggregate values, loops, and the generated native `main` wrapper.
-- `internal/runtime` embeds the small C runtime source that provides builtin I/O and panic behavior during linking.
+- `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, aggregate values, loops, the generated native `main` wrapper, and declarations for the shared runtime allocation helpers.
+- `internal/runtime` embeds the small C runtime source that provides builtin I/O, panic behavior, and the shared allocation/trap boundary during linking.
 
 ## Core Flow
 
@@ -40,11 +40,12 @@ invoke `clang` with an embedded runtime to produce or run a native executable.
 - Handle errors locally with `or |err| { ... }`.
 - Support aggregate values and return types with structs and fixed arrays.
 - Support loops and branch-based control flow for small real programs.
+- Expose a runtime-managed allocation boundary internally for future heap-backed features.
 
 ## Tech Stack
 
 - Go module with a single CLI entrypoint
 - Textual LLVM IR generation
 - External `clang` invocation for compile and link
-- Embedded C runtime source for builtin functions
+- Embedded C runtime source for builtin functions and shared allocation helpers
 - Go tests that validate compilation, executable output, panic behavior, unhandled errors, `i64` programs, and the v0.2 control-flow and aggregate surface

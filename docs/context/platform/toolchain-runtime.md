@@ -15,8 +15,17 @@
 - `yar_print(const char *data, long long len)` writes string data to stdout when the length is positive.
 - `yar_print_int(int32_t value)` prints a signed 32-bit integer with `printf`.
 - `yar_panic(const char *data, long long len)` writes the message to stderr, flushes stderr, and exits with status `1`.
+- `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on stderr and exit status `1`.
+- `yar_alloc(long long size)` allocates runtime-managed storage and traps on invalid size or allocation failure.
+- `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage and traps on invalid size or allocation failure.
+
+## Allocation Boundary
+
+- The compiler now emits declarations for shared runtime allocation helpers even though no user-facing heap syntax is implemented yet.
+- This establishes one allocation/trap boundary for future heap-backed features rather than separate per-feature runtime entry points.
+- Allocation failure is currently treated as an unrecoverable runtime failure, not a YAR `error` value.
 
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, v0.2 struct/array/loop programs, and the `?` / `or |err| { ... }` error-sugar paths through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

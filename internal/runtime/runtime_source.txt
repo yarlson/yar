@@ -2,6 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static void yar_runtime_fail(const char *data, long long len) {
+    if (len > 0) {
+        (void)fwrite(data, 1, (size_t)len, stderr);
+    }
+    (void)fflush(stderr);
+    exit(1);
+}
+
 void yar_print(const char *data, long long len) {
     if (len <= 0) {
         return;
@@ -14,9 +22,48 @@ void yar_print_int(int32_t value) {
 }
 
 void yar_panic(const char *data, long long len) {
-    if (len > 0) {
-        (void)fwrite(data, 1, (size_t)len, stderr);
+    yar_runtime_fail(data, len);
+}
+
+void yar_trap_oom(void) {
+    static const char message[] = "runtime failure: out of memory\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+}
+
+void *yar_alloc(long long size) {
+    void *ptr;
+
+    if (size < 0) {
+        static const char message[] = "runtime failure: invalid allocation size\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
     }
-    (void)fflush(stderr);
-    exit(1);
+
+    if (size == 0) {
+        size = 1;
+    }
+
+    ptr = malloc((size_t)size);
+    if (ptr == NULL) {
+        yar_trap_oom();
+    }
+    return ptr;
+}
+
+void *yar_alloc_zeroed(long long size) {
+    void *ptr;
+
+    if (size < 0) {
+        static const char message[] = "runtime failure: invalid allocation size\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+
+    if (size == 0) {
+        size = 1;
+    }
+
+    ptr = calloc(1, (size_t)size);
+    if (ptr == NULL) {
+        yar_trap_oom();
+    }
+    return ptr;
 }

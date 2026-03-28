@@ -101,6 +101,17 @@ Do not start this milestone until:
 
 ---
 
+## Accepted foundation: heap-backed feature memory model
+
+The minimal runtime-managed memory model is now an accepted design foundation.
+
+- future heap-backed features should reuse the shared allocation boundary
+- allocation failure is outside the ordinary `error` model
+- this is groundwork, not a claim that pointers, slices, maps, or string
+  concatenation are already shipped
+
+---
+
 ## v0.4 candidate capability: richer data modeling
 
 Once organization is in place, richer domain modeling may become the next

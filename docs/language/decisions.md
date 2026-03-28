@@ -44,6 +44,14 @@ Status: accepted
 `current-state.md` documents what the compiler actually implements, not future
 plans.
 
+### Heap memory is runtime-managed
+
+Status: accepted
+
+Heap-backed features must use one runtime-managed memory model: user code does
+not manually free storage, and allocation failure is an unrecoverable runtime
+failure rather than part of the ordinary `error` model.
+
 ---
 
 ## Rejected

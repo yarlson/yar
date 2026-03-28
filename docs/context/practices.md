@@ -17,4 +17,5 @@
 - Error names are collected across the program, sorted lexicographically, and then mapped to integer codes for the generated IR and native `main` wrapper.
 - Builtins are compiler-owned contracts, not user-overridable functions.
 - The runtime C source is embedded in the Go binary and materialized into a temporary file during native builds.
+- Runtime-managed allocation helpers exist as an internal boundary for future heap-backed features; allocation failure is treated as an unrecoverable runtime failure rather than a YAR `error`.
 - The CLI places a timeout around `build` and `run` operations before invoking external processes.

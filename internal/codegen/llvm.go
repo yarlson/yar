@@ -64,9 +64,8 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		fmt.Fprintf(&b, "%s = type %s\n", g.resultTypeName(typ), g.resultStructLiteral(typ))
 	}
 	b.WriteString("\n")
-	b.WriteString("declare void @yar_print(ptr, i64)\n")
-	b.WriteString("declare void @yar_print_int(i32)\n")
-	b.WriteString("declare void @yar_panic(ptr, i64)\n\n")
+	g.writeRuntimeDecls(&b)
+	b.WriteByte('\n')
 
 	var functionIR []string
 	for _, fn := range program.Functions {
@@ -102,6 +101,15 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
+	b.WriteString("declare void @yar_print(ptr, i64)\n")
+	b.WriteString("declare void @yar_print_int(i32)\n")
+	b.WriteString("declare void @yar_panic(ptr, i64)\n")
+	b.WriteString("declare ptr @yar_alloc(i64)\n")
+	b.WriteString("declare ptr @yar_alloc_zeroed(i64)\n")
+	b.WriteString("declare void @yar_trap_oom()\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -969,6 +977,28 @@ func (f *functionEmitter) emitStringValue(value string) exprValue {
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str zeroinitializer, ptr %%%s, 0\n", tmp1, ptrName)
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str %%%s, i64 %d, 1\n", tmp2, tmp1, len([]byte(value)))
 	return exprValue{ref: "%" + tmp2, typ: checker.TypeStr}
+}
+
+func (f *functionEmitter) emitAllocBytes(size string, zeroed bool) string {
+	helper := "@yar_alloc"
+	if zeroed {
+		helper = "@yar_alloc_zeroed"
+	}
+	tmp := f.newTemp("alloc")
+	fmt.Fprintf(&f.builder, "  %%%s = call ptr %s(i64 %s)\n", tmp, helper, size)
+	return "%" + tmp
+}
+
+func (f *functionEmitter) emitTypeSize(typ checker.Type) string {
+	sizePtr := f.newTemp("size.ptr")
+	size := f.newTemp("size")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr null, i32 1\n", sizePtr, f.g.llvmType(typ))
+	fmt.Fprintf(&f.builder, "  %%%s = ptrtoint ptr %%%s to i64\n", size, sizePtr)
+	return "%" + size
+}
+
+func (f *functionEmitter) emitAllocType(typ checker.Type, zeroed bool) string {
+	return f.emitAllocBytes(f.emitTypeSize(typ), zeroed)
 }
 
 func (f *functionEmitter) emitSuccessVoid() string {

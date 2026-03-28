@@ -1,6 +1,6 @@
 # Proposal: Minimal Runtime-Managed Memory
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -119,6 +119,14 @@ This proposal deliberately does not promise:
 - raw addresses
 - pointer arithmetic
 - pointer-to-integer or integer-to-pointer conversions
+
+Current implementation note:
+
+- the compiler/runtime now has an internal shared allocation boundary through
+  runtime helper functions
+- that groundwork does not yet add user-visible heap syntax by itself
+- the first heap-backed language features should reuse that boundary rather than
+  introduce their own
 
 Allocation failure is not modeled as `error` or `!T`.
 
@@ -258,15 +266,17 @@ first heap-backed feature is accepted and implemented.
 - Should string slicing be required to share storage when possible, or remain
   implementation-defined?
 - Should future address-of stay out of scope even after `new(T)` exists?
-- Should YAR remain permanently runtime-managed for memory, or should explicit
-  reclamation ever be reconsidered later?
+- Should explicit reclamation ever be worth reconsidering in a separate future
+  design, or should YAR stay permanently runtime-managed?
 
 ## 13. Decision
 
-Pending.
+Accepted.
 
-This proposal is meant to establish the smallest coherent memory model that lets
-future heap-backed features share one design foundation.
+YAR now treats runtime-managed heap memory as the shared foundation for future
+heap-backed features. The internal runtime allocation boundary exists, but this
+proposal still does not imply that any user-visible heap feature is already
+implemented or shipped.
 
 ## 14. Implementation Checklist
 
