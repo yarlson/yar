@@ -850,6 +850,54 @@ pub fn make() Pair {
 	}
 }
 
+func TestBuildReportsHelpfulErrorWhenCCNotFound(t *testing.T) {
+	t.Setenv("CC", "nonexistent-compiler-binary")
+
+	src := `package main
+
+fn main() i32 {
+	return 0
+}
+`
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Build(ctx, src, outPath)
+	if err == nil {
+		t.Fatal("expected error when CC is not found")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected 'not found' in error, got: %s", err)
+	}
+	if !strings.Contains(err.Error(), "CC") {
+		t.Fatalf("expected 'CC' hint in error, got: %s", err)
+	}
+}
+
+func TestBuildRespectsCC(t *testing.T) {
+	clangPath, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skip("clang not available")
+	}
+	t.Setenv("CC", clangPath)
+
+	src := `package main
+
+fn main() i32 {
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "" {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
 func buildAndRun(t *testing.T, src string) (string, error) {
 	t.Helper()
 

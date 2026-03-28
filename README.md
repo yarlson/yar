@@ -28,12 +28,44 @@ You need:
 - Go 1.26+
 - `clang`
 
+### Installing clang
+
+**macOS** — ships with Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+**Linux (Debian/Ubuntu)**:
+
+```bash
+sudo apt install clang
+```
+
+**Linux (Fedora)**:
+
+```bash
+sudo dnf install clang
+```
+
+**Windows** — install LLVM from [releases.llvm.org](https://releases.llvm.org) or via winget:
+
+```bash
+winget install LLVM.LLVM
+```
+
 Tested locally with:
 
 - `go version go1.26.1`
 - Apple clang 21 on macOS arm64
 
 `yar` emits LLVM IR text and relies on `clang` to compile and link it.
+
+To use a different `clang` binary or version, set the `CC` environment variable:
+
+```bash
+CC=clang-17 go run ./cmd/yar build testdata/hello/main.yar -o hello
+```
 
 ## Build The Compiler
 

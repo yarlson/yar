@@ -11,7 +11,7 @@ updated.
 - Multi-file packages
 - Entry `package main` plus imported packages
 - Top-level `struct`, `enum`, and `fn` declarations, with optional `pub`
-- Native code generation through LLVM IR plus `clang`
+- Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
 
 ## File Shape
 

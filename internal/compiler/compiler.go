@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"yar/internal/checker"
 	"yar/internal/codegen"
 	"yar/internal/diag"
@@ -67,12 +66,7 @@ func Build(ctx context.Context, src, outputPath string) error {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, "clang", "-Wno-override-module", irPath, runtimePath, "-o", outputPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("clang failed: %w\n%s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
+	return invokeCC(ctx, irPath, runtimePath, outputPath)
 }
 
 func BuildPath(ctx context.Context, path, outputPath string) error {
@@ -99,12 +93,7 @@ func BuildPath(ctx context.Context, path, outputPath string) error {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, "clang", "-Wno-override-module", irPath, runtimePath, "-o", outputPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("clang failed: %w\n%s", err, strings.TrimSpace(string(output)))
-	}
-	return nil
+	return invokeCC(ctx, irPath, runtimePath, outputPath)
 }
 
 func Run(ctx context.Context, src string) error {
@@ -114,7 +103,7 @@ func Run(ctx context.Context, src string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	outputPath := filepath.Join(tmpDir, "program")
+	outputPath := filepath.Join(tmpDir, "program"+exeSuffix())
 	if err := Build(ctx, src, outputPath); err != nil {
 		return err
 	}
@@ -133,7 +122,7 @@ func RunPath(ctx context.Context, path string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	outputPath := filepath.Join(tmpDir, "program")
+	outputPath := filepath.Join(tmpDir, "program"+exeSuffix())
 	if err := BuildPath(ctx, path, outputPath); err != nil {
 		return err
 	}

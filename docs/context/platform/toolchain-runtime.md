@@ -4,6 +4,10 @@
 
 - Native builds depend on `clang` being available on `PATH`.
 - The Go compiler emits textual LLVM IR and delegates machine-code generation and linking to `clang`.
+- The `CC` environment variable overrides the default compiler command; `findCC()` in `internal/compiler/cc.go` checks `CC` first, then falls back to `"clang"`.
+- When the compiler is not found, the error message names the missing command and suggests installing clang or setting `CC`.
+- On Windows, temporary executables produced by `Run` and `RunPath` use a `.exe` suffix so the OS can execute them.
+- The default output name for `build` is `a.out` on Unix and `a.exe` on Windows.
 
 ## Embedded Runtime
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 	"yar/internal/compiler"
 	"yar/internal/diag"
@@ -64,7 +65,7 @@ func runEmitIR(path string) int {
 }
 
 func runBuild(args []string) int {
-	output := "a.out"
+	output := defaultOutputName()
 	var path string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -128,6 +129,13 @@ func runRun(path string) int {
 		return 1
 	}
 	return 0
+}
+
+func defaultOutputName() string {
+	if runtime.GOOS == "windows" {
+		return "a.exe"
+	}
+	return "a.out"
 }
 
 func printDiagnostics(path string, diagnostics []diag.Diagnostic) {
