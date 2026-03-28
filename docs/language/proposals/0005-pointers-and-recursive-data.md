@@ -9,8 +9,8 @@ Add a conventional typed pointer model so YAR can represent recursive data.
 The minimal surface is:
 
 - pointer types `*T`
+- unary `&expr` for address-of
 - `nil`
-- `new(T)` for allocation
 - unary `*expr` for dereference
 - pointer equality against `nil` and same-typed pointers
 
@@ -25,10 +25,6 @@ Frontend self-hosting creates direct pressure here:
 - an AST needs recursive expressions, statements, and blocks
 - linked and tree-like helper structures become natural
 - enums alone are not enough without a way to point to nested data
-
-The prior `box` idea was trying to solve this same problem with a custom
-mechanism. After reconsideration, plain typed pointers are the clearer and more
-conventional design.
 
 ## 3. User-Facing Examples
 
@@ -45,11 +41,8 @@ fn set_value(node *Node, value i32) void {
 }
 
 fn main() i32 {
-    tail := new(Node)
-    *tail = Node{value: 2, next: nil}
-
-    head := new(Node)
-    *head = Node{value: 1, next: tail}
+    tail := &Node{value: 2, next: nil}
+    head := &Node{value: 1, next: tail}
 
     set_value(head, 3)
     return (*head).value
@@ -78,11 +71,20 @@ x := *1
 
 Invalid because dereference requires a pointer operand.
 
+```yar
+x := &(1 + 2)
+```
+
+Invalid because address-of requires an addressable operand or a composite
+literal.
+
 ## 4. Semantics
 
 `*T` is an explicit typed pointer to a value of type `T`.
 
-- `new(T)` allocates zero-initialized storage for a `T` and returns `*T`
+- `&expr` returns a `*T` when `expr` is an addressable `T` value
+- `&Type{...}` returns a `*Type` for a fresh storage location initialized from
+  the composite literal
 - `nil` is the zero pointer literal
 - `*expr` reads or names the underlying `T` value
 - pointers do not support arithmetic, integer conversion, or raw address
@@ -94,11 +96,28 @@ containment remains invalid.
 The first version is intentionally minimal. It does not add pointer arithmetic,
 unsafe casts, borrowing rules, or implicit dereference.
 
+Address-of uses familiar addressability rules:
+
+- locals and parameters are addressable
+- struct fields are addressable when their base expression is addressable
+- array and slice elements are addressable when their base expression is
+  addressable
+- `*expr` is addressable when `expr` has type `*T`
+- composite literals are allowed as a special case for fresh storage
+- calls, arithmetic expressions, comparisons, and other temporary values are not
+  addressable
+
+The storage behind an address-taken value is an implementation detail as long as
+source semantics hold. The compiler may keep non-escaping address-taken values
+in ordinary local storage and may move escaping ones into runtime-managed
+storage.
+
 ## 5. Type Rules
 
 - `*T` is valid when `T` is a first-class storable type other than `void` and
   `noreturn`
-- `new(T)` has type `*T`
+- `&expr` requires `expr` to be addressable and have type `T`
+- `&expr` has type `*T`
 - `nil` is assignable only to pointer types
 - `*expr` requires `expr` to have type `*T`
 - `*expr` has type `T`
@@ -111,31 +130,34 @@ unsafe casts, borrowing rules, or implicit dereference.
 ## 6. Grammar / Parsing Shape
 
 - extend type parsing to support prefix `*T`
+- extend unary expressions to include prefix address-of `&expr`
 - add `nil` as a literal
 - extend unary expressions to include prefix dereference `*expr`
-- add `new(T)` as a built-in allocation form over a type argument
 
 Examples:
 
 - `*Node`
 - `*Expr`
-- `new(Node)`
+- `&node`
+- `&Node{value: 1}`
 - `(*node).value`
 - `if node == nil { ... }`
 
 ## 7. Lowering / Implementation Model
 
-- parser: add pointer types, `nil`, dereference, and `new(T)`
-- AST: add pointer type representation, `NilLiteral`, and `NewExpr`
+- parser: add pointer types, `nil`, address-of, and dereference
+- AST: add pointer type representation, `NilLiteral`, and `AddressOfExpr`
 - checker: validate pointee types, dereference typing, assignment-target
-  legality, pointer comparisons, and recursive-struct exceptions through `*T`
+  legality, addressability, pointer comparisons, and recursive-struct
+  exceptions through `*T`
 - codegen: lower pointers to LLVM pointer values
-- runtime: add allocation support for `new(T)` using the shared runtime-managed
-  memory model from proposal `0000-minimal-memory-management.md`
+- runtime: support runtime-managed storage for escaping address-taken values and
+  composite-literal pointer construction using the shared memory model from
+  proposal `0000-minimal-memory-management.md`
 
 The main implementation cost is memory management. The smallest viable version
-is explicit allocation through `new(T)` without exposing manual freeing yet.
-That is enough to unblock recursive frontend data structures.
+is address-of plus fresh storage for composite literals without exposing manual
+freeing. That is enough to unblock recursive frontend data structures.
 
 ## 8. Interactions
 
@@ -144,30 +166,12 @@ That is enough to unblock recursive frontend data structures.
 - arrays: arrays of pointers become possible
 - control flow: no new control-flow rules
 - returns: pointers return like other first-class values
-- builtins: `new(T)` becomes a fixed language/runtime operation
 - future modules/imports: recursive public types become possible once packages
   exist
 - future richer type features: enums and tagged unions compose naturally with
   pointer payloads
 
-## 9. Alternatives Considered
-
-### Custom boxed values
-
-Rejected because it invents a bespoke indirection model where ordinary pointers
-are easier to understand.
-
-### Integer handles into runtime tables
-
-Rejected because they are less direct, less typed, and harder to explain than
-typed pointers.
-
-### Full raw-pointer model with arithmetic and casts
-
-Rejected because frontend self-hosting needs indirection, not unsafe systems
-programming surface.
-
-## 10. Complexity Cost
+## 9. Complexity Cost
 
 - language surface: medium
 - parser complexity: medium
@@ -178,29 +182,22 @@ programming surface.
 - test burden: medium
 - documentation burden: medium
 
-## 11. Why Now?
+## 10. Why Now?
 
 Recursive data is a prerequisite for a self-hosted frontend. Without pointers,
 imports, enums, and slices still do not let YAR model its own AST cleanly.
 
-## 12. Open Questions
+## 11. Open Questions
 
-- Should YAR also support address-of in the first version, or keep allocation via
-  `new(T)` as the only pointer-construction form initially?
+- Should the language allow taking the address of slice elements in the first
+  version, or postpone that if it complicates later storage-movement rules?
 - Should pointer equality be limited to `== nil` / `!= nil`, or allow same-type
   pointer comparisons generally?
-- Should pointer allocation and reclamation be treated as fully settled by
-  proposal `0000-minimal-memory-management.md`, or is any pointer-specific
-  clarification still needed?
+- Should pointer storage and reclamation be treated as fully settled by proposal
+  `0000-minimal-memory-management.md`, or is any pointer-specific clarification
+  still needed?
 
-## 13. Decision
-
-Pending.
-
-Conventional typed pointers appear to be a better fit than a custom `box`
-feature for YAR's self-hosting needs.
-
-## 14. Implementation Checklist
+## 12. Implementation Checklist
 
 - parser
 - AST / IR updates
@@ -210,4 +207,3 @@ feature for YAR's self-hosting needs.
 - diagnostics
 - tests
 - `current-state.md` update
-- `decisions.md` update

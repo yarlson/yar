@@ -30,7 +30,7 @@ The current language is still mostly value-only.
 
 That simplicity breaks as soon as several already-proposed features arrive:
 
-- pointers need allocation for `new(T)`
+- pointers need address-taken storage for `&expr` and `&Type{...}`
 - slices need backing storage and possible reallocation
 - maps need runtime-owned storage
 - string concatenation needs new storage
@@ -46,8 +46,7 @@ landing.
 ### Valid examples
 
 ```yar
-tail := new(Node)
-*tail = Node{value: 2, next: nil}
+tail := &Node{value: 2, next: nil}
 
 values := []i32{}
 values = append(values, 1)
@@ -71,7 +70,7 @@ free(tail)
 Invalid because the minimal memory model does not expose manual deallocation.
 
 ```yar
-p := new(Node)
+p := &Node{}
 q := p + 1
 ```
 
@@ -89,7 +88,8 @@ This proposal defines a shared rule set for heap-backed values.
 
 The initial intended consumers are:
 
-- `new(T)` allocations for typed pointers
+- pointer storage created when address-taking needs stable runtime-managed
+  allocation, such as `&Type{...}` and escaping `&expr` values
 - slice backing storage
 - map storage
 - string concatenation results
@@ -165,7 +165,7 @@ This proposal adds no dedicated syntax by itself.
 Later proposals may add syntax such as:
 
 - `*T`
-- `new(T)`
+- `&expr`
 - `[]T`
 - `map[K]V`
 
@@ -207,8 +207,9 @@ more advanced runtime internals without changing source semantics.
 - control flow: this proposal adds no ordinary user-visible control-flow form;
   only unrecoverable runtime allocation failure may terminate execution
 - returns: heap-backed values return like other first-class values
-- builtins: allocation may be triggered by builtins or compiler-owned operations
-  such as `new`, `append`, map creation, and string concatenation
+- builtins and language operations: allocation may be triggered by compiler- or
+  runtime-owned operations such as address-taking that needs stable storage,
+  `append`, map creation, and string concatenation
 - future modules/imports: package boundaries do not need a separate memory model
 - future richer type features: pointers, slices, maps, enums, and recursive data
   should all reuse this same runtime-managed memory story
@@ -265,7 +266,8 @@ first heap-backed feature is accepted and implemented.
   temporary implementation note?
 - Should string slicing be required to share storage when possible, or remain
   implementation-defined?
-- Should future address-of stay out of scope even after `new(T)` exists?
+- Should pointer escape behavior be documented in more detail once `&expr`
+  becomes part of the language surface?
 - Should explicit reclamation ever be worth reconsidering in a separate future
   design, or should YAR stay permanently runtime-managed?
 
