@@ -1322,6 +1322,38 @@ int32_t yar_map_len(void *map_ptr) {
     return m->count;
 }
 
+yar_slice yar_map_keys(void *map_ptr) {
+    yar_map *m = (yar_map *)map_ptr;
+    yar_slice out;
+    unsigned char *dst;
+    int32_t copied;
+    int32_t i;
+
+    if (m->count == 0) {
+        return yar_empty_slice();
+    }
+
+    dst = (unsigned char *)malloc((size_t)m->count * (size_t)m->key_size);
+    if (dst == NULL) {
+        yar_trap_oom();
+    }
+
+    copied = 0;
+    for (i = 0; i < m->cap; i++) {
+        unsigned char *bucket = m->entries + (int64_t)i * m->bucket_size;
+        if (bucket[0] == 0) {
+            continue;
+        }
+        memcpy(dst + (int64_t)copied * m->key_size, bucket + 1, (size_t)m->key_size);
+        copied++;
+    }
+
+    out.ptr = dst;
+    out.len = copied;
+    out.cap = copied;
+    return out;
+}
+
 static void yar_map_grow(yar_map *m) {
     int32_t old_cap = m->cap;
     unsigned char *old_entries = m->entries;

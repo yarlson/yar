@@ -235,7 +235,7 @@ func ParsePointerType(typ Type) (PointerType, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "print_int", "panic", "len", "append", "has", "delete", "chr", "i32_to_i64", "i64_to_i32":
+	case "print", "print_int", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32":
 		return true
 	default:
 		return false
@@ -322,6 +322,13 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				FullName: "delete",
 				Params:   []Type{TypeInvalid, TypeInvalid},
 				Return:   TypeVoid,
+				Builtin:  true,
+			},
+			"keys": {
+				Name:     "keys",
+				FullName: "keys",
+				Params:   []Type{TypeInvalid},
+				Return:   TypeInvalid,
 				Builtin:  true,
 			},
 			"chr": {
@@ -1482,6 +1489,27 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		}
 		et := ExprType{Base: sliceArg.Base}
 		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{sliceArg.Base, sliceType.Elem}, Return: sliceArg.Base, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "keys" {
+		if len(call.Args) != 1 {
+			c.diag.Add(namePos, "function %q expects 1 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		mapArg := c.checkExpression(call.Args[0])
+		if mapArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		mapType, ok := ParseMapType(mapArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "keys requires a map as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		resultType := MakeSliceType(mapType.Key)
+		et := ExprType{Base: resultType}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{mapArg.Base}, Return: resultType, Builtin: true}
 		c.info.ExprTypes[expr] = et
 		return et
 	}

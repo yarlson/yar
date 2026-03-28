@@ -260,6 +260,23 @@ func TestMapFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestMapKeysFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(fixturePath("maps_keys"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "3\n3\n3\n1\n1\n1\n0\n2\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildAndRunPropagateSugar(t *testing.T) {
 	t.Parallel()
 

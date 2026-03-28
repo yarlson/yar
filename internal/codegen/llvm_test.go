@@ -207,6 +207,30 @@ fn main() i32 {
 	}
 }
 
+func TestGenerateLowersMapKeysBuiltin(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+fn main() i32 {
+	m := map[str]i32{"a": 1, "b": 2}
+	names := keys(m)
+	return len(names)
+}
+`)
+
+	for _, want := range []string{
+		"declare %yar.slice @yar_map_keys(ptr)",
+		"call %yar.slice @yar_map_keys(ptr",
+		"extractvalue %yar.slice",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, ir)
+		}
+	}
+}
+
 func TestEmitAllocHelpers(t *testing.T) {
 	t.Parallel()
 

@@ -271,17 +271,20 @@ Supported map operations:
 - element lookup: `m[key]` returns `!V` (yields `error.MissingKey` if key is absent)
 - `has(m, key)` returns `bool`
 - `delete(m, key)` returns `void`
+- `keys(m)` returns `[]K`
 - `len(m)` returns `i32`
 
 Supported key types: `bool`, `i32`, `i64`, `str`.
 
 Map values are heap-allocated opaque handles. Map lookups return `!V` and compose
-with `?` and `or |err| { ... }` like any other errorable expression.
+with `?` and `or |err| { ... }` like any other errorable expression. `keys(m)`
+returns a snapshot slice containing each present key exactly once, with no
+ordering guarantee.
 
 There are no:
 
-- iteration
 - ordering guarantees
+- live iterators
 - set syntax
 
 ## Functions
@@ -555,6 +558,7 @@ Builtins are fixed by the compiler:
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
+- `keys(map[K]V) []K`
 
 They are not user-overridable.
 

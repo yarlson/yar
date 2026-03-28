@@ -58,3 +58,16 @@ func TestSourceIncludesProcessHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceIncludesMapKeyHelpers(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"int32_t yar_map_len(void *map_ptr)",
+		"yar_slice yar_map_keys(void *map_ptr)",
+	} {
+		if !strings.Contains(Source(), want) {
+			t.Fatalf("expected runtime source to contain %q", want)
+		}
+	}
+}

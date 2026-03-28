@@ -791,6 +791,18 @@ fn main() i32 {
 `,
 		},
 		{
+			name: "map keys builtin",
+			src: `
+package main
+
+fn main() i32 {
+	m := map[str]i32{"a": 1, "b": 2}
+	names := keys(m)
+	return len(names)
+}
+`,
+		},
+		{
 			name: "map index with or handler",
 			src: `
 package main
@@ -871,6 +883,19 @@ fn main() i32 {
 }
 `,
 			substr: "delete requires a map",
+		},
+		{
+			name: "keys requires map",
+			src: `
+package main
+
+fn main() i32 {
+	values := []i32{1, 2}
+	names := keys(values)
+	return len(names)
+}
+`,
+			substr: "keys requires a map",
 		},
 		{
 			name: "map index returns errorable",

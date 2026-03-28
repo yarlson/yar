@@ -171,9 +171,11 @@ Status: accepted
 Maps are a built-in `map[K]V` associative container. Key types are restricted to
 `bool`, `i32`, `i64`, and `str`. Map lookup returns `!V` with `error.MissingKey`
 on absent keys, keeping missing-key handling explicit and compatible with YAR's
-error model. `has`, `delete`, and `len` are provided as builtins. Maps are
+error model. `has`, `delete`, `keys`, and `len` are provided as builtins.
+`keys(m)` returns a snapshot `[]K` with unspecified order. Maps are
 heap-allocated opaque handles backed by an open-addressing hash table in the
-runtime. The first version has no iteration, ordering guarantees, or set syntax.
+runtime. The current surface has no live iteration protocol, ordering
+guarantees, or set syntax.
 
 ---
 

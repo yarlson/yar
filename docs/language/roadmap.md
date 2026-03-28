@@ -124,8 +124,6 @@ compiler and tooling programs become practical end to end.
 
 - host filesystem and path access for package loading and artifact output
 - host process, environment, stderr, and argv support for compiler CLI work
-- map key enumeration so compiler maps can be traversed without maintaining
-  duplicate side slices everywhere
 - deterministic sorting helpers for stable diagnostics, package order, and error
   code assignment
 

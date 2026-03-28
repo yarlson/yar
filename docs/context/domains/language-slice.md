@@ -133,6 +133,7 @@
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
+- `keys(map[K]V) []K`
 
 Builtins remain globally available and are not imported.
 

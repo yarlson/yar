@@ -147,6 +147,7 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_map_has(ptr, ptr)\n")
 	b.WriteString("declare void @yar_map_delete(ptr, ptr)\n")
 	b.WriteString("declare i32 @yar_map_len(ptr)\n")
+	b.WriteString("declare %yar.slice @yar_map_keys(ptr)\n")
 	b.WriteString("declare %yar.str @yar_str_from_byte(i32)\n")
 	b.WriteString("declare i32 @yar_fs_read_file(%yar.str, ptr)\n")
 	b.WriteString("declare i32 @yar_fs_write_file(%yar.str, %yar.str)\n")
@@ -1605,6 +1606,12 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(sliceType.Elem), element.ref, elemPtr)
 		ref := f.emitSliceValue("%"+dataPhi, "%"+newLen, "%"+capPhi)
 		return exprValue{ref: ref, typ: sig.Return}
+	}
+	if sig.Name == "keys" && sig.Builtin {
+		mapArg := f.genExpression(expr.Args[0])
+		result := f.newTemp("map.keys")
+		fmt.Fprintf(&f.builder, "  %%%s = call %%yar.slice @yar_map_keys(ptr %s)\n", result, mapArg.ref)
+		return exprValue{ref: "%" + result, typ: sig.Return}
 	}
 
 	args := make([]exprValue, 0, len(expr.Args))

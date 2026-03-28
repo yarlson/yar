@@ -1,6 +1,6 @@
 # Proposal: Map Key Enumeration
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -188,17 +188,17 @@ committing YAR to a larger iterator model yet.
 
 ## 13. Decision
 
-Proposed.
+Accepted.
 
 This is the smallest believable map-enumeration capability for self-hosting
 without expanding the control-flow surface unnecessarily.
 
 ## 14. Implementation Checklist
 
-- builtin signature and checker support
-- runtime key extraction
-- lowering/codegen hook
-- map integration tests
-- diagnostics for misuse
-- `current-state.md` update
-- `decisions.md` update
+- [x] builtin signature and checker support
+- [x] runtime key extraction
+- [x] lowering/codegen hook
+- [x] map integration tests
+- [x] diagnostics for misuse
+- [x] `current-state.md` update
+- [x] `decisions.md` update
