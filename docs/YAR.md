@@ -630,6 +630,57 @@ Available functions:
 - `conv.itoa(n i32) str` — convert an i32 to its base-10 decimal string
 - `conv.itoa64(n i64) str` — convert an i64 to its base-10 decimal string
 
+### `path`
+
+```yar
+import "path"
+```
+
+Available functions:
+
+- `path.clean(p str) str`
+- `path.join(parts []str) str`
+- `path.dir(p str) str`
+- `path.base(p str) str`
+- `path.ext(p str) str`
+
+Current implementation notes:
+
+- path helpers normalize `\` to `/`
+- joined and cleaned paths use `/` separators
+
+### `fs`
+
+```yar
+import "fs"
+```
+
+Types:
+
+- `fs.DirEntry { name str, is_dir bool }`
+- `fs.EntryKind { File, Directory, Other }`
+
+Available functions:
+
+- `fs.read_file(path str) !str`
+- `fs.write_file(path str, data str) !void`
+- `fs.read_dir(path str) ![]fs.DirEntry`
+- `fs.stat(path str) !fs.EntryKind`
+- `fs.mkdir_all(path str) !void`
+- `fs.remove_all(path str) !void`
+- `fs.temp_dir(prefix str) !str`
+
+Filesystem errors surface through ordinary YAR errors using the names:
+
+- `error.NotFound`
+- `error.PermissionDenied`
+- `error.AlreadyExists`
+- `error.InvalidPath`
+- `error.IO`
+
+Current implementation note: the host filesystem runtime is POSIX-oriented and
+uses `TMPDIR` or `/tmp` for `fs.temp_dir`.
+
 ## Not Implemented
 
 The compiler does not currently implement:

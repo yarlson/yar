@@ -89,6 +89,9 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		if !ok {
 			continue
 		}
+		if sig.HostIntrinsic {
+			continue
+		}
 		emitter := newFunctionEmitter(g, fn, sig)
 		functionIR = append(functionIR, emitter.emit())
 	}
@@ -139,6 +142,13 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_map_delete(ptr, ptr)\n")
 	b.WriteString("declare i32 @yar_map_len(ptr)\n")
 	b.WriteString("declare %yar.str @yar_str_from_byte(i32)\n")
+	b.WriteString("declare i32 @yar_fs_read_file(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_write_file(%yar.str, %yar.str)\n")
+	b.WriteString("declare i32 @yar_fs_read_dir(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_stat(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_mkdir_all(%yar.str)\n")
+	b.WriteString("declare i32 @yar_fs_remove_all(%yar.str)\n")
+	b.WriteString("declare i32 @yar_fs_temp_dir(%yar.str, ptr)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -1595,6 +1605,10 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		args = append(args, f.genExpression(arg))
 	}
 
+	if sig.HostIntrinsic {
+		return f.genHostIntrinsicCall(sig, args)
+	}
+
 	if sig.Builtin {
 		switch sig.Name {
 		case "print":
@@ -1655,6 +1669,58 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	return exprValue{
 		ref: "%" + tmp,
 		typ: sig.Return,
+	}
+}
+
+func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exprValue) exprValue {
+	switch sig.FullName {
+	case "fs.read_file":
+		out := f.newTemp("fs.read_file.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.str zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("fs.read_file.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_read_file(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeStr)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.write_file":
+		status := f.newTemp("fs.write_file.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_write_file(%%yar.str %s, %%yar.str %s)\n", status, args[0].ref, args[1].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+	case "fs.read_dir":
+		out := f.newTemp("fs.read_dir.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.slice\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.slice zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("fs.read_dir.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_read_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.stat":
+		out := f.newTemp("fs.stat.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", out)
+		fmt.Fprintf(&f.builder, "  store i32 0, ptr %%%s\n", out)
+		status := f.newTemp("fs.stat.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_stat(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		tag := f.newTemp("fs.stat.tag")
+		fmt.Fprintf(&f.builder, "  %%%s = load i32, ptr %%%s\n", tag, out)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, f.emitEnumTagValue(sig.Return, "%"+tag)), typ: sig.Return}
+	case "fs.mkdir_all":
+		status := f.newTemp("fs.mkdir_all.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_mkdir_all(%%yar.str %s)\n", status, args[0].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+	case "fs.remove_all":
+		status := f.newTemp("fs.remove_all.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_remove_all(%%yar.str %s)\n", status, args[0].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, ""), typ: sig.Return}
+	case "fs.temp_dir":
+		out := f.newTemp("fs.temp_dir.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.str zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("fs.temp_dir.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_temp_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeStr)
+		return exprValue{ref: f.emitHostStatusResult(sig.Return, "%"+status, value.ref), typ: sig.Return}
+	default:
+		panic("unsupported host intrinsic")
 	}
 }
 
@@ -1841,6 +1907,71 @@ func (f *functionEmitter) emitTypeSize(typ checker.Type) string {
 
 func (f *functionEmitter) emitAllocType(typ checker.Type, zeroed bool) string {
 	return f.emitAllocBytes(f.emitTypeSize(typ), zeroed)
+}
+
+func (f *functionEmitter) emitHostStatusResult(typ checker.Type, status, successValue string) string {
+	isOK := f.newTemp("host.ok")
+	okLabel := f.newLabel("host.ok")
+	errLabel := f.newLabel("host.err")
+	endLabel := f.newLabel("host.end")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, 0\n", isOK, status)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isOK, okLabel, errLabel)
+	f.terminated = true
+
+	f.emitLabel(okLabel)
+	var okResult string
+	if typ == checker.TypeVoid {
+		okResult = f.emitSuccessVoid()
+	} else {
+		okResult = f.emitSuccessResult(typ, successValue)
+	}
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(errLabel)
+	errCode := f.emitHostErrorCode(status)
+	errResult := f.emitErrorCodeResult(typ, errCode)
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(endLabel)
+	result := f.newTemp("host.result")
+	fmt.Fprintf(&f.builder, "  %%%s = phi %s [%s, %%%s], [%s, %%%s]\n", result, f.g.resultTypeName(typ), okResult, okLabel, errResult, errLabel)
+	return "%" + result
+}
+
+func (f *functionEmitter) emitHostErrorCode(status string) string {
+	code := fmt.Sprintf("%d", f.mustErrorCode("IO"))
+	for _, item := range []struct {
+		status int
+		name   string
+	}{
+		{status: 4, name: "InvalidPath"},
+		{status: 3, name: "AlreadyExists"},
+		{status: 2, name: "PermissionDenied"},
+		{status: 1, name: "NotFound"},
+	} {
+		match := f.newTemp("host.err.match")
+		next := f.newTemp("host.err.code")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, %d\n", match, status, item.status)
+		fmt.Fprintf(&f.builder, "  %%%s = select i1 %%%s, i32 %d, i32 %s\n", next, match, f.mustErrorCode(item.name), code)
+		code = "%" + next
+	}
+	return code
+}
+
+func (f *functionEmitter) emitEnumTagValue(enumType checker.Type, tag string) string {
+	tmp := f.newTemp("enum.tag")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s zeroinitializer, i32 %s, 0\n", tmp, f.g.llvmType(enumType), tag)
+	return "%" + tmp
+}
+
+func (f *functionEmitter) mustErrorCode(name string) int {
+	code, ok := f.g.info.ErrorCodes[name]
+	if !ok || code == 0 {
+		panic("missing error code for " + name)
+	}
+	return code
 }
 
 func (f *functionEmitter) emitSuccessVoid() string {

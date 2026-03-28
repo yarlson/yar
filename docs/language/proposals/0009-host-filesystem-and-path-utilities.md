@@ -1,6 +1,6 @@
 # Proposal: Host Filesystem and Path Utilities
 
-Status: proposed
+Status: implemented
 
 ## 1. Summary
 

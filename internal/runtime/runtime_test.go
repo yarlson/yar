@@ -23,3 +23,21 @@ func TestSourceIncludesMemoryHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceIncludesFilesystemHelpers(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"yar_fs_read_file(yar_str path, yar_str *out)",
+		"yar_fs_write_file(yar_str path, yar_str data)",
+		"yar_fs_read_dir(yar_str path, yar_slice *out)",
+		"yar_fs_stat(yar_str path, int32_t *kind_out)",
+		"yar_fs_mkdir_all(yar_str path)",
+		"yar_fs_remove_all(yar_str path)",
+		"yar_fs_temp_dir(yar_str prefix, yar_str *out)",
+	} {
+		if !strings.Contains(Source(), want) {
+			t.Fatalf("expected runtime source to contain %q", want)
+		}
+	}
+}

@@ -184,7 +184,9 @@ This proposal is entirely library-shaped:
 
 - parser: no changes
 - AST / IR: no new node kinds
-- checker: ordinary package-qualified function calls
+- checker: ordinary package-qualified function calls, with selected embedded
+  stdlib declarations tagged as host intrinsics during package-loaded signature
+  registration
 - codegen: lower host-bound calls to runtime/ABI shims
 - runtime: add argument retrieval, environment lookup, child-process launch,
   output capture, inherited stdio execution, and stderr write support
@@ -196,6 +198,18 @@ The key lowering rule is:
 
 - host launch failure becomes a YAR `error`
 - child exit status becomes data in `Result.exit_code`
+
+Additional implementation constraints from proposal 0009:
+
+- keep the user-facing API package-shaped rather than introducing a new family
+  of syntax-level host builtins
+- prefer ABI-stable runtime entry points such as `status + out-parameter`
+  signatures for larger aggregate results instead of relying on direct
+  aggregate returns across all targets
+- preserve stable user-visible YAR error names even if the runtime uses
+  implementation-specific host status codes internally
+- keep as much deterministic logic as possible in yar source, reserving runtime
+  shims for irreducible host interaction only
 
 ## 8. Interactions
 
@@ -256,6 +270,11 @@ This proposal keeps that boundary explicit and intentionally small.
   is the ordinary error model sufficient?
 - Should `process.Result` include a `success bool`, or is `exit_code == 0`
   enough?
+- Should the first runtime implementation be explicitly POSIX-oriented, with a
+  later Windows-specific layer, or should cross-platform parity be required in
+  the first cut?
+- Which process/environment entry points should use direct returns versus
+  explicit out-parameters to keep the runtime ABI robust across targets?
 
 ## 13. Decision
 
@@ -270,8 +289,13 @@ convenience.
 - stdlib package API design
 - runtime process and environment boundary
 - lowering/codegen hooks
+- checker support for tagging selected embedded stdlib declarations as host
+  intrinsics
+- ABI design for runtime shims, including out-parameter shapes where needed
 - diagnostics for launch failures and environment lookup failures
+- stable mapping from runtime host statuses to user-visible YAR error names
 - integration tests for args, stderr, and subprocesses
+- ABI-sensitive tests on supported targets for aggregate-returning APIs
 - CLI bootstrap plan
 - `current-state.md` update
 - `decisions.md` update

@@ -6,7 +6,8 @@
 - Stdlib packages are embedded into the Go compiler binary using `go:embed` via the `internal/stdlib` package.
 - Stdlib packages are imported with bare paths like any user package: `import "strings"`.
 - Resolution order: local packages first, embedded stdlib second. A local directory with the same name shadows the stdlib package.
-- Stdlib packages are parsed, type-checked, and compiled through the same pipeline as user code — no special handling in the checker or codegen.
+- Stdlib packages are parsed, type-checked, and compiled through the same pipeline as user code.
+- Most stdlib functions are ordinary yar code. A small set of embedded `fs` declarations are tagged as host intrinsics during checking/codegen and lower to runtime shims while keeping the user-facing API package-shaped.
 
 ## Infrastructure
 
@@ -70,11 +71,53 @@ Functions:
 
 Depends on `strings.from_byte` for digit character construction.
 
+### `path`
+
+Pure path helpers for host-facing tooling code.
+
+Functions:
+
+- `clean(p str) str` — normalize `\` to `/`, collapse repeated separators, and simplify `.` / `..` segments
+- `join(parts []str) str` — join path segments with `/` then clean the result
+- `dir(p str) str` — parent path, or `.` when there is no separator
+- `base(p str) str` — final path element
+- `ext(p str) str` — suffix from the final `.`, or `""`
+
+Current constraint: the implementation normalizes to forward slashes rather than emitting an OS-specific separator.
+
+### `fs`
+
+Host-backed text-oriented filesystem helpers.
+
+Types:
+
+- `DirEntry { name str, is_dir bool }`
+- `EntryKind { File, Directory, Other }`
+
+Functions:
+
+- `read_file(path str) !str` — read a whole text file into one `str`
+- `write_file(path str, data str) !void` — create or replace one text file
+- `read_dir(path str) ![]DirEntry` — snapshot a directory entry list
+- `stat(path str) !EntryKind` — classify one host entry
+- `mkdir_all(path str) !void` — create a directory tree
+- `remove_all(path str) !void` — recursively remove a file or directory tree; a missing path is treated as success
+- `temp_dir(prefix str) !str` — create one new temporary directory and return its path
+
+Errors:
+
+- `error.NotFound`
+- `error.PermissionDenied`
+- `error.AlreadyExists`
+- `error.InvalidPath`
+- `error.IO`
+
 ## Constraints
 
 - Stdlib packages have access to internal builtins (`chr`, `i32_to_i64`, `i64_to_i32`) that are not available to user code. The `conv` package exposes these as public wrappers. Other stdlib packages (e.g., `strings`) also call them directly.
 - Performance is naive and correct. Concatenation-heavy functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for large inputs — acceptable for the current stage.
 - Stdlib packages are not versioned separately from the compiler.
+- The `fs` runtime boundary is currently POSIX-oriented (`stat`, `opendir`, `mkdir`, `remove`, `TMPDIR`) rather than a full cross-platform abstraction.
 
 ## Adding a New Package
 
@@ -87,6 +130,7 @@ Depends on `strings.from_byte` for digit character construction.
 ## Testing
 
 - `internal/stdlib/stdlib_test.go` covers embedding: `Has`, `ReadDir`, `ReadFile`.
-- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, and `TestStdlibConvFixtureProgram` compile and run programs using stdlib functions.
+- `internal/compiler/compiler_test.go` covers end-to-end: `TestStdlibStringsFixtureProgram`, `TestStdlibStringsExtFixtureProgram`, `TestStdlibUTF8FixtureProgram`, `TestStdlibConvFixtureProgram`, and `TestStdlibFSPathFixtureProgram` compile and run programs using stdlib functions.
+- `TestUnhandledHostFilesystemErrorMain` verifies that propagated `fs` failures surface stable error names at the native `main` wrapper.
 - `TestLocalPackageShadowsStdlib` verifies the shadowing behavior.
-- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, and `testdata/stdlib_conv/main.yar` are the representative fixtures.
+- `testdata/stdlib_strings/main.yar`, `testdata/stdlib_strings_ext/main.yar`, `testdata/stdlib_utf8/main.yar`, `testdata/stdlib_conv/main.yar`, and `testdata/stdlib_fs_path/main.yar` are the representative fixtures.

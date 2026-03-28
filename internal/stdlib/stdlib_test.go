@@ -8,6 +8,14 @@ func TestHasStrings(t *testing.T) {
 	}
 }
 
+func TestHasHostPackages(t *testing.T) {
+	for _, pkg := range []string{"fs", "path"} {
+		if !Has(pkg) {
+			t.Fatalf("expected %s to be a stdlib package", pkg)
+		}
+	}
+}
+
 func TestHasNonexistent(t *testing.T) {
 	if Has("nonexistent") {
 		t.Fatal("expected nonexistent to not be a stdlib package")
@@ -40,5 +48,23 @@ func TestReadFileStrings(t *testing.T) {
 	}
 	if src == "" {
 		t.Fatal("expected non-empty source")
+	}
+}
+
+func TestReadFileHostPackages(t *testing.T) {
+	for _, tc := range []struct {
+		pkg  string
+		file string
+	}{
+		{pkg: "fs", file: "fs.yar"},
+		{pkg: "path", file: "path.yar"},
+	} {
+		src, err := ReadFile(tc.pkg, tc.file)
+		if err != nil {
+			t.Fatalf("read %s/%s: %v", tc.pkg, tc.file, err)
+		}
+		if src == "" {
+			t.Fatalf("expected non-empty source for %s/%s", tc.pkg, tc.file)
+		}
 	}
 }

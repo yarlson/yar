@@ -40,6 +40,18 @@
 - `yar_str_index_check(long long index, long long len)` traps on out-of-range string indexing.
 - `yar_str_from_byte(int32_t value)` allocates a one-byte string from a byte value; traps if the value is outside the 0-255 range.
 
+### Filesystem Runtime
+
+- `yar_fs_read_file(yar_str path, yar_str *out)` reads a whole file into one runtime-managed string and returns a stable filesystem status code.
+- `yar_fs_write_file(yar_str path, yar_str data)` writes one whole file and returns a stable filesystem status code.
+- `yar_fs_read_dir(yar_str path, yar_slice *out)` returns a slice of `fs.DirEntry`-layout values (`name`, `is_dir`) and a stable filesystem status code.
+- `yar_fs_stat(yar_str path, int32_t *kind_out)` classifies a path as file, directory, or other.
+- `yar_fs_mkdir_all(yar_str path)` creates a directory tree.
+- `yar_fs_remove_all(yar_str path)` recursively removes a file or directory tree.
+- `yar_fs_temp_dir(yar_str prefix, yar_str *out)` creates one temporary directory under `TMPDIR` or `/tmp`.
+- Runtime filesystem status codes map in codegen to stable YAR error names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and `IO`.
+- The current implementation uses POSIX interfaces (`stat`, `opendir`, `mkdir`, `remove`, `mkstemp`) and normalizes paths through the `path` stdlib package rather than a platform-specific separator API.
+
 ### Map Runtime
 
 - `yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size)` allocates a new open-addressed hash map with initial capacity 8.
@@ -63,4 +75,4 @@
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, map operations, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, string operations (including indexing, slicing, and concatenation edge cases), stdlib imports, CC override behavior, internal builtin rejection, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, map operations, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, string operations (including indexing, slicing, and concatenation edge cases), stdlib imports, host filesystem/path behavior, CC override behavior, internal builtin rejection, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

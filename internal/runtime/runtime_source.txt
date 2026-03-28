@@ -1,7 +1,11 @@
 #include <stdint.h>
+#include <errno.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static void yar_runtime_fail(const char *data, long long len) {
     if (len > 0) {
@@ -71,6 +75,12 @@ typedef struct {
     long long   len;
 } yar_str;
 
+typedef struct {
+    void   *ptr;
+    int32_t len;
+    int32_t cap;
+} yar_slice;
+
 int32_t yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len) {
     if (a_len != b_len) return 0;
     if (a_len == 0) return 1;
@@ -113,6 +123,513 @@ yar_str yar_str_from_byte(int32_t value) {
     result.ptr = buf;
     result.len = 1;
     return result;
+}
+
+/* --- filesystem runtime --- */
+
+#define YAR_FS_OK                0
+#define YAR_FS_NOT_FOUND         1
+#define YAR_FS_PERMISSION_DENIED 2
+#define YAR_FS_ALREADY_EXISTS    3
+#define YAR_FS_INVALID_PATH      4
+#define YAR_FS_IO                5
+
+#define YAR_FS_KIND_FILE      0
+#define YAR_FS_KIND_DIRECTORY 1
+#define YAR_FS_KIND_OTHER     2
+
+typedef struct {
+    yar_str  name;
+    uint8_t  is_dir;
+} yar_fs_dir_entry;
+
+static yar_str yar_empty_str(void) {
+    yar_str result;
+    result.ptr = NULL;
+    result.len = 0;
+    return result;
+}
+
+static yar_slice yar_empty_slice(void) {
+    yar_slice result;
+    result.ptr = NULL;
+    result.len = 0;
+    result.cap = 0;
+    return result;
+}
+
+static int32_t yar_fs_status_from_errno(int errnum) {
+    switch (errnum) {
+    case 0:
+        return YAR_FS_IO;
+    case ENOENT:
+    case ENOTDIR:
+        return YAR_FS_NOT_FOUND;
+    case EACCES:
+    case EPERM:
+        return YAR_FS_PERMISSION_DENIED;
+    case EEXIST:
+        return YAR_FS_ALREADY_EXISTS;
+    case EINVAL:
+    case ENAMETOOLONG:
+    case ELOOP:
+        return YAR_FS_INVALID_PATH;
+    default:
+        return YAR_FS_IO;
+    }
+}
+
+static char *yar_fs_copy_cstr(const char *src, size_t len) {
+    char *dst = (char *)malloc(len + 1);
+    if (dst == NULL) {
+        yar_trap_oom();
+    }
+    if (len > 0) {
+        memcpy(dst, src, len);
+    }
+    dst[len] = '\0';
+    return dst;
+}
+
+static yar_str yar_fs_copy_bytes(const char *src, size_t len) {
+    yar_str result;
+    if (len == 0) {
+        return yar_empty_str();
+    }
+    result.ptr = yar_fs_copy_cstr(src, len);
+    result.len = (long long)len;
+    return result;
+}
+
+static char *yar_fs_path_cstr(yar_str path, int32_t *status_out) {
+    size_t i;
+    char *buf;
+
+    if (path.len < 0 || (path.ptr == NULL && path.len != 0)) {
+        *status_out = YAR_FS_INVALID_PATH;
+        return NULL;
+    }
+
+    buf = yar_fs_copy_cstr(path.ptr != NULL ? path.ptr : "", (size_t)path.len);
+    for (i = 0; i < (size_t)path.len; i++) {
+        if (buf[i] == '\0') {
+            free(buf);
+            *status_out = YAR_FS_INVALID_PATH;
+            return NULL;
+        }
+    }
+
+    *status_out = YAR_FS_OK;
+    return buf;
+}
+
+static char *yar_fs_join_path(const char *dir, const char *name) {
+    size_t dir_len = strlen(dir);
+    size_t name_len = strlen(name);
+    int needs_sep = dir_len > 0 && dir[dir_len - 1] != '/';
+    char *path = (char *)malloc(dir_len + (size_t)needs_sep + name_len + 1);
+
+    if (path == NULL) {
+        yar_trap_oom();
+    }
+    memcpy(path, dir, dir_len);
+    if (needs_sep) {
+        path[dir_len] = '/';
+    }
+    memcpy(path + dir_len + (size_t)needs_sep, name, name_len);
+    path[dir_len + (size_t)needs_sep + name_len] = '\0';
+    return path;
+}
+
+static void yar_fs_free_dir_entries(yar_fs_dir_entry *entries, int32_t count) {
+    int32_t i;
+
+    if (entries == NULL) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        free((void *)entries[i].name.ptr);
+    }
+    free(entries);
+}
+
+int32_t yar_fs_write_file(yar_str path, yar_str data) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    FILE *file;
+
+    if (cpath == NULL) {
+        return status;
+    }
+
+    file = fopen(cpath, "wb");
+    if (file == NULL) {
+        status = yar_fs_status_from_errno(errno);
+        free(cpath);
+        return status;
+    }
+    if (data.len > 0) {
+        if (fwrite(data.ptr, 1, (size_t)data.len, file) != (size_t)data.len) {
+            status = ferror(file) ? yar_fs_status_from_errno(errno) : YAR_FS_IO;
+            (void)fclose(file);
+            free(cpath);
+            return status;
+        }
+    }
+    if (fclose(file) != 0) {
+        free(cpath);
+        return yar_fs_status_from_errno(errno);
+    }
+    free(cpath);
+    return YAR_FS_OK;
+}
+
+int32_t yar_fs_read_file(yar_str path, yar_str *out) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    FILE *file;
+    long length;
+    char *buf;
+
+    *out = yar_empty_str();
+    if (cpath == NULL) {
+        return status;
+    }
+
+    file = fopen(cpath, "rb");
+    if (file == NULL) {
+        status = yar_fs_status_from_errno(errno);
+        free(cpath);
+        return status;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        status = YAR_FS_IO;
+        (void)fclose(file);
+        free(cpath);
+        return status;
+    }
+    length = ftell(file);
+    if (length < 0) {
+        status = YAR_FS_IO;
+        (void)fclose(file);
+        free(cpath);
+        return status;
+    }
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        status = YAR_FS_IO;
+        (void)fclose(file);
+        free(cpath);
+        return status;
+    }
+
+    if (length == 0) {
+        if (fclose(file) != 0) {
+            status = yar_fs_status_from_errno(errno);
+        }
+        free(cpath);
+        return status;
+    }
+
+    buf = (char *)malloc((size_t)length);
+    if (buf == NULL) {
+        yar_trap_oom();
+    }
+    if (fread(buf, 1, (size_t)length, file) != (size_t)length) {
+        free(buf);
+        status = ferror(file) ? yar_fs_status_from_errno(errno) : YAR_FS_IO;
+        (void)fclose(file);
+        free(cpath);
+        return status;
+    }
+    if (fclose(file) != 0) {
+        free(buf);
+        status = yar_fs_status_from_errno(errno);
+        free(cpath);
+        return status;
+    }
+
+    out->ptr = buf;
+    out->len = (long long)length;
+    free(cpath);
+    return YAR_FS_OK;
+}
+
+int32_t yar_fs_read_dir(yar_str path, yar_slice *out) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    DIR *dir;
+    struct dirent *entry;
+    yar_fs_dir_entry *entries = NULL;
+    int32_t count = 0;
+    int32_t cap = 0;
+
+    *out = yar_empty_slice();
+    if (cpath == NULL) {
+        return status;
+    }
+
+    dir = opendir(cpath);
+    if (dir == NULL) {
+        status = yar_fs_status_from_errno(errno);
+        free(cpath);
+        return status;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        char *child_path;
+        struct stat st;
+
+        if ((strcmp(entry->d_name, ".") == 0) || (strcmp(entry->d_name, "..") == 0)) {
+            continue;
+        }
+        if (count == cap) {
+            int32_t next_cap = cap == 0 ? 8 : cap * 2;
+            yar_fs_dir_entry *next_entries = (yar_fs_dir_entry *)realloc(entries, (size_t)next_cap * sizeof(yar_fs_dir_entry));
+            if (next_entries == NULL) {
+                yar_fs_free_dir_entries(entries, count);
+                closedir(dir);
+                free(cpath);
+                yar_trap_oom();
+            }
+            entries = next_entries;
+            cap = next_cap;
+        }
+
+        child_path = yar_fs_join_path(cpath, entry->d_name);
+        if (stat(child_path, &st) != 0) {
+            free(child_path);
+            yar_fs_free_dir_entries(entries, count);
+            (void)closedir(dir);
+            free(cpath);
+            return yar_fs_status_from_errno(errno);
+        }
+        free(child_path);
+
+        entries[count].name = yar_fs_copy_bytes(entry->d_name, strlen(entry->d_name));
+        entries[count].is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+        count++;
+    }
+
+    if (closedir(dir) != 0) {
+        yar_fs_free_dir_entries(entries, count);
+        free(cpath);
+        return yar_fs_status_from_errno(errno);
+    }
+
+    out->ptr = entries;
+    out->len = count;
+    out->cap = count;
+    free(cpath);
+    return YAR_FS_OK;
+}
+
+int32_t yar_fs_stat(yar_str path, int32_t *kind_out) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    struct stat st;
+
+    *kind_out = YAR_FS_KIND_OTHER;
+    if (cpath == NULL) {
+        return status;
+    }
+
+    if (stat(cpath, &st) != 0) {
+        status = yar_fs_status_from_errno(errno);
+        free(cpath);
+        return status;
+    }
+    if (S_ISREG(st.st_mode)) {
+        *kind_out = YAR_FS_KIND_FILE;
+    } else if (S_ISDIR(st.st_mode)) {
+        *kind_out = YAR_FS_KIND_DIRECTORY;
+    } else {
+        *kind_out = YAR_FS_KIND_OTHER;
+    }
+    free(cpath);
+    return YAR_FS_OK;
+}
+
+static int32_t yar_fs_mkdir_one(const char *path) {
+    struct stat st;
+
+    if (path[0] == '\0') {
+        return YAR_FS_INVALID_PATH;
+    }
+    if (stat(path, &st) == 0) {
+        return S_ISDIR(st.st_mode) ? YAR_FS_OK : YAR_FS_ALREADY_EXISTS;
+    }
+    if (errno != ENOENT) {
+        return yar_fs_status_from_errno(errno);
+    }
+    if (mkdir(path, 0777) != 0) {
+        return yar_fs_status_from_errno(errno);
+    }
+    return YAR_FS_OK;
+}
+
+int32_t yar_fs_mkdir_all(yar_str path) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    size_t i;
+    size_t start = 0;
+    size_t len;
+
+    if (cpath == NULL) {
+        return status;
+    }
+
+    len = strlen(cpath);
+    if (len == 0) {
+        free(cpath);
+        return YAR_FS_INVALID_PATH;
+    }
+    while (len > 1 && cpath[len - 1] == '/') {
+        cpath[len - 1] = '\0';
+        len--;
+    }
+    if (cpath[0] == '/') {
+        start = 1;
+    } else if (len >= 3 && cpath[1] == ':' && cpath[2] == '/') {
+        start = 3;
+    }
+
+    for (i = start; cpath[i] != '\0'; i++) {
+        if (cpath[i] == '/') {
+            char saved = cpath[i];
+            cpath[i] = '\0';
+            status = yar_fs_mkdir_one(cpath);
+            cpath[i] = saved;
+            if (status != YAR_FS_OK) {
+                free(cpath);
+                return status;
+            }
+        }
+    }
+
+    status = yar_fs_mkdir_one(cpath);
+    free(cpath);
+    return status;
+}
+
+static int32_t yar_fs_remove_all_c(const char *path) {
+    struct stat st;
+
+    if (stat(path, &st) != 0) {
+        return errno == ENOENT ? YAR_FS_OK : yar_fs_status_from_errno(errno);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        struct dirent *entry;
+        if (dir == NULL) {
+            return yar_fs_status_from_errno(errno);
+        }
+        while ((entry = readdir(dir)) != NULL) {
+            char *child;
+            int32_t status;
+
+            if ((strcmp(entry->d_name, ".") == 0) || (strcmp(entry->d_name, "..") == 0)) {
+                continue;
+            }
+            child = yar_fs_join_path(path, entry->d_name);
+            status = yar_fs_remove_all_c(child);
+            free(child);
+            if (status != YAR_FS_OK) {
+                (void)closedir(dir);
+                return status;
+            }
+        }
+        if (closedir(dir) != 0) {
+            return yar_fs_status_from_errno(errno);
+        }
+        if (rmdir(path) != 0) {
+            return yar_fs_status_from_errno(errno);
+        }
+        return YAR_FS_OK;
+    }
+    if (remove(path) != 0) {
+        return yar_fs_status_from_errno(errno);
+    }
+    return YAR_FS_OK;
+}
+
+int32_t yar_fs_remove_all(yar_str path) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+
+    if (cpath == NULL) {
+        return status;
+    }
+    status = yar_fs_remove_all_c(cpath);
+    free(cpath);
+    return status;
+}
+
+int32_t yar_fs_temp_dir(yar_str prefix, yar_str *out) {
+    const char *base;
+    size_t base_len;
+    size_t prefix_len;
+    int needs_sep;
+    char *tmpl;
+    size_t i;
+    int fd;
+
+    *out = yar_empty_str();
+    if (prefix.len < 0 || (prefix.ptr == NULL && prefix.len != 0)) {
+        return YAR_FS_INVALID_PATH;
+    }
+    for (i = 0; i < (size_t)prefix.len; i++) {
+        if (prefix.ptr[i] == '\0' || prefix.ptr[i] == '/' || prefix.ptr[i] == '\\') {
+            return YAR_FS_INVALID_PATH;
+        }
+    }
+
+    base = getenv("TMPDIR");
+    if (base == NULL || base[0] == '\0') {
+        base = "/tmp";
+    }
+    base_len = strlen(base);
+    prefix_len = (size_t)prefix.len;
+    needs_sep = base_len > 0 && base[base_len - 1] != '/';
+    tmpl = (char *)malloc(base_len + (size_t)needs_sep + prefix_len + 6 + 1);
+    if (tmpl == NULL) {
+        yar_trap_oom();
+    }
+
+    memcpy(tmpl, base, base_len);
+    if (needs_sep) {
+        tmpl[base_len] = '/';
+    }
+    if (prefix_len > 0) {
+        memcpy(tmpl + base_len + (size_t)needs_sep, prefix.ptr, prefix_len);
+    }
+    memcpy(tmpl + base_len + (size_t)needs_sep + prefix_len, "XXXXXX", 7);
+
+    fd = mkstemp(tmpl);
+    if (fd < 0) {
+        int32_t status = yar_fs_status_from_errno(errno);
+        free(tmpl);
+        return status;
+    }
+    if (close(fd) != 0) {
+        int32_t status = yar_fs_status_from_errno(errno);
+        unlink(tmpl);
+        free(tmpl);
+        return status;
+    }
+    if (unlink(tmpl) != 0) {
+        int32_t status = yar_fs_status_from_errno(errno);
+        free(tmpl);
+        return status;
+    }
+    if (mkdir(tmpl, 0700) != 0) {
+        int32_t status = yar_fs_status_from_errno(errno);
+        free(tmpl);
+        return status;
+    }
+
+    out->ptr = tmpl;
+    out->len = (long long)strlen(tmpl);
+    return YAR_FS_OK;
 }
 
 /* --- map runtime --- */

@@ -139,3 +139,12 @@ Builtins remain globally available and are not imported.
 Three additional builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the
 standard library. User code accesses their functionality through the `conv`
 package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
+
+## Standard Library Surface
+
+- Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `path`, and `fs`.
+- `path` is pure yar code and provides `clean`, `join`, `dir`, `base`, and `ext` for host-style path manipulation.
+- `fs` provides explicit-error text file and directory operations: `read_file`, `write_file`, `read_dir`, `stat`, `mkdir_all`, `remove_all`, and `temp_dir`.
+- `fs.read_dir` returns `[]fs.DirEntry`, where `DirEntry` has `name str` and `is_dir bool`.
+- `fs.stat` returns `!fs.EntryKind`, where `EntryKind` cases are `File`, `Directory`, and `Other`.
+- Host filesystem failures surface through ordinary `error` values using stable names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and `IO`.

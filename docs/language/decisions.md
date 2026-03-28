@@ -88,6 +88,14 @@ Status: accepted
 YAR supports closed enums with plain and payload cases plus statement-form,
 exhaustive `match` over enum values.
 
+### Host filesystem and path stdlib
+
+Status: accepted
+
+YAR exposes host filesystem access through stdlib packages rather than new
+syntax-level builtins. `path` stays pure yar code, while the small `fs` surface
+lowers to runtime shims with stable user-visible error names.
+
 ---
 
 ## Rejected
@@ -141,7 +149,8 @@ Status: accepted
 
 The compiler embeds a standard library written in yar. Stdlib packages are
 resolved as a fallback when an import path does not match a local directory.
-Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`.
+Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`,
+`path`, `fs`.
 
 ### Text and UTF-8 helpers
 

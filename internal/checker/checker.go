@@ -32,14 +32,15 @@ type ExprType struct {
 }
 
 type Signature struct {
-	Name      string
-	Package   string
-	FullName  string
-	Params    []Type
-	Return    Type
-	Errorable bool
-	Builtin   bool
-	Exported  bool
+	Name          string
+	Package       string
+	FullName      string
+	Params        []Type
+	Return        Type
+	Errorable     bool
+	Builtin       bool
+	HostIntrinsic bool
+	Exported      bool
 }
 
 type StructField struct {
@@ -244,6 +245,18 @@ func IsBuiltinFunction(name string) bool {
 func IsInternalBuiltin(name string) bool {
 	switch name {
 	case "chr", "i32_to_i64", "i64_to_i32":
+		return true
+	default:
+		return false
+	}
+}
+
+func IsHostIntrinsic(file, fullName string) bool {
+	if !strings.HasPrefix(file, "<stdlib>/") {
+		return false
+	}
+	switch fullName {
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
 		return true
 	default:
 		return false
@@ -465,11 +478,12 @@ func (c *Checker) checkProgram(program *ast.Program) {
 			continue
 		}
 		sig := Signature{
-			Name:      fn.Name,
-			FullName:  fn.Name,
-			Return:    c.resolveTypeRef(fn.Return),
-			Errorable: fn.ReturnIsBang,
-			Exported:  fn.Exported,
+			Name:          fn.Name,
+			FullName:      fn.Name,
+			Return:        c.resolveTypeRef(fn.Return),
+			Errorable:     fn.ReturnIsBang,
+			HostIntrinsic: IsHostIntrinsic(fn.NamePos.File, fn.Name),
+			Exported:      fn.Exported,
 		}
 		if sig.Return == TypeNoReturn && sig.Errorable {
 			c.diag.Add(fn.Return.Pos, "noreturn functions cannot also be errorable")
@@ -1502,9 +1516,27 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		}
 	}
 	et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
+	if sig.HostIntrinsic {
+		c.registerHostErrorNames(sig.FullName)
+	}
 	c.info.Calls[call] = sig
 	c.info.ExprTypes[expr] = et
 	return et
+}
+
+func (c *Checker) registerHostErrorNames(fullName string) {
+	switch fullName {
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
+		for _, name := range []string{
+			"AlreadyExists",
+			"IO",
+			"InvalidPath",
+			"NotFound",
+			"PermissionDenied",
+		} {
+			c.info.ErrorCodes[name] = 0
+		}
+	}
 }
 
 func callName(expr ast.Expression) (string, token.Position, bool) {

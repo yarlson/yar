@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -911,6 +912,89 @@ func TestStdlibStringsExtFixtureProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := output, "strings_ext ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
+	t.Parallel()
+
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_fs_path", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	for _, want := range []string{
+		"declare i32 @yar_fs_read_file(%yar.str, ptr)",
+		"declare i32 @yar_fs_write_file(%yar.str, %yar.str)",
+		"declare i32 @yar_fs_read_dir(%yar.str, ptr)",
+		"declare i32 @yar_fs_stat(%yar.str, ptr)",
+		"declare i32 @yar_fs_mkdir_all(%yar.str)",
+		"declare i32 @yar_fs_remove_all(%yar.str)",
+		"declare i32 @yar_fs_temp_dir(%yar.str, ptr)",
+	} {
+		if !strings.Contains(unit.IR, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, unit.IR)
+		}
+	}
+}
+
+func TestStdlibFSPathFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_fs_path", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "fs_path ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestUnhandledHostFilesystemErrorMain(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	missingPath := filepath.Join(root, "missing.txt")
+	writeSourceFile(t, filepath.Join(root, "main.yar"), fmt.Sprintf(`package main
+
+import "fs"
+
+fn main() !i32 {
+	fs.read_file(%q)?
+	return 0
+}
+`, missingPath))
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "unhandled error: NotFound\n"; got != want {
 		t.Fatalf("unexpected program output: got %q want %q", got, want)
 	}
 }
