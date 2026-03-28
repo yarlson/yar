@@ -1,14 +1,31 @@
 # AGENTS.md
 
+## Implementation Process
+
+For implementation work in this repository, follow this order:
+
+1. read `docs/context/`
+2. plan implementation and the test approach before changing code
+3. write or update tests first when practical; prefer TDD for new behavior, bug fixes, and regressions
+4. implement
+5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change
+6. run `golangci-lint run --fix ./...` and `go test -race -count=1 -v -timeout=120s ./...`
+7. fix issues from lint and tests
+8. update `docs/context/`
+9. update `docs/YAR.md`
+10. update `docs/language`
+
+Do not skip the documentation updates when implementation changes behavior,
+capabilities, constraints, runtime details, or accepted language design.
+
+Do not skip test work for implementation changes. Add or update automated tests at
+the highest-value layer for the change, and keep `testdata/` focused on
+representative, durable fixtures rather than incidental cases.
+
 ## Go Code Quality Standard
 
-All Go code in this repository must be written for:
-
-- correctness
-- readability
-- maintainability
-- security
-- performance
+Write Go for readability, correctness, maintainability, security, and
+performance.
 
 Priority order:
 
@@ -17,37 +34,26 @@ Priority order:
 3. maintainability
 4. performance
 
-Do not trade correctness or clarity for speculative optimization.
-
-The goal is production-grade Go that is boring in the best possible way: explicit, predictable, easy to debug, easy to change, and idiomatic.
+Prefer explicit, idiomatic, production-grade code. Do not trade correctness or
+clarity for speculative optimization.
 
 ---
 
 ## Core Principles
 
 - Prefer simple, idiomatic Go over cleverness.
-- Follow standard Go idioms, Effective Go, Go Proverbs, and the style of the standard library.
-- Keep code easy to scan and easy to reason about.
-- Prefer explicitness over magic.
-- Prefer composition over deep embedding or inheritance-like patterns.
-- Prefer manual dependency injection and explicit wiring.
-- Avoid framework-like overengineering.
-- Avoid premature abstraction.
-- Avoid unnecessary indirection.
-- Keep the common path easy and the wrong path hard.
+- Keep control flow, ownership, and mutation explicit.
+- Prefer composition and direct wiring over heavy abstraction.
+- Avoid framework-like patterns, unnecessary indirection, and speculative design.
 
 ---
 
 ## Package Design
 
-- Use small, focused packages with clear responsibilities.
-- Keep package boundaries clean.
-- Avoid circular dependencies.
-- Keep public APIs minimal.
-- Hide implementation details unless there is a clear reason to expose them.
-- Prefer shallow package hierarchies.
-- Separate domain logic from transport, storage, HTTP, CLI, and infrastructure concerns.
-- Do not create meaningless layers.
+- Keep packages small, focused, and acyclic.
+- Keep public APIs minimal and hide implementation details by default.
+- Prefer shallow package structure and clear boundaries.
+- Do not add layers unless they materially improve clarity.
 
 ---
 
@@ -55,195 +61,105 @@ The goal is production-grade Go that is boring in the best possible way: explici
 
 - Accept interfaces, return structs.
 - Use concrete types by default.
-- Return interfaces only when there is a strong and explicit reason.
-- Define interfaces close to the consumer, not the producer.
-- Keep interfaces very small and behavior-focused.
-- Do not introduce interfaces for future possibilities or mocking alone.
-- Avoid giant interfaces and god abstractions.
-
-Good:
-
-- consumer-owned small interfaces
-- minimal behavior contracts
-- concrete return types
-
-Bad:
-
-- producer-owned interfaces with one implementation
-- broad “service” interfaces without clear need
-- interface-heavy design that hides straightforward code
+- Define small interfaces near the consumer.
+- Do not add interfaces just for future flexibility or mocking.
 
 ---
 
 ## Types and API Design
 
 - Make invalid states hard to represent.
-- Design types and functions so misuse is difficult.
-- Be explicit about ownership, lifecycle, concurrency guarantees, and zero-value behavior.
-- Prefer zero-value usability when appropriate.
-- Use constructors only when they add real value.
-- Keep APIs minimal, intuitive, and hard to misuse.
-- Model the domain directly and clearly.
-- Preserve backward compatibility when required. Any breaking change must be deliberate and minimal.
+- Be explicit about ownership, lifecycle, concurrency, and zero-value behavior.
+- Keep APIs small, direct, and hard to misuse.
+- Use constructors and abstraction only when they add clear value.
 
 ---
 
 ## Naming
 
-- Name things clearly, precisely, and in domain language.
-- Prefer descriptive names over short clever ones.
-- Avoid vague names like:
-  - `util`
-  - `helper`
-  - `common`
-  - `misc`
-  - `manager`
-  - `processor`
-  - `data`
-  - `info`
-- Package names should be short, specific, and idiomatic.
-- Function and method names should communicate intent, not implementation trivia.
+- Use clear, domain-specific, descriptive names.
+- Prefer intent-revealing names over vague buckets like `util`, `helper`, or `manager`.
+- Keep package names short and idiomatic.
 
 ---
 
 ## Functions and Methods
 
-- Keep functions small and cohesive.
-- Keep control flow straightforward.
-- Prefer early returns over deep nesting.
-- Avoid long functions with mixed responsibilities.
-- Avoid hidden side effects.
-- Be explicit about mutation and ownership.
-- Choose pointer vs value receivers deliberately.
-- Pass large structs carefully.
-- Do not introduce helpers that make code less readable.
+- Keep functions small, cohesive, and easy to scan.
+- Prefer straightforward control flow and early returns.
+- Be explicit about mutation, ownership, and receiver choice.
+- Do not extract helpers that make the call site harder to understand.
 
 ---
 
 ## Error Handling
 
-- Handle errors explicitly.
-- Never ignore errors unless it is intentional and provably safe.
-- Add context to errors where useful.
-- Prefer wrapping with `%w`.
+- Handle errors explicitly and never ignore them without a clear reason.
+- Wrap with `%w` when extra context helps.
 - Do not use `panic` for normal error handling.
-- Error messages should be actionable and useful.
-- Validate inputs at system boundaries.
-- Make edge cases explicit.
+- Validate inputs and make edge cases explicit at boundaries.
 
 ---
 
 ## Context Usage
 
-- Pass `context.Context` explicitly where appropriate.
-- `context.Context` should usually be the first parameter.
+- Pass `context.Context` explicitly when appropriate, usually as the first parameter.
 - Never store context in structs.
+- Propagate caller context through request boundaries.
 - Respect cancellation, deadlines, and timeouts.
-- Propagate context through request and operation boundaries.
-- Do not pass `context.Background()` through code paths that already have a caller context unless there is a very strong reason.
 
 ---
 
 ## Concurrency
 
-- Do not introduce concurrency unless it is needed.
-- Concurrency must have a clear, measurable benefit.
-- Be explicit about whether a type is safe for concurrent use.
-- Avoid goroutine leaks, deadlocks, races, hidden shared mutable state, and unnecessary synchronization.
-- Use channels only when they are the clearest tool for the problem.
+- Do not add concurrency unless it is needed and beneficial.
 - Prefer simple synchronization and data flow.
-- Avoid concurrency complexity in code that does not need it.
+- Be explicit about concurrent-safety guarantees.
+- Avoid leaks, races, deadlocks, and hidden shared mutable state.
 
 ---
 
 ## Performance
 
 - Measure before optimizing.
-- Do not apply speculative micro-optimizations.
-- Prefer simple algorithms and straightforward data structures.
-- Be aware of algorithmic complexity, allocation behavior, copies, memory usage, cache behavior, and contention.
-- Avoid unnecessary:
-  - allocations
-  - copies
-  - string conversions
-  - interface boxing
-  - reflection
-  - dynamic dispatch in hot paths
-- Preallocate only when it materially helps and is justified by usage.
-- Keep hot paths obvious and cheap.
-- Never sacrifice maintainability for hypothetical performance gains.
+- Prefer simple algorithms and data structures.
+- Avoid unnecessary allocations, copies, conversions, reflection, and boxing.
+- Do not trade maintainability for hypothetical speedups.
 
 ---
 
 ## Security
 
 - Treat all external input as untrusted.
-- Validate, sanitize, and bound input appropriately.
-- Fail safely.
-- Use secure defaults.
-- Apply least privilege.
-- Avoid:
-  - injection vulnerabilities
-  - unsafe deserialization
-  - path traversal
-  - insecure randomness
-  - accidental data leaks
-- Prefer standard library and battle-tested approaches.
-- Never log secrets, tokens, passwords, or sensitive personal data.
-- Make security-relevant behavior explicit.
+- Validate, sanitize, and bound data at system boundaries.
+- Use secure defaults and least privilege.
+- Never log secrets or introduce avoidable data-exposure risks.
 
 ---
 
 ## State and Configuration
 
-- Minimize global state.
-- Prefer explicit dependencies over package-level singletons.
-- Keep configuration explicit.
-- Avoid hidden runtime coupling.
-- Make lifecycle and initialization behavior obvious.
-- Remove dead code, duplication, and speculative extension points.
+- Minimize global state and hidden runtime coupling.
+- Prefer explicit dependencies and explicit configuration.
+- Keep initialization obvious and remove speculative extension points.
 
 ---
 
 ## Comments and Documentation
 
 - Write comments only when they add signal.
-- Explain why, not what, unless the what is genuinely non-obvious.
-- Document exported types and functions.
-- Document non-obvious invariants, tradeoffs, and performance characteristics.
-- Keep comments accurate and updated with the code.
+- Explain why or document non-obvious invariants and tradeoffs.
+- Keep comments and exported docs accurate.
 
 ---
 
 ## Testing
 
-- Design code for testability.
-- Test behavior, invariants, edge cases, and failure modes.
-- Add regression tests for bugs.
-- Prefer deterministic tests.
-- Control time, randomness, filesystem, process, and concurrency effects when possible.
-- Prefer table-driven tests where they improve clarity.
-- Avoid brittle tests coupled too tightly to implementation details.
-- Use benchmarks for performance-sensitive paths when relevant.
-
-Tests should verify:
-
-- normal behavior
-- edge cases
-- invalid input
-- failure handling
-- concurrency behavior where applicable
-- regressions from past bugs
-
-When choosing a test layer:
-
-- If an API change affects a user-visible or cross-app journey, identify that journey first and start from the highest-value boundary that exercises it.
-- Do not begin with package-local unit tests when the main risk is the HTTP contract or the web-to-API flow.
-- Prefer integration-style HTTP tests for route behavior, middleware behavior, status codes, headers, and JSON contracts.
-- Keep package-local unit tests focused on pure logic such as config parsing, validation, helpers, and small domain behavior.
-- Add lower-layer tests after the top boundary test exposes a need to localize failures or to protect pure logic and boundary edge cases.
-- Avoid restating the same endpoint contract in unit, integration, and browser E2E tests unless the layers are catching different risks.
-- If an API change affects a user-visible flow in `apps/web`, expect the top-level journey to be covered from the browser layer as well.
+- Test behavior, edge cases, failure paths, and regressions.
+- Prefer deterministic tests and control time, randomness, filesystem, process, and concurrency effects.
+- Choose the highest-value test layer first; test user-visible flows at the boundary that best exercises them.
+- Add lower-level tests to protect pure logic and isolate failures.
+- Avoid brittle tests and duplicated assertions across layers unless each layer catches different risks.
 
 ---
 
@@ -251,44 +167,25 @@ When choosing a test layer:
 
 - Prefer the standard library first.
 - Add third-party dependencies only when clearly justified.
-- Minimize dependencies.
-- Avoid dependencies that add abstraction without strong value.
-- Do not introduce a library when a small amount of clear code is better.
+- Avoid dependencies that add more abstraction than value.
 
 ---
 
 ## Change Guidelines
 
-When generating or editing code:
-
-- preserve existing style if it is already good and idiomatic
-- improve naming, structure, and boundaries where necessary
-- do not introduce abstractions without justification
-- do not add files, layers, or patterns unless they clearly improve the code
-- call out tradeoffs when multiple valid approaches exist
-- explain changes to performance-sensitive code
-- explain changes to security-sensitive code
-- prefer minimal, high-signal changes over broad rewrites unless a rewrite is clearly warranted
+- Preserve good existing style.
+- Prefer minimal, high-signal changes over broad rewrites.
+- Improve naming, structure, and boundaries where needed.
+- Call out tradeoffs for security-sensitive, performance-sensitive, or otherwise non-obvious changes.
 
 ---
 
 ## Review Checklist
 
-Before finalizing any Go change, verify:
-
-- Is the code idiomatic Go?
-- Is it easy to read quickly?
-- Is it correct on edge cases?
-- Is input validated at boundaries?
-- Is error handling explicit and strong?
-- Are abstractions justified?
-- Are interfaces minimal and defined near the consumer?
-- Are concrete types returned where possible?
-- Is concurrency necessary and safe?
-- Is the performance reasonable and based on actual need?
-- Is security handled explicitly?
-- Is global state avoided?
-- Is the code maintainable by another engineer in six months?
+Before finalizing a Go change, verify readability, correctness on edge cases,
+explicit error handling, justified abstractions, safe boundary validation,
+necessary and safe concurrency, reasonable performance, explicit security
+handling, minimal global state, and maintainability.
 
 ---
 
@@ -296,14 +193,12 @@ Before finalizing any Go change, verify:
 
 - Prefer simple, explicit code.
 - Accept interfaces, return structs.
-- Keep interfaces small and local to the consumer.
-- Keep package APIs small.
 - Handle errors explicitly.
 - Pass context explicitly.
 - Avoid global state.
 - Avoid premature abstraction.
 - Avoid speculative optimization.
 - Prefer stdlib first.
+- Keep interfaces and package APIs small.
 - Keep code secure at boundaries.
-- Keep code maintainable
-  .
+- Keep code maintainable.
