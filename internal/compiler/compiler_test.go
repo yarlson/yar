@@ -867,6 +867,188 @@ pub fn make() Pair {
 	}
 }
 
+func TestStdlibStringsFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_strings", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "strings ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStringOpsFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "string_ops", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "eq ok\nne ok\nall ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStringIndexOutOfRangePanics(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	s := "hi"
+	print_int(s[2])
+	return 0
+}
+`
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := Build(ctx, src, outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "runtime failure: string index out of range\n"; got != want {
+		t.Fatalf("unexpected panic output: got %q want %q", got, want)
+	}
+}
+
+func TestStringSliceOutOfRangePanics(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	s := "hi"
+	sub := s[0:3]
+	print(sub)
+	return 0
+}
+`
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := Build(ctx, src, outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit status")
+	}
+
+	exitErr := &exec.ExitError{}
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %T", err)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("unexpected exit code: %d", exitErr.ExitCode())
+	}
+	if got, want := output.String(), "runtime failure: slice range out of bounds\n"; got != want {
+		t.Fatalf("unexpected panic output: got %q want %q", got, want)
+	}
+}
+
+func TestEmptyStringConcat(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	a := ""
+	b := ""
+	c := a + b
+	if len(c) != 0 {
+		return 1
+	}
+	d := a + "hello"
+	if d != "hello" {
+		return 2
+	}
+	e := "world" + b
+	if e != "world" {
+		return 3
+	}
+	return 0
+}
+`
+
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "" {
+		t.Fatalf("unexpected output: %q", output)
+	}
+}
+
+func TestLocalPackageShadowsStdlib(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "strings"
+
+fn main() i32 {
+	if strings.hello() != 42 {
+		return 1
+	}
+	return 0
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "strings", "strings.yar"), `package strings
+
+pub fn hello() i32 {
+	return 42
+}
+`)
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBuildReportsHelpfulErrorWhenCCNotFound(t *testing.T) {
 	t.Setenv("CC", "nonexistent-compiler-binary")
 

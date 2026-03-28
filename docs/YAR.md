@@ -399,6 +399,16 @@ or `i64`.
 
 ### Strings
 
+Supported string operations:
+
+- `len(str)` returns the byte count as `i32`
+- `s == t` and `s != t` compare strings by exact byte equality
+- `s + t` concatenates two strings (allocates a new string)
+- `s[i]` returns the byte value at offset `i` as `i32`
+- `s[i:j]` returns the byte substring covering offsets `[i, j)` as `str`
+
+Out-of-range string indexing and slicing trap at runtime.
+
 Supported escapes:
 
 - `\n`
@@ -541,7 +551,7 @@ Builtins are fixed by the compiler:
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T | []T | map[K]V) i32`
+- `len([N]T | []T | map[K]V | str) i32`
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
@@ -561,6 +571,31 @@ with status `1`.
 `panic(str)` writes to stderr and exits with status `1`.
 
 Out-of-range slice indexing and invalid slice ranges trap with a runtime failure.
+
+## Standard Library
+
+The compiler ships with an embedded standard library written in yar. Stdlib
+packages are imported like regular packages. If a local package with the same
+name exists, it takes priority over the stdlib version.
+
+### `strings`
+
+```yar
+import "strings"
+```
+
+Available functions:
+
+- `strings.contains(s str, substr str) bool`
+- `strings.has_prefix(s str, prefix str) bool`
+- `strings.has_suffix(s str, suffix str) bool`
+- `strings.index(s str, substr str) i32` — returns `-1` if not found
+- `strings.count(s str, substr str) i32`
+- `strings.repeat(s str, n i32) str`
+- `strings.replace(s str, old str, new str, n i32) str` — `n < 0` replaces all
+- `strings.trim_left(s str, cutset str) str`
+- `strings.trim_right(s str, cutset str) str`
+- `strings.join(parts []str, sep str) str`
 
 ## Not Implemented
 

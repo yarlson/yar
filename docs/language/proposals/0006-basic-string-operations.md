@@ -1,6 +1,6 @@
 # Proposal: Basic String Operations
 
-Status: proposed
+Status: accepted
 
 ## 1. Summary
 
@@ -179,19 +179,21 @@ diagnostics. This is a direct capability gap, not a speculative convenience.
 
 ## 13. Decision
 
-Pending.
+Accepted.
 
-This proposal aims for the smallest string model that still makes compiler-like
-text processing practical.
+The compiler now supports byte-oriented string operations: `len(str)` returns
+byte count, `==` and `!=` compare by exact byte equality, `+` concatenates with
+allocation, `s[i]` returns byte value as `i32`, and `s[i:j]` returns a byte
+substring. Out-of-range indexing and slicing trap at runtime.
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- runtime string concat and bounds checks
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser (reuses existing postfix indexing and slicing syntax)
+- [x] AST / IR updates (no new nodes needed)
+- [x] checker
+- [x] codegen
+- [x] runtime string concat and bounds checks
+- [x] diagnostics
+- [x] tests
+- [x] `current-state.md` update
+- [x] `decisions.md` update

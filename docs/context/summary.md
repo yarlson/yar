@@ -18,7 +18,8 @@ embedded runtime to produce or run a native executable.
 - `internal/parser` builds file ASTs from the token stream and appends parser diagnostics.
 - `internal/checker` owns semantic validation, local scope tracking, user-defined struct and enum metadata, type inference for integer literals, builtin signatures, and error-code assignment on the lowered package graph.
 - `internal/codegen` lowers the checked AST into textual LLVM IR, including explicit branches for error sugar, aggregate values, loops, package-qualified symbols, the generated native `main` wrapper, and declarations for the shared runtime allocation helpers.
-- `internal/runtime` embeds the small C runtime source that provides builtin I/O, panic behavior, and the shared allocation/trap boundary during linking.
+- `internal/runtime` embeds the small C runtime source that provides builtin I/O, panic behavior, string operations, and the shared allocation/trap boundary during linking.
+- `internal/stdlib` embeds the standard library written in yar (starting with a `strings` package) and provides lookup functions for the package loader.
 
 ## Core Flow
 
@@ -33,7 +34,9 @@ embedded runtime to produce or run a native executable.
 - Programs are package graphs rooted at an entry `package main`, with one or more `.yar` files per package, explicit `import` declarations, package-qualified cross-package references, and optional `pub` on top-level `struct`, `enum`, and `fn` declarations.
 - The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, typed pointers, user-defined structs, user-defined enums with optional payload cases, fixed arrays, slices, and maps.
 - The language supports `:=`, `var`, assignment to locals/fields/indices/dereferences, `if` / `else`, `for`, `break`, `continue`, `match` over enum values, struct literals, enum constructors, array literals, slice literals, pointer address-of and dereference, `nil`, field access, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean/pointer comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
-- Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, `len(array-or-slice-or-map)`, `append(slice, value)`, `has(map, key)`, and `delete(map, key)`.
+- String operations include `len(str)`, `str == str`, `str != str`, `str + str` (concatenation), `s[i]` (byte indexing returning `i32`), and `s[i:j]` (byte slicing returning `str`).
+- Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, `len(array-or-slice-or-map-or-str)`, `append(slice, value)`, `has(map, key)`, and `delete(map, key)`.
+- An embedded standard library provides higher-level yar packages (currently `strings`) that are imported like regular packages and resolved as a fallback when local packages are not found.
 - The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
 
 ## Capabilities

@@ -16,7 +16,8 @@
 - `internal/compiler` lowers the loaded package graph into one combined checked program by rewriting package-local and imported symbols to canonical names after import and export validation.
 - `internal/checker` validates struct, enum, and function shape, tracks scopes, resolves builtin and rewritten user function signatures, resolves user-defined, enum, array, slice, and pointer types, assigns expression types, validates exhaustive enum `match`, validates addressability and dereference rules, validates loop and assignment-target rules, validates slice indexing/slicing and `append`, validates error-sugar legality, and records ordered error names.
 - `internal/codegen` lowers the checked AST into LLVM IR, expanding error sugar, enum `match`, and short-circuit boolean operators into explicit checks, branches, and returns, lowering loops and aggregate values, lowering enums to tagged aggregates with aligned payload storage, lowering pointers to LLVM `ptr` values, lowering slices to runtime descriptors plus allocation/copy helpers, generating the exported `main` wrapper around `yar.main`, and declaring the shared runtime allocation helpers used by heap-backed features.
-- `internal/runtime` exposes embedded runtime C source to the build step, including builtin I/O, panic behavior, slice bounds checks, and the shared allocation/trap boundary.
+- `internal/runtime` exposes embedded runtime C source to the build step, including builtin I/O, panic behavior, string operations, slice bounds checks, and the shared allocation/trap boundary.
+- `internal/stdlib` embeds the standard library written in yar and provides lookup functions for the package loader; when a local package is not found, the loader falls back to the embedded stdlib.
 
 ## Stage Contracts
 

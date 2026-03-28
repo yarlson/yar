@@ -529,7 +529,7 @@ fn main() i32 {
 	return x
 }
 `,
-			substr: "len requires an array, slice, or map argument",
+			substr: "len requires an array, slice, map, or str argument",
 		},
 		{
 			name: "builtin len cannot be redeclared",
@@ -582,7 +582,7 @@ fn main() i32 {
 	return len(part)
 }
 `,
-			substr: "slicing requires a slice value",
+			substr: "slicing requires a slice or str value",
 		},
 		{
 			name: "unknown struct field",
@@ -895,6 +895,116 @@ fn main() i32 {
 			program, parseDiags := parser.Parse(tc.src)
 			if len(parseDiags) > 0 {
 				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
+func TestCheckStringOpsValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	s := "hello"
+	n := len(s)
+	if s == "hello" {
+		print("eq\n")
+	}
+	if s != "other" {
+		print("ne\n")
+	}
+	cat := s + " world"
+	b := s[0]
+	sub := s[1:3]
+	print(cat)
+	print(sub)
+	print_int(b)
+	print_int(n)
+	return 0
+}
+`
+	program, diags := parser.Parse(src)
+	if program == nil {
+		t.Fatalf("parse failed: %+v", diags)
+	}
+	_, checkDiags := Check(program)
+	if len(checkDiags) > 0 {
+		messages := make([]string, 0, len(checkDiags))
+		for _, d := range checkDiags {
+			messages = append(messages, d.Message)
+		}
+		t.Fatalf("unexpected diagnostics: %s", strings.Join(messages, "\n"))
+	}
+}
+
+func TestCheckStringOpsInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "string equality with non-string",
+			src: `
+package main
+
+fn main() i32 {
+	ok := "a" == 1
+	return 0
+}
+`,
+			substr: "comparison operands must have the same type",
+		},
+		{
+			name: "string index with bool",
+			src: `
+package main
+
+fn main() i32 {
+	x := "abc"[true]
+	return 0
+}
+`,
+			substr: "index expression must be an integer",
+		},
+		{
+			name: "string concat with int",
+			src: `
+package main
+
+fn main() i32 {
+	x := "abc" + 1
+	return 0
+}
+`,
+			substr: "requires matching integer or str operands",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			program, _ := parser.Parse(tc.src)
+			if program == nil {
+				t.Fatal("parse failed")
 			}
 
 			_, diags := Check(program)

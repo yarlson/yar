@@ -129,6 +129,9 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_slice_index_check(i64, i64)\n")
 	b.WriteString("declare void @yar_slice_range_check(i64, i64, i64)\n")
 	b.WriteString("declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n")
+	b.WriteString("declare i32 @yar_str_equal(ptr, i64, ptr, i64)\n")
+	b.WriteString("declare %yar.str @yar_str_concat(ptr, i64, ptr, i64)\n")
+	b.WriteString("declare void @yar_str_index_check(i64, i64)\n")
 	b.WriteString("declare ptr @yar_map_new(i32, i32, i32)\n")
 	b.WriteString("declare void @yar_map_set(ptr, ptr, ptr)\n")
 	b.WriteString("declare i32 @yar_map_get(ptr, ptr, ptr)\n")
@@ -1018,6 +1021,10 @@ func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
 		return f.genMapLookup(expr, mapType)
 	}
 
+	if innerType == checker.TypeStr {
+		return f.genStringIndex(expr)
+	}
+
 	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
 	if array, ok := checker.ParseArrayType(baseType); ok {
 		index := f.genExpression(expr.Index)
@@ -1033,6 +1040,55 @@ func (f *functionEmitter) genIndex(expr *ast.IndexExpr) exprValue {
 	load := f.newTemp("elem")
 	fmt.Fprintf(&f.builder, "  %%%s = load %s, ptr %s\n", load, f.g.llvmType(slice.Elem), ptr)
 	return exprValue{ref: "%" + load, typ: slice.Elem}
+}
+
+func (f *functionEmitter) genStringIndex(expr *ast.IndexExpr) exprValue {
+	strValue := f.genExpression(expr.Inner)
+	index := f.genExpression(expr.Index)
+
+	strPtr := f.newTemp("str.ptr")
+	strLen := f.newTemp("str.len")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", strPtr, strValue.ref)
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", strLen, strValue.ref)
+
+	index64 := f.intToI64(index.ref, index.typ)
+	fmt.Fprintf(&f.builder, "  call void @yar_str_index_check(i64 %s, i64 %%%s)\n", index64, strLen)
+
+	bytePtr := f.newTemp("str.byte.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr i8, ptr %%%s, i64 %s\n", bytePtr, strPtr, index64)
+	byteVal := f.newTemp("str.byte")
+	fmt.Fprintf(&f.builder, "  %%%s = load i8, ptr %%%s\n", byteVal, bytePtr)
+	result := f.newTemp("str.byte.i32")
+	fmt.Fprintf(&f.builder, "  %%%s = zext i8 %%%s to i32\n", result, byteVal)
+	return exprValue{ref: "%" + result, typ: checker.TypeI32}
+}
+
+func (f *functionEmitter) genStringSlice(_ ast.Expression, sliceExpr *ast.SliceExpr) exprValue {
+	strValue := f.genExpression(sliceExpr.Inner)
+
+	strPtr := f.newTemp("str.ptr")
+	strLen := f.newTemp("str.len")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", strPtr, strValue.ref)
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", strLen, strValue.ref)
+
+	start := f.genExpression(sliceExpr.Start)
+	end := f.genExpression(sliceExpr.End)
+
+	start64 := f.intToI64(start.ref, start.typ)
+	end64 := f.intToI64(end.ref, end.typ)
+
+	fmt.Fprintf(&f.builder, "  call void @yar_slice_range_check(i64 %s, i64 %s, i64 %%%s)\n", start64, end64, strLen)
+
+	newPtr := f.newTemp("str.slice.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr i8, ptr %%%s, i64 %s\n", newPtr, strPtr, start64)
+	newLen := f.newTemp("str.slice.len")
+	fmt.Fprintf(&f.builder, "  %%%s = sub i64 %s, %s\n", newLen, end64, start64)
+
+	result := f.newTemp("str.slice")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str undef, ptr %%%s, 0\n", result, newPtr)
+	result2 := f.newTemp("str.slice")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str %%%s, i64 %%%s, 1\n", result2, result, newLen)
+	return exprValue{ref: "%" + result2, typ: checker.TypeStr}
 }
 
 func (f *functionEmitter) genMapLookup(expr *ast.IndexExpr, mapType checker.MapType) exprValue {
@@ -1082,6 +1138,10 @@ func (f *functionEmitter) genMapLookup(expr *ast.IndexExpr, mapType checker.MapT
 }
 
 func (f *functionEmitter) genSlice(expr ast.Expression, sliceExpr *ast.SliceExpr) exprValue {
+	if f.exprType(sliceExpr.Inner) == checker.TypeStr {
+		return f.genStringSlice(expr, sliceExpr)
+	}
+
 	basePtr, baseType := f.addressOfAggregateExpr(sliceExpr.Inner)
 	sliceType, _ := checker.ParseSliceType(baseType)
 	sliceValue := f.loadValue(basePtr, baseType)
@@ -1290,6 +1350,10 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 
 	left := f.genExpression(expr.Left)
 	right := f.genExpression(expr.Right)
+	if left.typ == checker.TypeStr {
+		return f.genStringBinary(expr.Operator, left, right)
+	}
+
 	out := f.newTemp("tmp")
 	switch expr.Operator {
 	case token.Plus:
@@ -1327,6 +1391,38 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 		return exprValue{ref: "%" + out, typ: checker.TypeBool}
 	default:
 		panic("unsupported binary operator")
+	}
+}
+
+func (f *functionEmitter) genStringBinary(op token.Kind, left, right exprValue) exprValue {
+	lPtr := f.newTemp("str.l.ptr")
+	lLen := f.newTemp("str.l.len")
+	rPtr := f.newTemp("str.r.ptr")
+	rLen := f.newTemp("str.r.len")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", lPtr, left.ref)
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", lLen, left.ref)
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", rPtr, right.ref)
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", rLen, right.ref)
+
+	switch op {
+	case token.Plus:
+		result := f.newTemp("str.concat")
+		fmt.Fprintf(&f.builder, "  %%%s = call %%yar.str @yar_str_concat(ptr %%%s, i64 %%%s, ptr %%%s, i64 %%%s)\n", result, lPtr, lLen, rPtr, rLen)
+		return exprValue{ref: "%" + result, typ: checker.TypeStr}
+	case token.EqualEqual:
+		raw := f.newTemp("str.eq.raw")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_str_equal(ptr %%%s, i64 %%%s, ptr %%%s, i64 %%%s)\n", raw, lPtr, lLen, rPtr, rLen)
+		result := f.newTemp("str.eq")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp ne i32 %%%s, 0\n", result, raw)
+		return exprValue{ref: "%" + result, typ: checker.TypeBool}
+	case token.BangEqual:
+		raw := f.newTemp("str.eq.raw")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_str_equal(ptr %%%s, i64 %%%s, ptr %%%s, i64 %%%s)\n", raw, lPtr, lLen, rPtr, rLen)
+		result := f.newTemp("str.ne")
+		fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %%%s, 0\n", result, raw)
+		return exprValue{ref: "%" + result, typ: checker.TypeBool}
+	default:
+		panic("unsupported string binary operator")
 	}
 }
 
@@ -1378,6 +1474,13 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 			lenResult := f.newTemp("map.len")
 			fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_map_len(ptr %s)\n", lenResult, arg.ref)
 			return exprValue{ref: "%" + lenResult, typ: checker.TypeI32}
+		}
+		if f.exprType(expr.Args[0]) == checker.TypeStr {
+			length64 := f.newTemp("str.len64")
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", length64, arg.ref)
+			length32 := f.newTemp("str.len")
+			fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %%%s to i32\n", length32, length64)
+			return exprValue{ref: "%" + length32, typ: checker.TypeI32}
 		}
 		length := f.extractSliceField(arg.ref, 1, "slice.len")
 		return exprValue{ref: length.ref, typ: checker.TypeI32}

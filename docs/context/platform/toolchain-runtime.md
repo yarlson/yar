@@ -24,6 +24,9 @@
 - `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage and traps on invalid size or allocation failure.
 - `yar_slice_index_check(long long index, long long len)` traps on out-of-range slice indexing.
 - `yar_slice_range_check(long long start, long long end, long long len)` traps on invalid slice ranges.
+- `yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len)` compares two strings by length then bytes, returning 1 for equal, 0 otherwise.
+- `yar_str_concat(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len)` allocates and returns a new string containing the concatenation of both inputs.
+- `yar_str_index_check(long long index, long long len)` traps on out-of-range string indexing.
 
 ## Allocation Boundary
 
@@ -36,4 +39,4 @@
 ## Testing Boundary
 
 - Compiler tests build real native executables and execute them.
-- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.
+- The test suite validates successful output, propagated unhandled errors, `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum definition and exhaustive `match`, v0.2 struct/array/loop programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package imports, string operations, stdlib imports, and the embedded allocation helper surface through the same `clang` boundary used by the CLI.

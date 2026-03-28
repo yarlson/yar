@@ -127,6 +127,22 @@ Status: deferred
 
 Too large and too interaction-heavy for the current stage of the language.
 
+### Basic string operations
+
+Status: accepted
+
+YAR supports byte-oriented string operations: `len(str)`, `==`/`!=` comparison,
+`+` concatenation, `s[i]` byte indexing returning `i32`, and `s[i:j]` byte
+slicing returning `str`. Out-of-range operations trap at runtime.
+
+### Standard library
+
+Status: accepted
+
+The compiler embeds a standard library written in yar. Stdlib packages are
+resolved as a fallback when an import path does not match a local directory.
+Local packages take priority over stdlib. The first stdlib package is `strings`.
+
 ---
 
 ### Maps

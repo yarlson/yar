@@ -1071,9 +1071,31 @@ func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType
 		return c.checkMapIndex(expr, index, mapType)
 	}
 
+	if inner.Base == TypeStr {
+		indexType := c.checkExpression(index.Index)
+		if indexType.Errorable {
+			c.diag.Add(index.Index.Pos(), "index expression cannot be errorable")
+			return ExprType{Base: TypeInvalid}
+		}
+		if !isIntegerType(indexType.Base) {
+			c.diag.Add(index.Index.Pos(), "index expression must be an integer")
+			return ExprType{Base: TypeInvalid}
+		}
+		if indexType.Base == TypeUntypedInt {
+			indexType = c.coerceUntypedInteger(index.Index, indexType, TypeI32)
+			if indexType.Base == TypeUntypedInt {
+				c.diag.Add(index.Index.Pos(), "index expression must fit in i32")
+				return ExprType{Base: TypeInvalid}
+			}
+		}
+		et := ExprType{Base: TypeI32}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+
 	elemType, ok := sequenceElementType(inner.Base)
 	if !ok {
-		c.diag.Add(index.LBracketPos, "indexing requires an array, slice, or map value")
+		c.diag.Add(index.LBracketPos, "indexing requires an array, slice, map, or str value")
 		return ExprType{Base: TypeInvalid}
 	}
 
@@ -1123,9 +1145,18 @@ func (c *Checker) checkSlice(expr ast.Expression, slice *ast.SliceExpr) ExprType
 		return ExprType{Base: TypeInvalid}
 	}
 
+	if inner.Base == TypeStr {
+		if !c.checkSliceBound(slice.Start) || !c.checkSliceBound(slice.End) {
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeStr}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+
 	sliceType, ok := ParseSliceType(inner.Base)
 	if !ok {
-		c.diag.Add(slice.LBracketPos, "slicing requires a slice value")
+		c.diag.Add(slice.LBracketPos, "slicing requires a slice or str value")
 		return ExprType{Base: TypeInvalid}
 	}
 
@@ -1305,8 +1336,8 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
 			return ExprType{Base: TypeInvalid}
 		}
-		if !isSequenceType(argType.Base) && !isMapType(argType.Base) {
-			c.diag.Add(call.Args[0].Pos(), "len requires an array, slice, or map argument")
+		if !isSequenceType(argType.Base) && !isMapType(argType.Base) && argType.Base != TypeStr {
+			c.diag.Add(call.Args[0].Pos(), "len requires an array, slice, map, or str argument")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeI32}
@@ -1471,7 +1502,21 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 		et := ExprType{Base: TypeBool}
 		c.info.ExprTypes[expr] = et
 		return et
-	case token.Plus, token.Minus, token.Star, token.Slash, token.Percent:
+	case token.Plus:
+		if left.Base == TypeStr && right.Base == TypeStr {
+			et := ExprType{Base: TypeStr}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
+		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+		if !ok {
+			c.diag.Add(binary.OpPos, "'+' requires matching integer or str operands")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: coerced.Result}
+		c.info.ExprTypes[expr] = et
+		return et
+	case token.Minus, token.Star, token.Slash, token.Percent:
 		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
 		if !ok {
 			c.diag.Add(binary.OpPos, "arithmetic operators require matching integer operands")
@@ -1523,8 +1568,13 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			c.diag.Add(binary.OpPos, "comparison is not supported for enum values in v0.4")
 			return ExprType{Base: TypeInvalid}
 		}
+		if left.Base == TypeStr {
+			et := ExprType{Base: TypeBool}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
 		if left.Base != TypeBool {
-			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, and pointers in v0.2")
+			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, pointers, and str")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeBool}

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void yar_runtime_fail(const char *data, long long len) {
     if (len > 0) {
@@ -63,6 +64,43 @@ void *yar_alloc(long long size) {
     return ptr;
 }
 
+/* --- string runtime --- */
+
+typedef struct {
+    const char *ptr;
+    long long   len;
+} yar_str;
+
+int32_t yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len) {
+    if (a_len != b_len) return 0;
+    if (a_len == 0) return 1;
+    return memcmp(a_ptr, b_ptr, (size_t)a_len) == 0 ? 1 : 0;
+}
+
+yar_str yar_str_concat(const char *a_ptr, long long a_len, const char *b_ptr, long long b_len) {
+    yar_str result;
+    long long total = a_len + b_len;
+    if (total == 0) {
+        result.ptr = NULL;
+        result.len = 0;
+        return result;
+    }
+    char *buf = (char *)malloc((size_t)total);
+    if (!buf) { yar_trap_oom(); }
+    if (a_len > 0) memcpy(buf, a_ptr, (size_t)a_len);
+    if (b_len > 0) memcpy(buf + a_len, b_ptr, (size_t)b_len);
+    result.ptr = buf;
+    result.len = total;
+    return result;
+}
+
+void yar_str_index_check(long long index, long long len) {
+    if (index < 0 || index >= len) {
+        static const char message[] = "runtime failure: string index out of range\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+}
+
 /* --- map runtime --- */
 
 #define YAR_MAP_INIT_CAP 8
@@ -74,11 +112,6 @@ void *yar_alloc(long long size) {
 #define YAR_KEY_I32   1
 #define YAR_KEY_I64   2
 #define YAR_KEY_STR   3
-
-typedef struct {
-    const char *ptr;
-    long long   len;
-} yar_str;
 
 typedef struct {
     unsigned char *entries;  /* bucket array: each bucket is (1 byte used + key_size + value_size) */

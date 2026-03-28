@@ -13,6 +13,7 @@ import (
 	"yar/internal/codegen"
 	"yar/internal/diag"
 	"yar/internal/parser"
+	"yar/internal/stdlib"
 	"yar/internal/token"
 )
 
@@ -106,6 +107,9 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if importPath != "" && errors.Is(err, os.ErrNotExist) {
+			if pkg, stdErr := l.loadStdlibPackage(importPath); stdErr == nil {
+				return pkg, nil
+			}
 			return nil, errPackageUnavailable
 		}
 		return nil, err
@@ -156,8 +160,57 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 	}
 	l.packages[importPath] = pkg
 
+	return l.resolveImports(pkg)
+}
+
+func (l *packageLoader) loadStdlibPackage(importPath string) (*ast.Package, error) {
+	if !stdlib.Has(importPath) {
+		return nil, errPackageUnavailable
+	}
+
+	fileNames, err := stdlib.ReadDir(importPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []*ast.Program
+	var packageName string
+	for _, name := range fileNames {
+		src, err := stdlib.ReadFile(importPath, name)
+		if err != nil {
+			return nil, err
+		}
+		syntheticPath := "<stdlib>/" + importPath + "/" + name
+		program, diags := parser.ParseFile(syntheticPath, src)
+		l.diag.Append(diags)
+		if program == nil {
+			continue
+		}
+		if packageName == "" {
+			packageName = program.PackageName
+		} else if program.PackageName != packageName {
+			l.diag.Add(program.PackagePos, "package %q does not match package %q in stdlib %q", program.PackageName, packageName, importPath)
+		}
+		files = append(files, program)
+	}
+
+	if len(files) == 0 {
+		return nil, errPackageUnavailable
+	}
+
+	pkg := &ast.Package{
+		Path:  importPath,
+		Name:  packageName,
+		Files: files,
+	}
+	l.packages[importPath] = pkg
+
+	return l.resolveImports(pkg)
+}
+
+func (l *packageLoader) resolveImports(pkg *ast.Package) (*ast.Package, error) {
 	seenImports := make(map[string]struct{})
-	for _, file := range files {
+	for _, file := range pkg.Files {
 		pkg.Structs = append(pkg.Structs, file.Structs...)
 		pkg.Enums = append(pkg.Enums, file.Enums...)
 		pkg.Functions = append(pkg.Functions, file.Functions...)
@@ -193,7 +246,6 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 			pkg.Imports = append(pkg.Imports, ast.PackageImport{Name: target.Name, Path: decl.Path, Decl: decl})
 		}
 	}
-
 	return pkg, nil
 }
 

@@ -91,7 +91,11 @@
 - Non-`void` functions must return on every reachable path.
 - `if` and `for` conditions must be non-errorable `bool` expressions.
 - Arithmetic and relational operators require matching integer operands after literal coercion.
-- Equality and inequality are supported for integers, `bool`, same-typed pointers, and pointer-vs-`nil`.
+- String `==` and `!=` compare by exact byte equality.
+- String `+` concatenates two strings into a new heap-allocated string.
+- String indexing `s[i]` returns the byte value at offset `i` as `i32`, with runtime bounds checking.
+- String slicing `s[i:j]` returns the byte substring as `str`, with runtime bounds checking.
+- Equality and inequality are supported for integers, `bool`, `str`, same-typed pointers, and pointer-vs-`nil`.
 - `&&` and `||` require `bool` operands and evaluate the right operand only when needed.
 - Unary `-` requires an integer operand.
 - Unary `!` requires a `bool` operand.
@@ -111,7 +115,7 @@
 - Map key types are restricted to `bool`, `i32`, `i64`, and `str`.
 - Map value types cannot be `void`, `noreturn`, or an unknown type.
 - `m[key] = value` inserts or replaces the entry for `key` in a map.
-- `len` requires an array, slice, or map argument and returns `i32`.
+- `len` requires an array, slice, map, or `str` argument and returns `i32`.
 - `append` requires `append([]T, T)` and returns `[]T`.
 - `error.Name` is only valid as the direct operand of `return` inside an errorable function or a function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned directly, propagated with `?`, or handled with `or |err| { ... }`.
@@ -125,7 +129,7 @@
 - `print(str) void`
 - `print_int(i32) void`
 - `panic(str) noreturn`
-- `len([N]T | []T | map[K]V) i32`
+- `len([N]T | []T | map[K]V | str) i32`
 - `append([]T, T) []T`
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
