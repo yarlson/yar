@@ -122,10 +122,13 @@ Invalid because `read_dir` returns a slice of `DirEntry`, not one entry.
 
 This proposal introduces a host-bound standard-library capability.
 
-Unlike the existing text helpers, these packages cannot be implemented in pure
-yar alone. They require compiler/runtime support to cross the host boundary.
-That is acceptable because compiler self-hosting is fundamentally a host-facing
-task.
+The important implementation constraint is to keep the host boundary as small as
+possible.
+
+The public `fs` and `path` packages should remain stdlib packages written in
+yar. Only the irreducible host-facing operations should require
+compiler/runtime support. Deterministic path logic and higher-level filesystem
+composition should stay in yar source where practical.
 
 ### `fs`
 
@@ -156,6 +159,17 @@ enum EntryKind {
 The first version is text-oriented. File contents are `str`, not `[]i32`,
 `[]byte`, or opaque handles.
 
+The public package surface does not imply that every exported `fs` function must
+map directly to one runtime entry point.
+
+The intended design is:
+
+- keep low-level host-touching operations behind compiler-known intrinsics or
+  runtime shims
+- implement recursive or composed behavior in yar where possible
+- allow `fs.mkdir_all` and `fs.remove_all` to be ordinary yar functions layered
+  over smaller host primitives if that keeps the runtime smaller
+
 All host failures are explicit errors. Expected error names in the initial
 surface are:
 
@@ -179,6 +193,10 @@ but the language/runtime contract must preserve these stable user-visible names.
 - `path.dir(p)` returns the parent path
 - `path.base(p)` returns the final path element
 - `path.ext(p)` returns the suffix starting at the final `.`, or `""`
+
+The intended implementation is that `path` lives entirely in yar unless one
+small platform-normalization hook proves necessary. The default design target is
+to keep `path` logic out of the runtime.
 
 This proposal keeps import-path semantics unchanged. Import strings remain
 slash-separated logical package paths. `path` is for host filesystem paths, not
@@ -216,16 +234,32 @@ ordinary package-qualified calls:
 - AST / IR: no new node kinds
 - checker: no new syntax rules; register package-loaded function signatures in
   the same way as other stdlib APIs
-- codegen: lower `fs` calls to runtime/host shims and lower `path` as ordinary
-  function calls
-- runtime: add host-facing entry points for file reads, writes, directory
-  listing, stat, temp-dir creation, and recursive remove
+- codegen: lower selected stdlib calls to a minimal set of compiler-known host
+  intrinsics or runtime shims
+- runtime: expose only the low-level host boundary that cannot be expressed
+  cleanly in yar or portable generated LLVM
+
+The preferred split is:
+
+- move all deterministic path logic into yar
+- move recursive or composed filesystem logic into yar where possible
+- keep only low-level host calls as intrinsics/runtime shims
+- let codegen perform the lowering from public stdlib calls to those low-level
+  shims
+
+This means the runtime surface should be smaller than the public stdlib surface.
+For example, it is acceptable for public `fs.mkdir_all` or `fs.remove_all` to be
+implemented in yar on top of lower-level host operations rather than mirrored as
+1:1 runtime functions.
 
 The most important design choice is that `fs` is still presented as standard
 library, not as a new family of ad hoc builtins. The compiler may embed the
 package source and treat selected declarations as host intrinsics during
 lowering, similar in spirit to the existing runtime boundary for allocation and
 string helpers.
+
+This gives YAR a minimal host boundary without introducing a general-purpose
+FFI.
 
 ## 8. Interactions
 
@@ -253,6 +287,13 @@ artifacts from yar code, not from a permanently privileged Go wrapper.
 Rejected because these operations belong to a clear host-stdlib boundary rather
 than to the global builtin namespace.
 
+### Mirror the public `fs` / `path` API directly in the runtime
+
+Rejected as the default design because it makes the runtime surface grow too
+quickly and duplicates logic that can live in yar or codegen. The public stdlib
+API should be larger than the irreducible host boundary when that keeps the
+runtime smaller and clearer.
+
 ### Add a much larger POSIX-like API immediately
 
 Rejected because the self-hosting need is narrow: read source files, enumerate
@@ -264,8 +305,8 @@ current complexity budget.
 - language surface: medium
 - parser complexity: low
 - checker complexity: low
-- lowering/codegen complexity: medium
-- runtime complexity: high
+- lowering/codegen complexity: high
+- runtime complexity: medium
 - diagnostics complexity: medium
 - test burden: high
 - documentation burden: high
@@ -287,6 +328,9 @@ boundary.
   unspecified order?
 - Should `path` use platform-native separators in all returned strings, or
   preserve slash forms where possible?
+- What is the smallest low-level host primitive set that still lets yar
+  implement `fs.mkdir_all` and `fs.remove_all` without pushing that logic back
+  into the runtime?
 - Should local packages be allowed to shadow host stdlib package names such as
   `fs` and `path`, or should some package names be reserved?
 
@@ -302,6 +346,8 @@ accepted in isolation from the rest of the host-bound surface.
 - stdlib package API design
 - runtime host I/O boundary
 - lowering/codegen hooks for host calls
+- yar-level implementation plan for `path`
+- yar-level implementation plan for recursive/composed `fs` helpers
 - diagnostics for host-failure error names
 - integration tests for file loading and output writing
 - package-loader migration plan
