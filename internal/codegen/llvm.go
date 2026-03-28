@@ -55,6 +55,15 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		fmt.Fprintf(&b, "%s = type { %s }\n", g.structTypeName(name), strings.Join(fieldTypes, ", "))
 	}
 
+	enumNames := make([]string, 0, len(info.Enums))
+	for name := range info.Enums {
+		enumNames = append(enumNames, name)
+	}
+	sort.Strings(enumNames)
+	for _, name := range enumNames {
+		fmt.Fprintf(&b, "%s = type %s\n", g.enumTypeName(name), g.enumTypeLiteral(info.Enums[name]))
+	}
+
 	resultTypes := make([]string, 0, len(g.usedResultType))
 	for typ := range g.usedResultType {
 		resultTypes = append(resultTypes, string(typ))
@@ -231,11 +240,26 @@ func (g *Generator) llvmType(typ checker.Type) string {
 	if _, ok := checker.ParseSliceType(typ); ok {
 		return "%yar.slice"
 	}
+	if _, ok := g.info.Enums[string(typ)]; ok {
+		return g.enumTypeName(string(typ))
+	}
 	return g.structTypeName(string(typ))
 }
 
 func (g *Generator) structTypeName(name string) string {
 	return "%yar.struct." + sanitizeLabel(name)
+}
+
+func (g *Generator) enumTypeName(name string) string {
+	return "%yar.enum." + sanitizeLabel(name)
+}
+
+func (g *Generator) enumTypeLiteral(info checker.EnumInfo) string {
+	words := g.enumPayloadWords(info)
+	if words == 0 {
+		return "{ i32 }"
+	}
+	return fmt.Sprintf("{ i32, [%d x i64] }", words)
 }
 
 func (g *Generator) resultTypeName(typ checker.Type) string {
@@ -251,6 +275,134 @@ func (g *Generator) resultStructLiteral(typ checker.Type) string {
 
 func (g *Generator) functionName(name string) string {
 	return "@yar." + name
+}
+
+func (g *Generator) lookupEnumCaseType(name string) (checker.EnumInfo, checker.EnumCaseInfo, bool) {
+	idx := strings.LastIndex(name, ".")
+	if idx <= 0 {
+		return checker.EnumInfo{}, checker.EnumCaseInfo{}, false
+	}
+	enumName := name[:idx]
+	caseName := name[idx+1:]
+	enumInfo, ok := g.info.Enums[enumName]
+	if !ok {
+		return checker.EnumInfo{}, checker.EnumCaseInfo{}, false
+	}
+	enumCase, _, ok := enumInfo.Case(caseName)
+	if !ok {
+		return checker.EnumInfo{}, checker.EnumCaseInfo{}, false
+	}
+	return enumInfo, enumCase, true
+}
+
+func (g *Generator) enumPayloadWords(info checker.EnumInfo) int {
+	maxSize := 0
+	for _, enumCase := range info.Cases {
+		if enumCase.PayloadType == checker.TypeInvalid || enumCase.PayloadType == "" {
+			continue
+		}
+		size := g.typeSize(enumCase.PayloadType)
+		if size > maxSize {
+			maxSize = size
+		}
+	}
+	if maxSize == 0 {
+		return 0
+	}
+	return (maxSize + 7) / 8
+}
+
+func (g *Generator) typeSize(typ checker.Type) int {
+	switch typ {
+	case checker.TypeBool:
+		return 1
+	case checker.TypeI32, checker.TypeError:
+		return 4
+	case checker.TypeI64:
+		return 8
+	case checker.TypeStr:
+		return 16
+	}
+
+	if _, ok := checker.ParsePointerType(typ); ok {
+		return 8
+	}
+	if array, ok := checker.ParseArrayType(typ); ok {
+		return array.Len * g.typeSize(array.Elem)
+	}
+	if _, ok := checker.ParseSliceType(typ); ok {
+		return 16
+	}
+	if info, ok := g.info.Structs[string(typ)]; ok {
+		size := 0
+		align := 1
+		for _, field := range info.Fields {
+			fieldAlign := g.typeAlign(field.Type)
+			size = alignTo(size, fieldAlign)
+			size += g.typeSize(field.Type)
+			if fieldAlign > align {
+				align = fieldAlign
+			}
+		}
+		return alignTo(size, align)
+	}
+	if info, ok := g.info.Enums[string(typ)]; ok {
+		words := g.enumPayloadWords(info)
+		if words == 0 {
+			return 4
+		}
+		return 8 + words*8
+	}
+	return 0
+}
+
+func (g *Generator) typeAlign(typ checker.Type) int {
+	switch typ {
+	case checker.TypeBool:
+		return 1
+	case checker.TypeI32, checker.TypeError:
+		return 4
+	case checker.TypeI64, checker.TypeStr:
+		return 8
+	}
+
+	if _, ok := checker.ParsePointerType(typ); ok {
+		return 8
+	}
+	if array, ok := checker.ParseArrayType(typ); ok {
+		return g.typeAlign(array.Elem)
+	}
+	if _, ok := checker.ParseSliceType(typ); ok {
+		return 8
+	}
+	if info, ok := g.info.Structs[string(typ)]; ok {
+		align := 1
+		for _, field := range info.Fields {
+			fieldAlign := g.typeAlign(field.Type)
+			if fieldAlign > align {
+				align = fieldAlign
+			}
+		}
+		return align
+	}
+	if info, ok := g.info.Enums[string(typ)]; ok {
+		if g.enumPayloadWords(info) == 0 {
+			return 4
+		}
+		return 8
+	}
+	return 1
+}
+
+func alignTo(size, align int) int {
+	if align <= 1 {
+		return size
+	}
+	rem := size % align
+	if rem == 0 {
+		return size
+	}
+	return size + align - rem
 }
 
 func (g *Generator) stringConstant(value string) string {
@@ -356,7 +508,7 @@ func (f *functionEmitter) emit() string {
 	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.sig.FullName), strings.Join(params, ", "))
 	f.emitLabel("entry")
 	for i, param := range f.fn.Params {
-		slot := f.newLocalSlot(f.sig.Params[i], false)
+		slot := f.newLocalSlot(f.sig.Params[i])
 		fmt.Fprintf(&f.builder, "  store %s %%arg%d, ptr %s\n", f.g.llvmType(f.sig.Params[i]), i, slot)
 		f.bindLocal(param.Name, localSlot{typ: f.sig.Params[i], ptr: slot})
 	}
@@ -406,12 +558,12 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		f.genBlock(s)
 	case *ast.LetStmt:
 		value := f.genExpression(s.Value)
-		slot := f.newLocalSlot(value.typ, false)
+		slot := f.newLocalSlot(value.typ)
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(value.typ), value.ref, slot)
 		f.bindLocal(s.Name, localSlot{typ: value.typ, ptr: slot})
 	case *ast.VarStmt:
 		typ := f.localType(stmt)
-		slot := f.newLocalSlot(typ, false)
+		slot := f.newLocalSlot(typ)
 		value := f.g.zeroValue(typ)
 		if s.Value != nil {
 			value = f.genExpression(s.Value).ref
@@ -426,6 +578,8 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		f.genIf(s)
 	case *ast.ForStmt:
 		f.genFor(s)
+	case *ast.MatchStmt:
+		f.genMatch(s)
 	case *ast.BreakStmt:
 		if len(f.loops) == 0 {
 			return
@@ -553,6 +707,70 @@ func (f *functionEmitter) genFor(stmt *ast.ForStmt) {
 	f.emitLabel(endLabel)
 }
 
+func (f *functionEmitter) genMatch(stmt *ast.MatchStmt) {
+	enumType := f.exprType(stmt.Value)
+	enumInfo, ok := f.g.info.Enums[string(enumType)]
+	if !ok {
+		panic("match requires enum metadata")
+	}
+
+	value := f.genExpression(stmt.Value)
+	slot := f.newTemp("match.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(enumType))
+	fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(enumType), value.ref, slot)
+
+	tagPtr := f.newTemp("match.tag.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %%%s, i32 0, i32 0\n", tagPtr, f.g.llvmType(enumType), slot)
+	tag := f.newTemp("match.tag")
+	fmt.Fprintf(&f.builder, "  %%%s = load i32, ptr %%%s\n", tag, tagPtr)
+
+	defaultLabel := f.newLabel("match.unreachable")
+	endLabel := f.newLabel("match.end")
+	armLabels := make([]string, len(stmt.Arms))
+	fmt.Fprintf(&f.builder, "  switch i32 %%%s, label %%%s [\n", tag, defaultLabel)
+	for i, arm := range stmt.Arms {
+		enumCase, _, ok := enumInfo.Case(arm.CaseName)
+		if !ok {
+			panic("missing enum case metadata")
+		}
+		armLabels[i] = f.newLabel("match.case")
+		fmt.Fprintf(&f.builder, "    i32 %d, label %%%s\n", enumCase.Tag, armLabels[i])
+	}
+	f.builder.WriteString("  ]\n")
+	f.terminated = true
+
+	needsEnd := false
+	for i, arm := range stmt.Arms {
+		enumCase, _, _ := enumInfo.Case(arm.CaseName)
+		f.emitLabel(armLabels[i])
+		if arm.BindName != "" && !arm.BindIgnore && enumCase.PayloadType != "" {
+			f.pushScope()
+			payloadValue := f.loadValue(f.enumPayloadPtr("%"+slot, enumType), enumCase.PayloadType)
+			bindSlot := f.newLocalSlot(enumCase.PayloadType)
+			fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(enumCase.PayloadType), payloadValue.ref, bindSlot)
+			f.bindLocal(arm.BindName, localSlot{typ: enumCase.PayloadType, ptr: bindSlot})
+			f.genBlock(arm.Body)
+			f.popScope()
+		} else {
+			f.genBlock(arm.Body)
+		}
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+			f.terminated = true
+			needsEnd = true
+		}
+	}
+
+	f.emitLabel(defaultLabel)
+	f.builder.WriteString("  unreachable\n")
+	f.terminated = true
+
+	if needsEnd {
+		f.emitLabel(endLabel)
+		return
+	}
+}
+
 func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 	if f.sig.Errorable {
 		if stmt.Value == nil {
@@ -637,12 +855,18 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 	case *ast.BinaryExpr:
 		return f.genBinary(e)
 	case *ast.SelectorExpr:
+		if value, ok := f.genEnumCaseSelector(e); ok {
+			return value
+		}
 		return f.genSelector(e)
 	case *ast.IndexExpr:
 		return f.genIndex(e)
 	case *ast.SliceExpr:
 		return f.genSlice(expr, e)
 	case *ast.StructLiteralExpr:
+		if value, ok := f.genEnumCaseLiteral(expr, e); ok {
+			return value
+		}
 		return f.genStructLiteral(expr, e)
 	case *ast.ArrayLiteralExpr:
 		return f.genArrayLiteral(expr, e)
@@ -683,6 +907,50 @@ func (f *functionEmitter) genUnary(expr ast.Expression, unary *ast.UnaryExpr) ex
 	default:
 		panic("unsupported unary operator")
 	}
+}
+
+func (f *functionEmitter) genEnumCaseSelector(expr *ast.SelectorExpr) (exprValue, bool) {
+	inner, ok := expr.Inner.(*ast.IdentExpr)
+	if !ok {
+		return exprValue{}, false
+	}
+	enumInfo, ok := f.g.info.Enums[inner.Name]
+	if !ok {
+		return exprValue{}, false
+	}
+	enumCase, _, ok := enumInfo.Case(expr.Name)
+	if !ok {
+		return exprValue{}, false
+	}
+	return f.emitEnumValue(checker.Type(enumInfo.Name), enumCase, nil), true
+}
+
+func (f *functionEmitter) genEnumCaseLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) (exprValue, bool) {
+	enumInfo, enumCase, ok := f.g.lookupEnumCaseType(lit.Type.Name)
+	if !ok {
+		return exprValue{}, false
+	}
+	payload := f.emitStructValue(enumCase.PayloadType, lit.Fields)
+	value := f.emitEnumValue(checker.Type(enumInfo.Name), enumCase, &exprValue{ref: payload, typ: enumCase.PayloadType})
+	value.typ = f.exprType(expr)
+	return value, true
+}
+
+func (f *functionEmitter) emitStructValue(typ checker.Type, fields []ast.StructLiteralField) string {
+	if len(fields) == 0 {
+		return "zeroinitializer"
+	}
+
+	value := "zeroinitializer"
+	info := f.g.info.Structs[string(typ)]
+	for _, fieldInit := range fields {
+		field, index, _ := info.Field(fieldInit.Name)
+		fieldValue := f.genExpression(fieldInit.Value)
+		next := f.newTemp("struct")
+		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(field.Type), fieldValue.ref, index)
+		value = "%" + next
+	}
+	return value
 }
 
 func (f *functionEmitter) genSelector(expr *ast.SelectorExpr) exprValue {
@@ -744,20 +1012,7 @@ func (f *functionEmitter) genSlice(expr ast.Expression, sliceExpr *ast.SliceExpr
 
 func (f *functionEmitter) genStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) exprValue {
 	typ := f.exprType(expr)
-	if len(lit.Fields) == 0 {
-		return exprValue{ref: "zeroinitializer", typ: typ}
-	}
-
-	value := "zeroinitializer"
-	info := f.g.info.Structs[string(typ)]
-	for _, fieldInit := range lit.Fields {
-		field, index, _ := info.Field(fieldInit.Name)
-		fieldValue := f.genExpression(fieldInit.Value)
-		next := f.newTemp("struct")
-		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(field.Type), fieldValue.ref, index)
-		value = "%" + next
-	}
-	return exprValue{ref: value, typ: typ}
+	return exprValue{ref: f.emitStructValue(typ, lit.Fields), typ: typ}
 }
 
 func (f *functionEmitter) genArrayLiteral(expr ast.Expression, lit *ast.ArrayLiteralExpr) exprValue {
@@ -1184,8 +1439,8 @@ func (f *functionEmitter) addressOfAggregateExpr(expr ast.Expression) (string, c
 	return "%" + slot, value.typ
 }
 
-func (f *functionEmitter) newLocalSlot(typ checker.Type, zeroed bool) string {
-	return f.emitAllocType(typ, zeroed)
+func (f *functionEmitter) newLocalSlot(typ checker.Type) string {
+	return f.emitAllocType(typ, false)
 }
 
 func (f *functionEmitter) loadValue(ptr string, typ checker.Type) exprValue {
@@ -1330,6 +1585,19 @@ func (f *functionEmitter) emitErrorCodeResult(typ checker.Type, code string) str
 	return "%" + tmp3
 }
 
+func (f *functionEmitter) emitEnumValue(enumType checker.Type, enumCase checker.EnumCaseInfo, payload *exprValue) exprValue {
+	slot := f.newTemp("enum.slot")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(enumType))
+	fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(enumType), slot)
+	tagPtr := f.newTemp("enum.tag.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %%%s, i32 0, i32 0\n", tagPtr, f.g.llvmType(enumType), slot)
+	fmt.Fprintf(&f.builder, "  store i32 %d, ptr %%%s\n", enumCase.Tag, tagPtr)
+	if payload != nil && payload.typ != checker.TypeInvalid {
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(payload.typ), payload.ref, f.enumPayloadPtr("%"+slot, enumType))
+	}
+	return f.loadValue("%"+slot, enumType)
+}
+
 func (g *Generator) zeroValue(typ checker.Type) string {
 	switch typ {
 	case checker.TypeBool, checker.TypeI32, checker.TypeI64, checker.TypeError:
@@ -1344,6 +1612,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 			return "zeroinitializer"
 		}
 		if _, ok := checker.ParseSliceType(typ); ok {
+			return "zeroinitializer"
+		}
+		if _, ok := g.info.Enums[string(typ)]; ok {
 			return "zeroinitializer"
 		}
 		if _, ok := g.info.Structs[string(typ)]; ok {
@@ -1363,6 +1634,12 @@ func (f *functionEmitter) exprInfo(expr ast.Expression) checker.ExprType {
 		return checker.ExprType{Base: checker.TypeInvalid}
 	}
 	return exprType
+}
+
+func (f *functionEmitter) enumPayloadPtr(enumPtr string, enumType checker.Type) string {
+	ptr := f.newTemp("enum.payload.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 1\n", ptr, f.g.llvmType(enumType), enumPtr)
+	return "%" + ptr
 }
 
 func (f *functionEmitter) localType(node ast.Node) checker.Type {

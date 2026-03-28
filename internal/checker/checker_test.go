@@ -258,6 +258,138 @@ fn main() !i32 {
 	}
 }
 
+func TestCheckEnumsAndMatchValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+enum TokenKind {
+	Ident
+	Int
+}
+
+enum Expr {
+	Int { value i64 }
+	Name { text str }
+}
+
+fn kind_name(kind TokenKind) str {
+	match kind {
+	case TokenKind.Ident {
+		return "ident"
+	}
+	case TokenKind.Int {
+		return "int"
+	}
+	}
+}
+
+fn main() i32 {
+	expr := Expr.Name{text: "main"}
+	match expr {
+	case Expr.Int(_) {
+		return 1
+	}
+	case Expr.Name(v) {
+		print(v.text)
+		print(kind_name(TokenKind.Ident))
+		return 0
+	}
+	}
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	info, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+	if _, ok := info.Enums["Expr"]; !ok {
+		t.Fatal("expected enum metadata for Expr")
+	}
+	if _, ok := info.Structs["Expr.Name"]; !ok {
+		t.Fatal("expected payload struct metadata for Expr.Name")
+	}
+}
+
+func TestCheckEnumsAndMatchInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "non exhaustive match",
+			src: `
+package main
+
+enum TokenKind {
+	Ident
+	Int
+}
+
+fn main() i32 {
+	kind := TokenKind.Ident
+	match kind {
+	case TokenKind.Ident {
+		return 0
+	}
+	}
+}
+`,
+			substr: "not exhaustive",
+		},
+		{
+			name: "duplicate enum case",
+			src: `
+package main
+
+enum TokenKind {
+	Ident
+	Ident
+}
+
+fn main() i32 {
+	return 0
+}
+`,
+			substr: "already declared in enum",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
 func TestCheckSlicesValid(t *testing.T) {
 	t.Parallel()
 

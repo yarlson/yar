@@ -225,6 +225,23 @@ func TestPointerFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestEnumFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(fixturePath("enums"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "name\nmain\nident\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildAndRunPropagateSugar(t *testing.T) {
 	t.Parallel()
 
@@ -561,6 +578,67 @@ pub fn value() i32 {
 	}
 }
 
+func TestCompilePathSupportsImportedEnums(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	expr := lib.make_name()
+	match expr {
+	case lib.Expr.Int(_) {
+		return 1
+	}
+	case lib.Expr.Name(v) {
+		print(v.text)
+		print("\n")
+	}
+	}
+
+	kind := lib.kind()
+	match kind {
+	case lib.TokenKind.Ident {
+		return 0
+	}
+	case lib.TokenKind.Int {
+		return 2
+	}
+	}
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+pub enum TokenKind {
+	Ident
+	Int
+}
+
+pub enum Expr {
+	Int { value i32 }
+	Name { text str }
+}
+
+pub fn make_name() Expr {
+	return Expr.Name{text: "ok"}
+}
+
+pub fn kind() TokenKind {
+	return TokenKind.Ident
+}
+`)
+
+	output, err := buildAndRunPath(t, filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestCompilePathRejectsExportedFunctionUsingHiddenType(t *testing.T) {
 	t.Parallel()
 
@@ -627,6 +705,41 @@ pub struct Wrapper {
 		t.Fatal("expected diagnostics")
 	}
 	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "exported struct \"Wrapper\" cannot use non-exported type \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsExportedFunctionUsingHiddenEnumType(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	return 0
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+enum hidden {
+	A
+}
+
+pub fn make() hidden {
+	return hidden.A
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "exported function \"make\" cannot use non-exported type \"hidden\"") {
 		t.Fatalf("unexpected diagnostics: %s", got)
 	}
 }

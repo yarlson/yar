@@ -58,12 +58,16 @@ func (p *Parser) parseProgram() *ast.Program {
 			if decl := p.parseStruct(exported); decl != nil {
 				program.Structs = append(program.Structs, decl)
 			}
+		case token.Enum:
+			if decl := p.parseEnum(exported); decl != nil {
+				program.Enums = append(program.Enums, decl)
+			}
 		case token.Fn:
 			if fn := p.parseFunction(exported); fn != nil {
 				program.Functions = append(program.Functions, fn)
 			}
 		default:
-			p.errorCurrent("expected function or struct declaration")
+			p.errorCurrent("expected function, struct, or enum declaration")
 			p.advance()
 		}
 	}
@@ -101,6 +105,42 @@ func (p *Parser) parseStruct(exported bool) *ast.StructDecl {
 		})
 	}
 	p.expect(token.RBrace, "expected '}' after struct body")
+	return decl
+}
+
+func (p *Parser) parseEnum(exported bool) *ast.EnumDecl {
+	enumTok := p.expect(token.Enum, "expected enum")
+	nameTok := p.expect(token.Ident, "expected enum name")
+	p.expect(token.LBrace, "expected '{' after enum name")
+
+	decl := &ast.EnumDecl{
+		EnumPos:  enumTok.Pos,
+		Exported: exported,
+		Name:     nameTok.Text,
+		NamePos:  nameTok.Pos,
+	}
+	for !p.at(token.RBrace) && !p.at(token.EOF) {
+		caseName := p.expect(token.Ident, "expected enum case name")
+		enumCase := ast.EnumCaseDecl{
+			Name:    caseName.Text,
+			NamePos: caseName.Pos,
+		}
+		if p.at(token.LBrace) {
+			p.advance()
+			for !p.at(token.RBrace) && !p.at(token.EOF) {
+				fieldName := p.expect(token.Ident, "expected payload field name")
+				fieldType := p.parseTypeRef()
+				enumCase.Fields = append(enumCase.Fields, ast.StructField{
+					Name:    fieldName.Text,
+					NamePos: fieldName.Pos,
+					Type:    fieldType,
+				})
+			}
+			p.expect(token.RBrace, "expected '}' after enum payload")
+		}
+		decl.Cases = append(decl.Cases, enumCase)
+	}
+	p.expect(token.RBrace, "expected '}' after enum body")
 	return decl
 }
 
@@ -221,6 +261,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseContinue()
 	case token.Return:
 		return p.parseReturn()
+	case token.Match:
+		return p.parseMatch()
 	case token.LBrace:
 		return p.parseBlock()
 	case token.Ident:
@@ -418,6 +460,63 @@ func (p *Parser) parseReturn() ast.Statement {
 		ReturnPos: returnTok.Pos,
 		Value:     p.parseExpression(),
 	}
+}
+
+func (p *Parser) parseMatch() ast.Statement {
+	matchTok := p.expect(token.Match, "expected match")
+	value := p.parseExpression()
+	p.expect(token.LBrace, "expected '{' after match value")
+
+	stmt := &ast.MatchStmt{
+		MatchPos: matchTok.Pos,
+		Value:    value,
+	}
+	for !p.at(token.RBrace) && !p.at(token.EOF) {
+		stmt.Arms = append(stmt.Arms, p.parseMatchArm())
+	}
+	p.expect(token.RBrace, "expected '}' after match")
+	return stmt
+}
+
+func (p *Parser) parseMatchArm() ast.MatchArm {
+	caseTok := p.expect(token.Case, "expected case")
+	enumType, caseName, casePos := p.parseMatchCasePattern()
+	arm := ast.MatchArm{
+		CasePos:     caseTok.Pos,
+		EnumType:    enumType,
+		CaseName:    caseName,
+		CaseNamePos: casePos,
+	}
+	if p.at(token.LParen) {
+		p.advance()
+		bindTok := p.expect(token.Ident, "expected payload binding")
+		arm.BindName = bindTok.Text
+		arm.BindNamePos = bindTok.Pos
+		arm.BindIgnore = bindTok.Text == "_"
+		p.expect(token.RParen, "expected ')' after payload binding")
+	}
+	arm.Body = p.parseBlock()
+	return arm
+}
+
+func (p *Parser) parseMatchCasePattern() (ast.TypeRef, string, token.Position) {
+	nameTok := p.expect(token.Ident, "expected enum case")
+	parts := []string{nameTok.Text}
+	for p.at(token.Dot) {
+		p.advance()
+		partTok := p.expect(token.Ident, "expected identifier after '.'")
+		parts = append(parts, partTok.Text)
+		if len(parts) == 3 {
+			break
+		}
+	}
+	if len(parts) < 2 {
+		p.diag.Add(nameTok.Pos, "match case must name Enum.Case")
+		return ast.TypeRef{Name: nameTok.Text, Pos: nameTok.Pos}, "", nameTok.Pos
+	}
+	enumType := strings.Join(parts[:len(parts)-1], ".")
+	caseName := parts[len(parts)-1]
+	return ast.TypeRef{Name: enumType, Pos: nameTok.Pos}, caseName, nameTok.Pos
 }
 
 func (p *Parser) parseExpression() ast.Expression {

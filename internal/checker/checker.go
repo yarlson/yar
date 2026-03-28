@@ -64,12 +64,46 @@ func (s StructInfo) Field(name string) (StructField, int, bool) {
 	return StructField{}, -1, false
 }
 
+type EnumCaseInfo struct {
+	Name        string
+	Tag         int
+	PayloadType Type
+	Fields      []StructField
+}
+
+func (c EnumCaseInfo) Field(name string) (StructField, int, bool) {
+	for i, field := range c.Fields {
+		if field.Name == name {
+			return field, i, true
+		}
+	}
+	return StructField{}, -1, false
+}
+
+type EnumInfo struct {
+	Name     string
+	Package  string
+	FullName string
+	Exported bool
+	Cases    []EnumCaseInfo
+}
+
+func (e EnumInfo) Case(name string) (EnumCaseInfo, int, bool) {
+	for i, enumCase := range e.Cases {
+		if enumCase.Name == name {
+			return enumCase, i, true
+		}
+	}
+	return EnumCaseInfo{}, -1, false
+}
+
 type Info struct {
 	Functions     map[*ast.FunctionDecl]Signature
 	Calls         map[*ast.CallExpr]Signature
 	ExprTypes     map[ast.Expression]ExprType
 	Locals        map[ast.Node]Type
 	Structs       map[string]StructInfo
+	Enums         map[string]EnumInfo
 	ErrorCodes    map[string]int
 	OrderedErrors []string
 }
@@ -78,6 +112,7 @@ type Checker struct {
 	diag      diag.List
 	functions map[string]Signature
 	structs   map[string]*ast.StructDecl
+	enums     map[string]*ast.EnumDecl
 	info      Info
 	current   *functionContext
 }
@@ -205,12 +240,14 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 			},
 		},
 		structs: make(map[string]*ast.StructDecl),
+		enums:   make(map[string]*ast.EnumDecl),
 		info: Info{
 			Functions:  make(map[*ast.FunctionDecl]Signature),
 			Calls:      make(map[*ast.CallExpr]Signature),
 			ExprTypes:  make(map[ast.Expression]ExprType),
 			Locals:     make(map[ast.Node]Type),
 			Structs:    make(map[string]StructInfo),
+			Enums:      make(map[string]EnumInfo),
 			ErrorCodes: make(map[string]int),
 		},
 	}
@@ -233,7 +270,22 @@ func (c *Checker) checkProgram(program *ast.Program) {
 			c.diag.Add(decl.NamePos, "struct %q is already declared", decl.Name)
 			continue
 		}
+		if _, exists := c.enums[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
+			continue
+		}
 		c.structs[decl.Name] = decl
+	}
+	for _, decl := range program.Enums {
+		if _, exists := c.enums[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "enum %q is already declared", decl.Name)
+			continue
+		}
+		if _, exists := c.structs[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
+			continue
+		}
+		c.enums[decl.Name] = decl
 	}
 
 	for _, decl := range program.Structs {
@@ -262,7 +314,54 @@ func (c *Checker) checkProgram(program *ast.Program) {
 		c.info.Structs[decl.Name] = info
 	}
 
-	c.checkStructCycles()
+	for _, decl := range program.Enums {
+		if _, exists := c.info.Enums[decl.Name]; exists {
+			continue
+		}
+		info := EnumInfo{Name: decl.Name}
+		seenCases := make(map[string]struct{})
+		for i, enumCase := range decl.Cases {
+			if _, exists := seenCases[enumCase.Name]; exists {
+				c.diag.Add(enumCase.NamePos, "case %q is already declared in enum %q", enumCase.Name, decl.Name)
+				continue
+			}
+			seenCases[enumCase.Name] = struct{}{}
+
+			caseInfo := EnumCaseInfo{
+				Name: enumCase.Name,
+				Tag:  i,
+			}
+			if len(enumCase.Fields) > 0 {
+				payloadName := enumPayloadTypeName(decl.Name, enumCase.Name)
+				payloadInfo := StructInfo{Name: string(payloadName)}
+				seenFields := make(map[string]struct{})
+				for _, field := range enumCase.Fields {
+					if _, exists := seenFields[field.Name]; exists {
+						c.diag.Add(field.NamePos, "field %q is already declared in enum case %q", field.Name, enumCase.Name)
+						continue
+					}
+					seenFields[field.Name] = struct{}{}
+
+					fieldType := c.resolveTypeRef(field.Type)
+					if fieldType == TypeVoid || fieldType == TypeNoReturn {
+						c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.Name)
+						continue
+					}
+					payloadInfo.Fields = append(payloadInfo.Fields, StructField{
+						Name: field.Name,
+						Type: fieldType,
+					})
+				}
+				c.info.Structs[string(payloadName)] = payloadInfo
+				caseInfo.PayloadType = payloadName
+				caseInfo.Fields = payloadInfo.Fields
+			}
+			info.Cases = append(info.Cases, caseInfo)
+		}
+		c.info.Enums[decl.Name] = info
+	}
+
+	c.checkTypeCycles()
 
 	for _, fn := range program.Functions {
 		if IsBuiltinFunction(fn.Name) {
@@ -319,7 +418,7 @@ func (c *Checker) checkProgram(program *ast.Program) {
 	}
 }
 
-func (c *Checker) checkStructCycles() {
+func (c *Checker) checkTypeCycles() {
 	visiting := make(map[string]bool)
 	visited := make(map[string]bool)
 
@@ -329,28 +428,45 @@ func (c *Checker) checkStructCycles() {
 			return
 		}
 		if visiting[name] {
-			c.diag.Add(c.structs[name].NamePos, "struct %q cannot contain itself recursively", name)
+			if decl, ok := c.structs[name]; ok {
+				c.diag.Add(decl.NamePos, "struct %q cannot contain itself recursively", name)
+			} else if decl, ok := c.enums[name]; ok {
+				c.diag.Add(decl.NamePos, "enum %q cannot contain itself recursively", name)
+			}
 			return
 		}
 		visiting[name] = true
-		info := c.info.Structs[name]
-		for _, field := range info.Fields {
-			for _, dep := range c.structDependencies(field.Type) {
-				visit(dep)
+		if info, ok := c.info.Structs[name]; ok {
+			for _, field := range info.Fields {
+				for _, dep := range c.typeDependencies(field.Type) {
+					visit(dep)
+				}
+			}
+		}
+		if info, ok := c.info.Enums[name]; ok {
+			for _, enumCase := range info.Cases {
+				for _, field := range enumCase.Fields {
+					for _, dep := range c.typeDependencies(field.Type) {
+						visit(dep)
+					}
+				}
 			}
 		}
 		visiting[name] = false
 		visited[name] = true
 	}
 
-	for name := range c.info.Structs {
+	for name := range c.structs {
+		visit(name)
+	}
+	for name := range c.enums {
 		visit(name)
 	}
 }
 
-func (c *Checker) structDependencies(typ Type) []string {
+func (c *Checker) typeDependencies(typ Type) []string {
 	if array, ok := ParseArrayType(typ); ok {
-		return c.structDependencies(array.Elem)
+		return c.typeDependencies(array.Elem)
 	}
 	if _, ok := ParseSliceType(typ); ok {
 		return nil
@@ -359,6 +475,9 @@ func (c *Checker) structDependencies(typ Type) []string {
 		return nil
 	}
 	if _, ok := c.info.Structs[string(typ)]; ok {
+		return []string{string(typ)}
+	}
+	if _, ok := c.info.Enums[string(typ)]; ok {
 		return []string{string(typ)}
 	}
 	return nil
@@ -491,6 +610,8 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 		}
 	case *ast.ForStmt:
 		c.checkFor(s)
+	case *ast.MatchStmt:
+		c.checkMatch(s)
 	case *ast.BreakStmt:
 		if c.current.loopDepth == 0 {
 			c.diag.Add(s.BreakPos, "break can only be used inside a loop")
@@ -530,6 +651,66 @@ func (c *Checker) checkFor(stmt *ast.ForStmt) {
 	c.current.loopDepth++
 	c.checkBlock(stmt.Body)
 	c.current.loopDepth--
+}
+
+func (c *Checker) checkMatch(stmt *ast.MatchStmt) {
+	value := c.checkExpression(stmt.Value)
+	if value.Errorable {
+		c.diag.Add(stmt.Value.Pos(), "match value cannot be errorable")
+		return
+	}
+
+	enumInfo, ok := c.info.Enums[string(value.Base)]
+	if !ok {
+		c.diag.Add(stmt.Value.Pos(), "match requires an enum value")
+		return
+	}
+
+	seen := make(map[string]struct{})
+	for _, arm := range stmt.Arms {
+		armEnum := c.resolveTypeRef(arm.EnumType)
+		if armEnum != value.Base {
+			c.diag.Add(arm.EnumType.Pos, "match arm must use enum %q", enumInfo.Name)
+		}
+
+		enumCase, _, ok := enumInfo.Case(arm.CaseName)
+		if !ok {
+			c.diag.Add(arm.CaseNamePos, "enum %q has no case %q", enumInfo.Name, arm.CaseName)
+			c.checkBlock(arm.Body)
+			continue
+		}
+		if _, exists := seen[enumCase.Name]; exists {
+			c.diag.Add(arm.CaseNamePos, "duplicate match arm for %q", enumCase.Name)
+		}
+		seen[enumCase.Name] = struct{}{}
+
+		switch {
+		case len(enumCase.Fields) == 0 && (arm.BindName != "" || arm.BindIgnore):
+			c.diag.Add(arm.BindNamePos, "plain enum case %q cannot bind a payload", enumCase.Name)
+			c.checkBlock(arm.Body)
+		case len(enumCase.Fields) > 0 && arm.BindName != "" && !arm.BindIgnore:
+			c.pushScope()
+			c.bindLocal(arm.BindName, enumCase.PayloadType)
+			for _, nested := range arm.Body.Stmts {
+				c.checkStatement(nested)
+			}
+			c.popScope()
+		default:
+			c.checkBlock(arm.Body)
+		}
+	}
+
+	if len(seen) == len(enumInfo.Cases) {
+		return
+	}
+	missing := make([]string, 0, len(enumInfo.Cases)-len(seen))
+	for _, enumCase := range enumInfo.Cases {
+		if _, ok := seen[enumCase.Name]; ok {
+			continue
+		}
+		missing = append(missing, enumInfo.Name+"."+enumCase.Name)
+	}
+	c.diag.Add(stmt.MatchPos, "match on %q is not exhaustive; missing %s", enumInfo.Name, strings.Join(missing, ", "))
 }
 
 func (c *Checker) checkForClauseStatement(stmt ast.Statement) {
@@ -727,6 +908,25 @@ func (c *Checker) checkUnary(expr ast.Expression, unary *ast.UnaryExpr) ExprType
 }
 
 func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr) ExprType {
+	if ident, ok := selector.Inner.(*ast.IdentExpr); ok {
+		if _, exists := c.lookupLocal(ident.Name); !exists {
+			if enumInfo, ok := c.info.Enums[ident.Name]; ok {
+				enumCase, _, ok := enumInfo.Case(selector.Name)
+				if !ok {
+					c.diag.Add(selector.NamePos, "enum %q has no case %q", enumInfo.Name, selector.Name)
+					return ExprType{Base: TypeInvalid}
+				}
+				if len(enumCase.Fields) > 0 {
+					c.diag.Add(selector.NamePos, "payload case %q requires a constructor body", selector.Name)
+					return ExprType{Base: TypeInvalid}
+				}
+				et := ExprType{Base: Type(enumInfo.Name)}
+				c.info.ExprTypes[expr] = et
+				return et
+			}
+		}
+	}
+
 	inner := c.checkExpression(selector.Inner)
 	if inner.Errorable {
 		c.diag.Add(selector.DotPos, "field access cannot use an errorable value")
@@ -808,6 +1008,41 @@ func (c *Checker) checkSlice(expr ast.Expression, slice *ast.SliceExpr) ExprType
 }
 
 func (c *Checker) checkStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) ExprType {
+	if enumInfo, enumCase, ok := c.lookupEnumCaseType(lit.Type.Name); ok {
+		if len(enumCase.Fields) == 0 {
+			c.diag.Add(lit.Type.Pos, "plain enum case %q cannot use a constructor body", enumCase.Name)
+			return ExprType{Base: TypeInvalid}
+		}
+
+		seen := make(map[string]struct{})
+		for _, field := range lit.Fields {
+			if _, exists := seen[field.Name]; exists {
+				c.diag.Add(field.NamePos, "field %q is already initialized", field.Name)
+				continue
+			}
+			seen[field.Name] = struct{}{}
+
+			fieldInfo, _, ok := enumCase.Field(field.Name)
+			if !ok {
+				c.diag.Add(field.NamePos, "enum case %q has no field %q", enumCase.Name, field.Name)
+				continue
+			}
+			value := c.checkExpression(field.Value)
+			value = c.requireNonErrorableValue(field.Value, value, "errorable value cannot be used in an enum constructor")
+			if value.Base == TypeInvalid {
+				continue
+			}
+			value = c.coerceValue(field.Value, value, fieldInfo.Type)
+			if value.Base != fieldInfo.Type {
+				c.diag.Add(field.Value.Pos(), "cannot assign %s to %s", value.Base, fieldInfo.Type)
+			}
+		}
+
+		et := ExprType{Base: Type(enumInfo.Name)}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+
 	typ := c.resolveTypeRef(lit.Type)
 	info, ok := c.info.Structs[string(typ)]
 	if !ok {
@@ -1061,6 +1296,10 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			c.diag.Add(binary.OpPos, "comparison operands must have the same type")
 			return ExprType{Base: TypeInvalid}
 		}
+		if _, ok := c.info.Enums[string(left.Base)]; ok {
+			c.diag.Add(binary.OpPos, "comparison is not supported for enum values in v0.4")
+			return ExprType{Base: TypeInvalid}
+		}
 		if left.Base != TypeBool {
 			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, and pointers in v0.2")
 			return ExprType{Base: TypeInvalid}
@@ -1112,6 +1351,9 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	}
 
 	if _, ok := c.structs[ref.Name]; ok {
+		return Type(ref.Name)
+	}
+	if _, ok := c.enums[ref.Name]; ok {
 		return Type(ref.Name)
 	}
 
@@ -1175,6 +1417,16 @@ func (c *Checker) stmtDefinitelyReturns(stmt ast.Statement) bool {
 			return false
 		}
 		return c.blockDefinitelyReturns(s.Then) && c.stmtDefinitelyReturns(s.Else)
+	case *ast.MatchStmt:
+		if len(s.Arms) == 0 {
+			return false
+		}
+		for _, arm := range s.Arms {
+			if !c.blockDefinitelyReturns(arm.Body) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}
@@ -1203,6 +1455,16 @@ func (c *Checker) stmtTerminatesControlFlow(stmt ast.Statement) bool {
 			return false
 		}
 		return c.blockTerminatesControlFlow(s.Then) && c.stmtTerminatesControlFlow(s.Else)
+	case *ast.MatchStmt:
+		if len(s.Arms) == 0 {
+			return false
+		}
+		for _, arm := range s.Arms {
+			if !c.blockTerminatesControlFlow(arm.Body) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}
@@ -1543,6 +1805,28 @@ func (c *Checker) currentCanPropagateError() bool {
 		return false
 	}
 	return c.current.signature.Errorable || c.current.signature.Return == TypeError
+}
+
+func enumPayloadTypeName(enumName, caseName string) Type {
+	return Type(enumName + "." + caseName)
+}
+
+func (c *Checker) lookupEnumCaseType(name string) (EnumInfo, EnumCaseInfo, bool) {
+	idx := strings.LastIndex(name, ".")
+	if idx <= 0 {
+		return EnumInfo{}, EnumCaseInfo{}, false
+	}
+	enumName := name[:idx]
+	caseName := name[idx+1:]
+	enumInfo, ok := c.info.Enums[enumName]
+	if !ok {
+		return EnumInfo{}, EnumCaseInfo{}, false
+	}
+	enumCase, _, ok := enumInfo.Case(caseName)
+	if !ok {
+		return EnumInfo{}, EnumCaseInfo{}, false
+	}
+	return enumInfo, enumCase, true
 }
 
 type parsedArrayType struct {

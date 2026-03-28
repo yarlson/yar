@@ -6,7 +6,7 @@
 - Entry builds require a `package main` root package with `main` returning `i32` or `!i32`.
 - A package is one or more files in one directory that declare the same package name.
 - Imports are explicit `import "path"` declarations immediately after the package clause.
-- Top-level declarations may be `struct` or `fn`, optionally prefixed with `pub`.
+- Top-level declarations may be `struct`, `enum`, or `fn`, optionally prefixed with `pub`.
 - Functions have positional parameters and an explicit return type.
 - Return types may be prefixed with `!` to mark the function as errorable.
 - `let` is not supported; local declarations use `:=` or `var`.
@@ -22,6 +22,7 @@
 - `error`
 - typed pointer types
 - user-defined struct types
+- user-defined enum types
 - fixed array types
 - slice types
 
@@ -38,6 +39,7 @@
 - `break`
 - `continue`
 - `return`
+- `match value { case Enum.Case { ... } ... }`
 - Expression statements
 
 ## Expressions
@@ -50,6 +52,7 @@
 - `nil`
 - `error.Name` literals in return position
 - Struct literals
+- Enum case constructors such as `TokenKind.Ident` and `Expr.Name{text: "main"}`
 - Array literals
 - Slice literals
 - Function calls
@@ -74,10 +77,13 @@
 - Exported functions and structs cannot expose non-exported local struct types in parameters, returns, or fields.
 - Duplicate top-level names are rejected package-wide, including across files.
 - Import cycles are rejected.
+- Enum case names must be unique within their enum.
+- Payload field names must be unique within an enum case.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
 - Struct fields, array elements, and slice elements cannot use `void`, `noreturn`, or an unknown type.
+- Enum payload fields cannot use `void`, `noreturn`, or an unknown type.
 - Pointer targets cannot use `void`, `noreturn`, or an unknown type.
-- Direct recursive struct containment is rejected, but recursive shapes through `*T` remain valid.
+- Direct recursive struct or enum containment is rejected, but recursive shapes through `*T` remain valid.
 - `noreturn` functions cannot also be errorable and cannot contain `return`.
 - Plain `error` is a valid parameter or return type for non-`main` functions.
 - Non-`void` functions must return on every reachable path.
@@ -90,9 +96,13 @@
 - Address-of requires an addressable operand or a composite literal.
 - Dereference requires a non-errorable pointer operand.
 - Field access requires a struct value and a known field.
+- Plain enum cases are values of their enum type.
+- Payload enum cases are constructed with keyed field syntax and produce the enclosing enum type.
 - Indexing requires an array or slice value and an integer index.
 - Slicing requires a slice value and integer bounds.
 - Slice fields do not count as recursive inline containment, so recursive shapes such as `[]Node` fields are allowed.
+- `match` requires a non-errorable enum value, each arm must use a case from that same enum, and the first version requires exhaustiveness.
+- Payload bindings in `match` arms have a generated payload-struct type, and `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because there is no pointer type to infer.
 - Out-of-range slice indexing and slicing trap at runtime.
 - `len` requires an array or slice argument and returns `i32`.

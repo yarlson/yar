@@ -1,6 +1,6 @@
 # Proposal: Enums / Tagged Unions
 
-Status: deferred
+Status: accepted
 
 ## 1. Summary
 
@@ -12,7 +12,7 @@ The proposed surface is:
 - plain enum cases for symbolic alternatives
 - payload cases for structured variants
 - explicit construction syntax
-- exhaustive `match` over enum values
+- exhaustive statement-form `match` over enum values
 
 ## 2. Motivation
 
@@ -131,6 +131,7 @@ Examples:
 - each case arm selects one variant
 - payload cases may bind the payload to a local name
 - plain cases have no payload binding
+- the first version supports statement-form `match` only
 - the first version requires exhaustiveness
 - no fallthrough is allowed
 
@@ -148,8 +149,7 @@ not intended to introduce general-purpose pattern matching over arbitrary data.
 - all enum cases must be covered in a `match`
 - a payload binding inside `case Enum.Case(v)` has the generated payload struct
   type for that case
-- all `match` arms must be type-compatible under the same rules as other branch
-  forms
+- `_` ignores a payload binding
 
 ## 6. Grammar / Parsing Shape
 
@@ -157,7 +157,7 @@ Add:
 
 - top-level `enum` declarations
 - payload case bodies using struct-like field lists
-- `match` expressions or statements for enum case analysis
+- `match` statements for enum case analysis
 
 Example declaration shape:
 
@@ -242,10 +242,10 @@ for closed variant modeling.
 ## 11. Why Now?
 
 Closed variants are one of the main missing data-modeling capabilities between
-the current language and a self-hosted frontend.
+the earlier language and a self-hosted frontend.
 
-Even so, this proposal remains deferred because it has heavy interactions with
-control flow, data layout, recursion, and future package visibility.
+The implemented version keeps scope bounded by choosing statement-form `match`,
+mandatory exhaustiveness, and no default arm or general pattern system.
 
 ## 12. Open Questions
 
@@ -258,11 +258,22 @@ control flow, data layout, recursion, and future package visibility.
 
 ## 13. Decision
 
-Deferred.
+Accepted and implemented.
 
-This feature solves a real modeling problem, but it is interaction-heavy enough
-that it should wait until the language core and its recursive-data story are
-clearer.
+The shipped version includes:
+
+- top-level `enum` declarations
+- plain cases and payload cases
+- plain-case and payload-case construction
+- exhaustive statement-form `match`
+- payload binding with named locals or `_`
+
+The first implementation intentionally does not include:
+
+- `match` as an expression
+- wildcard/default arms
+- enum equality
+- general pattern matching
 
 ## 14. Implementation Checklist
 

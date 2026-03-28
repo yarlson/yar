@@ -49,6 +49,7 @@ const (
 	Let
 	Var
 	Struct
+	Enum
 	Or
 	If
 	Else
@@ -56,6 +57,8 @@ const (
 	Break
 	Continue
 	Return
+	Match
+	Case
 	True
 	False
 	Nil
@@ -146,6 +149,8 @@ func (k Kind) String() string {
 		return "var"
 	case Struct:
 		return "struct"
+	case Enum:
+		return "enum"
 	case Or:
 		return "or"
 	case If:
@@ -160,6 +165,10 @@ func (k Kind) String() string {
 		return "continue"
 	case Return:
 		return "return"
+	case Match:
+		return "match"
+	case Case:
+		return "case"
 	case True:
 		return "true"
 	case False:

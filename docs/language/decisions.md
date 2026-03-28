@@ -81,6 +81,13 @@ Status: accepted
 YAR supports explicit `*T` pointers, `&expr`, `*expr`, `nil`, and recursive
 data through pointer indirection rather than direct inline containment.
 
+### Enums and exhaustive `match`
+
+Status: accepted
+
+YAR supports closed enums with plain and payload cases plus statement-form,
+exhaustive `match` over enum values.
+
 ---
 
 ## Rejected
@@ -113,13 +120,6 @@ Status: deferred
 
 Deferred until there is a stronger need for associated behavior and a clear
 interaction story with structs and future modules.
-
-### Enums / tagged unions
-
-Status: deferred
-
-Potentially valuable, but interaction-heavy. Defer until the language core is
-more stable.
 
 ### Generics
 

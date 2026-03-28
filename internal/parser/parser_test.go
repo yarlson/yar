@@ -17,7 +17,7 @@ package main
 fn divide(a i32, b i32) !i32 {
 	return error.DivideByZero
 }
-
+ 
 fn main() !i32 {
 	x := divide(10, 2)?
 	return x
@@ -36,6 +36,67 @@ fn main() !i32 {
 	}
 	if _, ok := stmt.Value.(*ast.PropagateExpr); !ok {
 		t.Fatalf("expected propagate expression, got %T", stmt.Value)
+	}
+}
+
+func TestParseEnumAndMatch(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+enum TokenKind {
+	Ident
+	Int
+}
+
+enum Expr {
+	Int { value i64 }
+	Name { text str }
+}
+
+fn main() i32 {
+	expr := Expr.Name{text: "main"}
+	match expr {
+	case Expr.Int(_) {
+		return 1
+	}
+	case Expr.Name(v) {
+		print(v.text)
+		return 0
+	}
+	}
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := len(program.Enums), 2; got != want {
+		t.Fatalf("unexpected enum count: got %d want %d", got, want)
+	}
+	if got, want := program.Enums[0].Cases[1].Name, "Int"; got != want {
+		t.Fatalf("unexpected enum case name: got %q want %q", got, want)
+	}
+	if got, want := program.Enums[1].Cases[0].Fields[0].Type.Name, "i64"; got != want {
+		t.Fatalf("unexpected payload field type: got %q want %q", got, want)
+	}
+
+	stmt, ok := program.Functions[0].Body.Stmts[1].(*ast.MatchStmt)
+	if !ok {
+		t.Fatalf("expected match statement, got %T", program.Functions[0].Body.Stmts[1])
+	}
+	if got, want := stmt.Arms[0].EnumType.Name, "Expr"; got != want {
+		t.Fatalf("unexpected arm enum type: got %q want %q", got, want)
+	}
+	if got, want := stmt.Arms[0].CaseName, "Int"; got != want {
+		t.Fatalf("unexpected arm case name: got %q want %q", got, want)
+	}
+	if !stmt.Arms[0].BindIgnore {
+		t.Fatal("expected first arm to ignore payload binding")
+	}
+	if got, want := stmt.Arms[1].BindName, "v"; got != want {
+		t.Fatalf("unexpected payload binding: got %q want %q", got, want)
 	}
 }
 

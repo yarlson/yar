@@ -158,6 +158,55 @@ fn main() i32 {
 	}
 }
 
+func TestGenerateLowersEnumsAndMatch(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+enum TokenKind {
+	Ident
+	Int
+}
+
+enum Expr {
+	Int { value i64 }
+	Name { text str }
+}
+
+fn main() i32 {
+	expr := Expr.Name{text: "main"}
+	match expr {
+	case Expr.Int(_) {
+		return 1
+	}
+	case Expr.Name(v) {
+		print(v.text)
+		match TokenKind.Ident {
+		case TokenKind.Ident {
+			return 0
+		}
+		case TokenKind.Int {
+			return 2
+		}
+		}
+	}
+	}
+}
+`)
+
+	for _, want := range []string{
+		"%yar.enum.Expr = type { i32, [2 x i64] }",
+		"%yar.enum.TokenKind = type { i32 }",
+		"switch i32",
+		"store %yar.struct.Expr_2EName",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, ir)
+		}
+	}
+}
+
 func TestEmitAllocHelpers(t *testing.T) {
 	t.Parallel()
 

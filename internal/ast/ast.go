@@ -26,6 +26,7 @@ type Program struct {
 	PackageName string
 	Imports     []ImportDecl
 	Structs     []*StructDecl
+	Enums       []*EnumDecl
 	Functions   []*FunctionDecl
 }
 
@@ -62,6 +63,26 @@ type StructField struct {
 	Name    string
 	NamePos token.Position
 	Type    TypeRef
+}
+
+type EnumDecl struct {
+	EnumPos  token.Position
+	Exported bool
+	Name     string
+	NamePos  token.Position
+	Cases    []EnumCaseDecl
+}
+
+func (d *EnumDecl) Pos() token.Position {
+	return d.EnumPos
+}
+
+func (*EnumDecl) declNode() {}
+
+type EnumCaseDecl struct {
+	Name    string
+	NamePos token.Position
+	Fields  []StructField
 }
 
 type FunctionDecl struct {
@@ -192,6 +213,29 @@ func (s *ReturnStmt) Pos() token.Position {
 }
 
 func (*ReturnStmt) stmtNode() {}
+
+type MatchStmt struct {
+	MatchPos token.Position
+	Value    Expression
+	Arms     []MatchArm
+}
+
+func (s *MatchStmt) Pos() token.Position {
+	return s.MatchPos
+}
+
+func (*MatchStmt) stmtNode() {}
+
+type MatchArm struct {
+	CasePos     token.Position
+	EnumType    TypeRef
+	CaseName    string
+	CaseNamePos token.Position
+	BindName    string
+	BindNamePos token.Position
+	BindIgnore  bool
+	Body        *BlockStmt
+}
 
 type ExprStmt struct {
 	Expr Expression

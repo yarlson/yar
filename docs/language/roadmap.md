@@ -27,6 +27,7 @@ Current baseline already includes:
 - fixed-size arrays
 - slices
 - typed pointers and recursive data
+- enums with exhaustive `match`
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
@@ -100,9 +101,9 @@ priority.
 
 ### Candidate focus
 
-- enums or tagged unions
-- improved sum-like modeling
-- maybe related exhaustiveness checks if the model supports them
+- follow-on enum ergonomics once real pressure appears
+- richer data-modeling features beyond the current enum and struct set
+- maybe related pattern work if a small, coherent next step becomes clear
 
 This area should be approached carefully because it has many interactions with:
 
@@ -118,7 +119,6 @@ This area should be approached carefully because it has many interactions with:
 These are interesting but not currently committed:
 
 - methods
-- enums / tagged unions
 - richer builtin library
 - more numeric types
 - explicit conversion syntax

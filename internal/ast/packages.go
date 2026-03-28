@@ -12,6 +12,7 @@ type Package struct {
 	Files     []*Program
 	Imports   []PackageImport
 	Structs   []*StructDecl
+	Enums     []*EnumDecl
 	Functions []*FunctionDecl
 }
 

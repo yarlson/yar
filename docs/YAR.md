@@ -10,7 +10,7 @@ updated.
 
 - Multi-file packages
 - Entry `package main` plus imported packages
-- Top-level `struct` and `fn` declarations, with optional `pub`
+- Top-level `struct`, `enum`, and `fn` declarations, with optional `pub`
 - Native code generation through LLVM IR plus `clang`
 
 ## File Shape
@@ -21,6 +21,7 @@ A valid entry package:
 - may contain one or more `.yar` files in the same directory
 - may contain zero or more `import "path"` declarations after the package clause
 - contains zero or more top-level `struct` declarations
+- contains zero or more top-level `enum` declarations
 - contains zero or more top-level `fn` declarations
 - must define `main`
 
@@ -29,7 +30,7 @@ Imported packages:
 - live in subdirectories under the entry package root
 - use `import "path"` with slash-separated package paths
 - must declare a package name matching the final import path segment
-- may expose top-level `struct` and `fn` declarations with `pub`
+- may expose top-level `struct`, `enum`, and `fn` declarations with `pub`
 
 `main` must return either:
 
@@ -57,6 +58,7 @@ Implemented types:
 - `error`
 - typed pointer types such as `*Node` and `*[4]i32`
 - user-defined `struct` types
+- user-defined `enum` types
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
 
@@ -148,6 +150,51 @@ pub fn lookup() User {
 
 Exported declarations cannot expose package-local struct types through public
 fields, parameters, or return types.
+
+## Enums
+
+Enums model closed sets of named variants:
+
+```yar
+enum TokenKind {
+    Ident
+    Int
+}
+
+enum Expr {
+    Int { value i32 }
+    Name { text str }
+}
+```
+
+Supported enum operations:
+
+- plain cases such as `TokenKind.Ident`
+- payload constructors such as `Expr.Name{text: "main"}`
+- exhaustive `match`
+- payload binding inside `match` arms with `case Expr.Name(v) { ... }`
+- payload ignore binding with `case Expr.Int(_) { ... }`
+
+`match` is a statement in the current implementation:
+
+```yar
+match expr {
+case Expr.Int(v) {
+    print_int(v.value)
+}
+case Expr.Name(v) {
+    print(v.text)
+}
+}
+```
+
+Current enum restrictions:
+
+- case names must be unique within an enum
+- payload field names must be unique within a case
+- `match` requires explicit exhaustive arms
+- enum values do not currently support `==` or `!=`
+- direct recursive enum containment is rejected; use pointers for recursive shapes
 
 ## Arrays
 

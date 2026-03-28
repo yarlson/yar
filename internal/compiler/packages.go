@@ -159,6 +159,7 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 	seenImports := make(map[string]struct{})
 	for _, file := range files {
 		pkg.Structs = append(pkg.Structs, file.Structs...)
+		pkg.Enums = append(pkg.Enums, file.Enums...)
 		pkg.Functions = append(pkg.Functions, file.Functions...)
 		for _, decl := range file.Imports {
 			if !validImportPath(decl.Path) {
@@ -283,6 +284,7 @@ func appendCycle(stack []string, target string) []string {
 type packageLowerer struct {
 	graph     *ast.PackageGraph
 	structs   map[string]map[string]*ast.StructDecl
+	enums     map[string]map[string]*ast.EnumDecl
 	functions map[string]map[string]*ast.FunctionDecl
 	imports   map[string]map[string]*ast.Package
 	diag      diag.List
@@ -292,6 +294,7 @@ func lowerPackageGraph(graph *ast.PackageGraph) (*ast.Program, []diag.Diagnostic
 	l := &packageLowerer{
 		graph:     graph,
 		structs:   make(map[string]map[string]*ast.StructDecl),
+		enums:     make(map[string]map[string]*ast.EnumDecl),
 		functions: make(map[string]map[string]*ast.FunctionDecl),
 		imports:   make(map[string]map[string]*ast.Package),
 	}
@@ -325,6 +328,7 @@ func lowerPackageGraph(graph *ast.PackageGraph) (*ast.Program, []diag.Diagnostic
 		if pkg == nil {
 			continue
 		}
+		program.Enums = append(program.Enums, l.lowerEnums(pkg)...)
 		program.Structs = append(program.Structs, l.lowerStructs(pkg)...)
 		program.Functions = append(program.Functions, l.lowerFunctions(pkg)...)
 	}
@@ -359,6 +363,16 @@ func (l *packageLowerer) indexPackages() {
 			structs[decl.Name] = decl
 		}
 		l.structs[path] = structs
+
+		enums := make(map[string]*ast.EnumDecl)
+		for _, decl := range pkg.Enums {
+			if _, ok := enums[decl.Name]; ok {
+				l.diag.Add(decl.NamePos, "enum %q is already declared", decl.Name)
+				continue
+			}
+			enums[decl.Name] = decl
+		}
+		l.enums[path] = enums
 
 		functions := make(map[string]*ast.FunctionDecl)
 		for _, decl := range pkg.Functions {
@@ -405,6 +419,16 @@ func (l *packageLowerer) validateExportedDeclarations() {
 				l.validateExportedLocalTypeRef(path, field.Type, "struct", decl.Name)
 			}
 		}
+		for _, decl := range pkg.Enums {
+			if !decl.Exported {
+				continue
+			}
+			for _, enumCase := range decl.Cases {
+				for _, field := range enumCase.Fields {
+					l.validateExportedLocalTypeRef(path, field.Type, "enum", decl.Name)
+				}
+			}
+		}
 		for _, decl := range pkg.Functions {
 			if !decl.Exported {
 				continue
@@ -433,11 +457,19 @@ func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref as
 	if isBuiltinType(ref.Name) || strings.Contains(ref.Name, ".") {
 		return
 	}
-	decl, ok := l.structs[packagePath][ref.Name]
-	if !ok || decl.Exported {
+	if decl, ok := l.structs[packagePath][ref.Name]; ok {
+		if decl.Exported {
+			return
+		}
+		l.diag.Add(ref.Pos, "exported %s %q cannot use non-exported type %q", ownerKind, ownerName, ref.Name)
 		return
 	}
-	l.diag.Add(ref.Pos, "exported %s %q cannot use non-exported type %q", ownerKind, ownerName, ref.Name)
+	if decl, ok := l.enums[packagePath][ref.Name]; ok {
+		if decl.Exported {
+			return
+		}
+		l.diag.Add(ref.Pos, "exported %s %q cannot use non-exported type %q", ownerKind, ownerName, ref.Name)
+	}
 }
 
 func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
@@ -457,6 +489,36 @@ func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
 			Name:      canonicalDeclName(pkg, decl.Name),
 			NamePos:   decl.NamePos,
 			Fields:    fields,
+		})
+	}
+	return decls
+}
+
+func (l *packageLowerer) lowerEnums(pkg *ast.Package) []*ast.EnumDecl {
+	decls := make([]*ast.EnumDecl, 0, len(pkg.Enums))
+	for _, decl := range pkg.Enums {
+		cases := make([]ast.EnumCaseDecl, 0, len(decl.Cases))
+		for _, enumCase := range decl.Cases {
+			fields := make([]ast.StructField, 0, len(enumCase.Fields))
+			for _, field := range enumCase.Fields {
+				fields = append(fields, ast.StructField{
+					Name:    field.Name,
+					NamePos: field.NamePos,
+					Type:    l.rewriteTypeRef(pkg, field.Type),
+				})
+			}
+			cases = append(cases, ast.EnumCaseDecl{
+				Name:    enumCase.Name,
+				NamePos: enumCase.NamePos,
+				Fields:  fields,
+			})
+		}
+		decls = append(decls, &ast.EnumDecl{
+			EnumPos:  decl.EnumPos,
+			Exported: decl.Exported,
+			Name:     canonicalDeclName(pkg, decl.Name),
+			NamePos:  decl.NamePos,
+			Cases:    cases,
 		})
 	}
 	return decls
@@ -524,18 +586,27 @@ func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef) ast.T
 			l.diag.Add(ref.Pos, "unknown import %q", parts[0])
 			return ref
 		}
-		decl := l.structs[target.Path][parts[1]]
-		if decl == nil {
-			l.diag.Add(ref.Pos, "package %q has no type %q", target.Name, parts[1])
-			return ref
+		if decl := l.structs[target.Path][parts[1]]; decl != nil {
+			if !decl.Exported {
+				l.diag.Add(ref.Pos, "package %q does not export type %q", target.Name, parts[1])
+				return ref
+			}
+			return ast.TypeRef{Name: canonicalDeclName(target, parts[1]), Pos: ref.Pos}
 		}
-		if !decl.Exported {
-			l.diag.Add(ref.Pos, "package %q does not export type %q", target.Name, parts[1])
-			return ref
+		if decl := l.enums[target.Path][parts[1]]; decl != nil {
+			if !decl.Exported {
+				l.diag.Add(ref.Pos, "package %q does not export enum %q", target.Name, parts[1])
+				return ref
+			}
+			return ast.TypeRef{Name: canonicalDeclName(target, parts[1]), Pos: ref.Pos}
 		}
-		return ast.TypeRef{Name: canonicalDeclName(target, parts[1]), Pos: ref.Pos}
+		l.diag.Add(ref.Pos, "package %q has no type %q", target.Name, parts[1])
+		return ref
 	}
 	if _, ok := l.structs[pkg.Path][ref.Name]; ok {
+		return ast.TypeRef{Name: canonicalDeclName(pkg, ref.Name), Pos: ref.Pos}
+	}
+	if _, ok := l.enums[pkg.Path][ref.Name]; ok {
 		return ast.TypeRef{Name: canonicalDeclName(pkg, ref.Name), Pos: ref.Pos}
 	}
 	return ref
@@ -575,6 +646,21 @@ func (l *packageLowerer) rewriteStatement(pkg *ast.Package, stmt ast.Statement) 
 		return &ast.IfStmt{IfPos: s.IfPos, Cond: l.rewriteExpr(pkg, s.Cond), Then: l.rewriteBlock(pkg, s.Then), Else: l.rewriteStatement(pkg, s.Else)}
 	case *ast.ForStmt:
 		return &ast.ForStmt{ForPos: s.ForPos, Init: l.rewriteStatement(pkg, s.Init), Cond: l.rewriteExpr(pkg, s.Cond), Post: l.rewriteStatement(pkg, s.Post), Body: l.rewriteBlock(pkg, s.Body)}
+	case *ast.MatchStmt:
+		arms := make([]ast.MatchArm, 0, len(s.Arms))
+		for _, arm := range s.Arms {
+			arms = append(arms, ast.MatchArm{
+				CasePos:     arm.CasePos,
+				EnumType:    l.rewriteTypeRef(pkg, arm.EnumType),
+				CaseName:    arm.CaseName,
+				CaseNamePos: arm.CaseNamePos,
+				BindName:    arm.BindName,
+				BindNamePos: arm.BindNamePos,
+				BindIgnore:  arm.BindIgnore,
+				Body:        l.rewriteBlock(pkg, arm.Body),
+			})
+		}
+		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: l.rewriteExpr(pkg, s.Value), Arms: arms}
 	case *ast.BreakStmt:
 		return &ast.BreakStmt{BreakPos: s.BreakPos}
 	case *ast.ContinueStmt:
@@ -618,6 +704,9 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 	case *ast.BinaryExpr:
 		return &ast.BinaryExpr{Left: l.rewriteExpr(pkg, e.Left), Operator: e.Operator, OpPos: e.OpPos, Right: l.rewriteExpr(pkg, e.Right)}
 	case *ast.SelectorExpr:
+		if rewritten, ok := l.rewriteEnumCaseSelector(pkg, e); ok {
+			return rewritten
+		}
 		return &ast.SelectorExpr{Inner: l.rewriteExpr(pkg, e.Inner), DotPos: e.DotPos, Name: e.Name, NamePos: e.NamePos}
 	case *ast.IndexExpr:
 		return &ast.IndexExpr{Inner: l.rewriteExpr(pkg, e.Inner), LBracketPos: e.LBracketPos, Index: l.rewriteExpr(pkg, e.Index)}
@@ -628,7 +717,11 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 		for _, field := range e.Fields {
 			fields = append(fields, ast.StructLiteralField{Name: field.Name, NamePos: field.NamePos, Value: l.rewriteExpr(pkg, field.Value)})
 		}
-		return &ast.StructLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type), LBrace: e.LBrace, Fields: fields}
+		litType := l.rewriteEnumCaseTypeRef(pkg, e.Type)
+		if litType.Name == "" {
+			litType = l.rewriteTypeRef(pkg, e.Type)
+		}
+		return &ast.StructLiteralExpr{Type: litType, LBrace: e.LBrace, Fields: fields}
 	case *ast.ArrayLiteralExpr:
 		elements := make([]ast.Expression, 0, len(e.Elements))
 		for _, element := range e.Elements {
@@ -647,6 +740,103 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 		return &ast.HandleExpr{Inner: l.rewriteExpr(pkg, e.Inner), OrPos: e.OrPos, ErrName: e.ErrName, ErrPos: e.ErrPos, Handler: l.rewriteBlock(pkg, e.Handler)}
 	default:
 		return expr
+	}
+}
+
+func (l *packageLowerer) rewriteEnumCaseSelector(pkg *ast.Package, expr *ast.SelectorExpr) (ast.Expression, bool) {
+	parts, positions, ok := selectorPath(expr)
+	if !ok || (len(parts) != 2 && len(parts) != 3) {
+		return nil, false
+	}
+
+	var target *ast.Package
+	var enumName, caseName string
+	if len(parts) == 2 {
+		target = pkg
+		enumName = parts[0]
+		caseName = parts[1]
+	} else {
+		target = l.imports[pkg.Path][parts[0]]
+		if target == nil {
+			return nil, false
+		}
+		enumName = parts[1]
+		caseName = parts[2]
+	}
+
+	decl := l.enums[target.Path][enumName]
+	if decl == nil {
+		return nil, false
+	}
+	if target != pkg && !decl.Exported {
+		l.diag.Add(positions[len(parts)-2], "package %q does not export enum %q", target.Name, enumName)
+	}
+	if !enumHasCase(decl, caseName) {
+		l.diag.Add(positions[len(parts)-1], "enum %q has no case %q", enumName, caseName)
+	}
+	return &ast.SelectorExpr{
+		Inner:   &ast.IdentExpr{Name: canonicalDeclName(target, enumName), NamePos: positions[len(parts)-2]},
+		DotPos:  expr.DotPos,
+		Name:    caseName,
+		NamePos: positions[len(parts)-1],
+	}, true
+}
+
+func (l *packageLowerer) rewriteEnumCaseTypeRef(pkg *ast.Package, ref ast.TypeRef) ast.TypeRef {
+	parts := strings.Split(ref.Name, ".")
+	if len(parts) != 2 && len(parts) != 3 {
+		return ast.TypeRef{}
+	}
+
+	var target *ast.Package
+	var enumName, caseName string
+	if len(parts) == 2 {
+		target = pkg
+		enumName = parts[0]
+		caseName = parts[1]
+	} else {
+		target = l.imports[pkg.Path][parts[0]]
+		if target == nil {
+			return ast.TypeRef{}
+		}
+		enumName = parts[1]
+		caseName = parts[2]
+	}
+
+	decl := l.enums[target.Path][enumName]
+	if decl == nil {
+		return ast.TypeRef{}
+	}
+	if target != pkg && !decl.Exported {
+		l.diag.Add(ref.Pos, "package %q does not export enum %q", target.Name, enumName)
+	}
+	if !enumHasCase(decl, caseName) {
+		l.diag.Add(ref.Pos, "enum %q has no case %q", enumName, caseName)
+	}
+	return ast.TypeRef{Name: canonicalDeclName(target, enumName) + "." + caseName, Pos: ref.Pos}
+}
+
+func enumHasCase(decl *ast.EnumDecl, caseName string) bool {
+	for _, enumCase := range decl.Cases {
+		if enumCase.Name == caseName {
+			return true
+		}
+	}
+	return false
+}
+
+func selectorPath(expr ast.Expression) ([]string, []token.Position, bool) {
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		return []string{e.Name}, []token.Position{e.NamePos}, true
+	case *ast.SelectorExpr:
+		parts, positions, ok := selectorPath(e.Inner)
+		if !ok {
+			return nil, nil, false
+		}
+		return append(parts, e.Name), append(positions, e.NamePos), true
+	default:
+		return nil, nil, false
 	}
 }
 

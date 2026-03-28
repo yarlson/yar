@@ -288,6 +288,8 @@ func lookupKeyword(text string) token.Kind {
 		return token.Var
 	case "struct":
 		return token.Struct
+	case "enum":
+		return token.Enum
 	case "or":
 		return token.Or
 	case "if":
@@ -302,6 +304,10 @@ func lookupKeyword(text string) token.Kind {
 		return token.Continue
 	case "return":
 		return token.Return
+	case "match":
+		return token.Match
+	case "case":
+		return token.Case
 	case "true":
 		return token.True
 	case "false":
