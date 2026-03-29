@@ -150,12 +150,19 @@ compiler and tooling programs become practical end to end.
 These are interesting but not currently committed:
 
 - methods
+- `0013-methods.md`
 - richer builtin library
 - more numeric types
 - explicit conversion syntax
 - pattern matching
 - interfaces / traits
+- `0016-interfaces.md`
 - generics
+- `0014-generics.md`
+- closures
+- `0015-closures.md`
+- garbage collection
+- `0017-garbage-collection.md`
 - concurrency primitives
 
 ---
