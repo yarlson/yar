@@ -93,7 +93,11 @@ func loadPackageGraph(path string, includeTests bool) (*ast.PackageGraph, []diag
 func resolveEntryDirs(path string) (rootDir, entryDir string, err error) {
 	cleanPath := filepath.Clean(path)
 	if cleanPath == "." {
-		return "", "", fmt.Errorf("source path must name a file or directory")
+		abs, err := filepath.Abs(cleanPath)
+		if err != nil {
+			return "", "", fmt.Errorf("cannot resolve current directory: %w", err)
+		}
+		cleanPath = abs
 	}
 
 	info, err := os.Stat(cleanPath)

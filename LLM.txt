@@ -1,0 +1,647 @@
+# YAR Language Reference for LLMs
+
+YAR is a small, compiled language with Go-like syntax, explicit types, errors as values, and LLVM-based native code generation via clang.
+
+## Project Structure
+
+```
+myproject/
+  main.yar          # entry package, must have `package main` and `fn main() i32`
+  main_test.yar     # test file (excluded from normal builds)
+  helpers.yar       # additional file in same package
+  util/
+    util.yar        # imported package, `package util`
+```
+
+## File Shape
+
+```yar
+package main
+
+import "util"
+import "strings"
+
+struct Point {
+    x i32
+    y i32
+}
+
+fn main() i32 {
+    p := Point{x: 1, y: 2}
+    print(to_str(p.x + p.y) + "\n")
+    return 0
+}
+```
+
+- Entry package: `package main` with `fn main() i32` or `fn main() !i32`
+- Imports: `import "path"` (slash-separated, qualified usage: `path.func()`)
+- Local packages shadow stdlib packages of the same name
+- Visibility: `pub` on struct/fn/enum/interface to export; private by default
+- Comments: `// line comments` only
+
+## Types
+
+| Type | Example |
+|------|---------|
+| `bool` | `true`, `false` |
+| `i32` | `42` |
+| `i64` | `100` (context-coerced) |
+| `str` | `"hello\n"` |
+| `void` | (no value) |
+| `noreturn` | (never returns) |
+| `error` | `error.Name` |
+| `*T` | `*Node` (typed pointer) |
+| `[N]T` | `[3]i32{1, 2, 3}` |
+| `[]T` | `[]i32{1, 2}` |
+| `map[K]V` | `map[str]i32{"a": 1}` |
+| `fn(T) R` | `fn(i32) i32` |
+| `!T` | errorable return |
+| struct | `struct S { field T }` |
+| enum | `enum E { A, B { val i32 } }` |
+| interface | `interface I { method() T }` |
+
+Map key types: `bool`, `i32`, `i64`, `str` only.
+
+String escapes: `\n`, `\t`, `\\`, `\"`
+
+## Declarations
+
+```yar
+x := 42                    // short declaration (type inferred)
+var count i32 = 0          // typed declaration with initializer
+var user User              // typed declaration (zero value)
+```
+
+Locals are block-scoped, reassignable, cannot be redeclared in same scope.
+
+## Structs
+
+```yar
+struct User {
+    id i32
+    name str
+}
+
+// Usage
+u := User{id: 1, name: "bob"}
+u.name = "eve"
+empty := User{}
+```
+
+No embedding, no tags. Recursive only through pointers: `next *Node`.
+
+## Enums
+
+```yar
+enum Color { Red, Green, Blue }
+
+enum Expr {
+    Int { value i32 }
+    Name { text str }
+}
+
+// Usage
+c := Color.Red
+e := Expr.Int{value: 42}
+
+// Match (exhaustive, statement-form only)
+match e {
+case Expr.Int(v) {
+    print(to_str(v.value))
+}
+case Expr.Name(v) {
+    print(v.text)
+}
+}
+
+// Ignore payload with _
+match e {
+case Expr.Int(_) { print("int") }
+case Expr.Name(_) { print("name") }
+}
+```
+
+No `==`/`!=` on enums. No recursive enums (use pointers).
+
+## Interfaces
+
+```yar
+interface Writer {
+    write(msg str) !void
+}
+
+struct Logger { prefix str }
+
+fn (l Logger) write(msg str) !void {
+    print(l.prefix + msg)
+    return
+}
+
+fn emit(w Writer) !void {
+    return w.write("ok")
+}
+
+// Implicit satisfaction: Logger satisfies Writer
+```
+
+- Method requirements only (no fields)
+- Implicit satisfaction (no `implements` keyword)
+- Exact receiver matching: `T` and `*T` are distinct
+- Not comparable, not generic
+- Zero-value interface panics on method call
+
+## Functions
+
+```yar
+fn add(a i32, b i32) i32 {
+    return a + b
+}
+```
+
+## Methods
+
+```yar
+struct Counter { n i32 }
+
+fn (c Counter) current() i32 {
+    return c.n
+}
+
+fn (c *Counter) inc() void {
+    (*c).n = (*c).n + 1
+}
+
+// Call: c.current(), c.inc() -- but receiver types must match exactly
+// Export: pub fn (c Counter) current() i32 { ... }
+```
+
+- Only on named struct types in the same package
+- Value (`T`) or pointer (`*T`) receiver
+- No auto-conversion between `T` and `*T`
+
+## Closures
+
+```yar
+fn make_adder(base i32) fn(i32) i32 {
+    return fn(delta i32) i32 {
+        return base + delta
+    }
+}
+```
+
+- Capture by value (read-only inside closure)
+- Function types: `fn(T1, T2) R` or `fn(T) !R`
+
+## Generics
+
+```yar
+struct Box[T] {
+    value T
+}
+
+fn first[T](values []T) T {
+    return values[0]
+}
+
+// Always explicit type arguments
+b := Box[i32]{value: first[i32]([]i32{7, 9})}
+```
+
+- On top-level `struct` and `fn` only
+- No inference, no constraints
+- Not on enums, methods, or interfaces
+- Monomorphized before checking
+
+## Pointers
+
+```yar
+struct Node {
+    value i32
+    next *Node
+}
+
+n := &Node{value: 1, next: nil}
+(*n).value = 2              // explicit dereference required
+p := &(*n).next             // address-of field
+```
+
+- `&expr` (address-of), `*ptr` (dereference), `nil`
+- No `ptr.field` sugar; must use `(*ptr).field`
+- `nil` requires pointer-typed context (`p := nil` is rejected)
+- No pointer arithmetic
+
+## Arrays and Slices
+
+```yar
+// Arrays (fixed size)
+nums := [3]i32{1, 2, 3}
+first := nums[0]
+nums[1] = 10
+
+// Slices (dynamic)
+values := []i32{}
+values = append(values, 1)
+values = append(values, 2)
+part := values[0:1]
+```
+
+Runtime bounds-checked. `len()` works on both. `append()` on slices only.
+
+## Maps
+
+```yar
+counts := map[str]i32{"a": 1}
+counts["b"] = 2
+
+// Lookup returns !V (errorable)
+x := counts["a"]?                      // propagate error
+val := counts["a"] or |err| { return 0 }  // handle locally
+
+if has(counts, "a") { /* ... */ }
+delete(counts, "b")
+k := keys(counts)    // []str snapshot, unordered
+n := len(counts)
+```
+
+Missing key returns `error.MissingKey`.
+
+## Control Flow
+
+```yar
+// If/else
+if x > 0 {
+    print("positive")
+} else if x == 0 {
+    print("zero")
+} else {
+    print("negative")
+}
+
+// For (condition)
+for i < 10 {
+    i = i + 1
+}
+
+// For (C-style)
+for i := 0; i < 10; i = i + 1 {
+    print(to_str(i))
+}
+
+// break, continue work in loops
+```
+
+No `while`, no range-based for, no `for..in`.
+
+## Operators
+
+Arithmetic: `+`, `-`, `*`, `/`, `%`
+Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
+Boolean: `&&` (short-circuit AND), `||` (short-circuit OR)
+Unary: `-` (negate), `!` (not), `&` (address-of), `*` (dereference)
+String: `+` (concatenation), `==`/`!=` (equality), `s[i]` (byte), `s[i:j]` (slice)
+
+## Error Handling
+
+Errors are values. No exceptions.
+
+```yar
+// Define errorable function
+fn divide(a i32, b i32) !i32 {
+    if b == 0 {
+        return error.DivideByZero
+    }
+    return a / b
+}
+
+// Propagation with ? (caller must also be errorable)
+result := divide(10, 2)?
+
+// Local handling with or
+result := divide(10, 0) or |err| {
+    print("error!")
+    return 0    // must exit block (return/break/continue)
+}
+
+// Direct return of errorable
+fn wrapper() !i32 {
+    return divide(10, 2)
+}
+
+// Error comparison
+fn handle() !i32 {
+    result := divide(10, 0) or |err| {
+        if err == error.DivideByZero {
+            return -1
+        }
+        return error.Unknown
+    }
+    return result
+}
+```
+
+- `?` propagates error to caller (caller must return `!T` or `error`)
+- `or |err| { ... }` handles error locally; block must terminate control flow when used in value position
+- `error.Name` creates named error values
+- `error` is a valid type for variables, parameters, fields
+- Raw errorable values cannot be used directly in expressions; must use `?`, `or`, or `return`
+
+`!void` functions use bare `return` for success:
+
+```yar
+fn save(data str) !void {
+    fs.write_file("out.txt", data)?
+    return
+}
+```
+
+## Builtins
+
+```
+print(str) void               // print to stdout
+panic(str) noreturn            // print to stderr, exit 1
+len(array|slice|map|str) i32  // length
+append([]T, T) []T            // append to slice
+has(map[K]V, K) bool          // map key existence
+delete(map[K]V, K) void       // remove map key
+keys(map[K]V) []K             // snapshot of map keys
+to_str(i32|i64|bool|str|error) str  // convert to string
+```
+
+## Standard Library
+
+Import with `import "pkgname"`, use as `pkgname.func()`.
+
+### strings
+
+```
+strings.contains(s, substr) bool
+strings.has_prefix(s, prefix) bool
+strings.has_suffix(s, suffix) bool
+strings.index(s, substr) i32              // -1 if not found
+strings.count(s, substr) i32
+strings.repeat(s, n) str
+strings.replace(s, old, new, n) str       // n < 0 replaces all
+strings.trim_left(s, cutset) str
+strings.trim_right(s, cutset) str
+strings.join(parts []str, sep str) str
+strings.from_byte(b i32) str
+strings.parse_i64(s str) !i64
+```
+
+### utf8
+
+```
+utf8.decode(s, off) !i32       // decode rune at byte offset
+utf8.width(s, off) !i32        // byte width of rune
+utf8.is_letter(r) bool
+utf8.is_digit(r) bool
+utf8.is_space(r) bool
+```
+
+Errors: `error.InvalidUTF8`, `error.OutOfRange`
+
+### conv
+
+```
+conv.to_i64(n i32) i64
+conv.to_i32(n i64) i32
+conv.byte_to_str(b i32) str    // traps if outside 0-255
+conv.itoa(n i32) str
+conv.itoa64(n i64) str
+```
+
+### sort
+
+```
+sort.strings(values []str) void   // in-place ascending
+sort.i32s(values []i32) void
+sort.i64s(values []i64) void
+```
+
+### path
+
+```
+path.clean(p) str
+path.join(parts []str) str
+path.dir(p) str
+path.base(p) str
+path.ext(p) str
+```
+
+### fs
+
+Types: `fs.DirEntry { name str, is_dir bool }`, `fs.EntryKind { File, Directory, Other }`
+
+```
+fs.read_file(path) !str
+fs.write_file(path, data) !void
+fs.read_dir(path) ![]fs.DirEntry
+fs.stat(path) !fs.EntryKind
+fs.mkdir_all(path) !void
+fs.remove_all(path) !void
+fs.temp_dir(prefix) !str
+```
+
+Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.IO`
+
+### process
+
+Type: `process.Result { exit_code i32, stdout str, stderr str }`
+
+```
+process.args() []str
+process.run(argv []str) !process.Result
+process.run_inherit(argv []str) !i32
+```
+
+Errors: `error.NotFound`, `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`
+
+### env
+
+```
+env.lookup(name) !str    // error.NotFound if missing
+```
+
+### stdio
+
+```
+stdio.eprint(msg) void  // write to stderr
+```
+
+### testing
+
+Type: `testing.T { name str, failed bool, messages []str }`
+
+Methods on `*testing.T`:
+```
+t.fail(msg) void
+t.log(msg) void
+t.has_failed() bool
+```
+
+Assertions:
+```
+testing.equal[V](t, got, want) void       // V: i32, i64, bool, str, error
+testing.not_equal[V](t, got, want) void
+testing.is_true(t, value) void
+testing.is_false(t, value) void
+testing.fail(t, msg) void
+```
+
+## Testing
+
+### Test Files
+
+Files ending in `_test.yar` in the same package. Excluded from `build`/`run`/`check`.
+
+### Test Functions
+
+```yar
+package main
+
+import "testing"
+
+fn add(a i32, b i32) i32 {
+    return a + b
+}
+
+fn test_add(t *testing.T) void {
+    testing.equal[i32](t, add(2, 3), 5)
+}
+
+fn test_add_negative(t *testing.T) void {
+    testing.equal[i32](t, add(-1, 1), 0)
+}
+```
+
+Convention: `fn test_<name>(t *testing.T) void`
+
+### Testing Errors
+
+```yar
+fn divide(a i32, b i32) !i32 {
+    if b == 0 {
+        return error.DivideByZero
+    }
+    return a / b
+}
+
+fn test_divide_ok(t *testing.T) void {
+    result := divide(10, 2) or |err| {
+        testing.fail(t, "unexpected error")
+        return
+    }
+    testing.equal[i32](t, result, 5)
+}
+
+fn test_divide_by_zero(t *testing.T) void {
+    result := divide(10, 0) or |err| {
+        testing.equal[error](t, err, error.DivideByZero)
+        return
+    }
+    testing.fail(t, "expected error")
+}
+```
+
+### Running
+
+```
+yar test <directory>
+```
+
+Output:
+```
+PASS: test_add
+FAIL: test_wrong
+    got 4, want 5
+PASS: test_greeting
+
+2 passed, 1 failed
+```
+
+Exit 0 if all pass, 1 if any fail.
+
+## Commands
+
+```
+yar build <path>           # compile to native executable
+yar run <path>             # build and execute
+yar test <path>            # discover and run tests
+yar check <path>           # type-check only, no artifacts
+yar emit-ir <path>         # output LLVM IR to stdout
+```
+
+Cross-compilation: set `YAR_OS` (linux/darwin/windows) and `YAR_ARCH` (amd64/arm64).
+
+## Complete TDD Example
+
+**main.yar:**
+```yar
+package main
+
+fn fizzbuzz(n i32) str {
+    if n % 15 == 0 {
+        return "FizzBuzz"
+    }
+    if n % 3 == 0 {
+        return "Fizz"
+    }
+    if n % 5 == 0 {
+        return "Buzz"
+    }
+    return to_str(n)
+}
+
+fn main() i32 {
+    for i := 1; i <= 20; i = i + 1 {
+        print(fizzbuzz(i) + "\n")
+    }
+    return 0
+}
+```
+
+**main_test.yar:**
+```yar
+package main
+
+import "testing"
+
+fn test_fizzbuzz_number(t *testing.T) void {
+    testing.equal[str](t, fizzbuzz(1), "1")
+    testing.equal[str](t, fizzbuzz(7), "7")
+}
+
+fn test_fizzbuzz_fizz(t *testing.T) void {
+    testing.equal[str](t, fizzbuzz(3), "Fizz")
+    testing.equal[str](t, fizzbuzz(9), "Fizz")
+}
+
+fn test_fizzbuzz_buzz(t *testing.T) void {
+    testing.equal[str](t, fizzbuzz(5), "Buzz")
+    testing.equal[str](t, fizzbuzz(10), "Buzz")
+}
+
+fn test_fizzbuzz_fizzbuzz(t *testing.T) void {
+    testing.equal[str](t, fizzbuzz(15), "FizzBuzz")
+    testing.equal[str](t, fizzbuzz(30), "FizzBuzz")
+}
+```
+
+## Memory Management
+
+- Runtime-managed heap with conservative mark-and-sweep GC
+- No manual free, no GC builtins
+- Allocation failure is unrecoverable (not a YAR error)
+
+## Key Restrictions
+
+- No type inference for generics (always explicit: `Box[i32]`)
+- No implicit pointer dereference (`(*ptr).field`, not `ptr.field`)
+- No `nil` without pointer context
+- No variadics
+- No exceptions
+- No import aliases
+- No `while` or range-for
+- Methods are not first-class values
+- Errorable values must be handled immediately (`?`, `or`, or `return`)
+- `void`/`noreturn` cannot be used in parameters, fields, or array/slice elements
