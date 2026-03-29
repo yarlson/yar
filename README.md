@@ -192,6 +192,7 @@ docs/             Language and design documentation
 
 ## Documentation
 
+- [The Yar Code](docs/language/the-yar-code.md) — how to write Yar programs
 - [Language reference](docs/YAR.md) — what the compiler implements today
 - [Language design docs](docs/language/) — proposals, decisions, and process
 - [Context docs](docs/context/) — current architecture, runtime, and compiler behavior
