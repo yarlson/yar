@@ -16,6 +16,7 @@
   - `CompilePath(path)` for entry-path resolution, package loading, graph lowering, semantic check, and IR generation from disk
   - `Build(ctx, src, outputPath)` / `Run(ctx, src)` for in-memory single-file build helpers
   - `BuildPath(ctx, path, outputPath)` / `RunPath(ctx, path)` for path-based package builds from disk
+  - `CompileTestPath(path)` / `TestPath(ctx, path)` for test discovery, runner generation, and test execution from `_test.yar` files
 - `internal/lexer` tokenizes source text, including control-flow, aggregate,
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.

@@ -895,6 +895,105 @@ Available functions:
 
 - `stdio.eprint(msg str) void`
 
+### `testing`
+
+```
+import "testing"
+```
+
+Types:
+
+- `testing.T { name str, failed bool, messages []str }`
+
+Methods on `*testing.T`:
+
+- `t.fail(msg str) void` — mark test as failed with a message
+- `t.log(msg str) void` — record a message (shown on failure)
+- `t.has_failed() bool` — check if the test has failed
+
+Generic assertions:
+
+- `testing.equal[V](t *testing.T, got V, want V) void` — fail if `got != want`
+- `testing.not_equal[V](t *testing.T, got V, want V) void` — fail if `got == want`
+
+Type-specific assertions with rich failure messages:
+
+- `testing.equal_i32(t *testing.T, got i32, want i32) void`
+- `testing.equal_i64(t *testing.T, got i64, want i64) void`
+- `testing.equal_str(t *testing.T, got str, want str) void`
+- `testing.equal_bool(t *testing.T, got bool, want bool) void`
+- `testing.not_equal_i32(t *testing.T, got i32, not_want i32) void`
+- `testing.not_equal_i64(t *testing.T, got i64, not_want i64) void`
+- `testing.not_equal_str(t *testing.T, got str, not_want str) void`
+
+Boolean assertions:
+
+- `testing.is_true(t *testing.T, value bool) void`
+- `testing.is_false(t *testing.T, value bool) void`
+
+Explicit failure:
+
+- `testing.fail(t *testing.T, msg str) void`
+
+## Testing
+
+The `yar test` command discovers, compiles, and runs test functions.
+
+### Test Files
+
+Test files use the `_test.yar` suffix (e.g., `math_test.yar`). They belong to the
+same package as the code under test. During normal compilation (`build`, `run`,
+`check`), test files are excluded.
+
+### Test Functions
+
+Test functions start with `test_`, take a single `*testing.T` parameter, and
+return `void`:
+
+```
+import "testing"
+
+fn test_addition(t *testing.T) void {
+    testing.equal_i32(t, add(2, 3), 5)
+}
+
+fn test_greeting(t *testing.T) void {
+    testing.equal_str(t, greet("world"), "hello world")
+}
+```
+
+### Error Testing
+
+Idiomatic error testing uses `or |err| { ... }`:
+
+```
+fn test_divide_by_zero(t *testing.T) void {
+    result := divide(10, 0) or |err| {
+        return
+    }
+    testing.fail(t, "expected error")
+}
+```
+
+### Running Tests
+
+```
+yar test <path>
+```
+
+Output:
+
+```
+PASS: test_addition
+FAIL: test_wrong_result
+    got 4, want 5
+PASS: test_greeting
+
+2 passed, 1 failed
+```
+
+Exit code is `0` when all tests pass, `1` when any test fails.
+
 ## Not Implemented
 
 The compiler does not currently implement:

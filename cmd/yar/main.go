@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 	"yar/internal/compiler"
 	"yar/internal/diag"
@@ -16,7 +18,7 @@ func main() {
 
 func run() int {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: yar <check|emit-ir|build|run> <file> [-o output]")
+		fmt.Fprintln(os.Stderr, "usage: yar <check|emit-ir|build|run|test> <file> [-o output]")
 		return 2
 	}
 
@@ -30,6 +32,8 @@ func run() int {
 		return runBuild(os.Args[2:])
 	case "run":
 		return runRun(os.Args[2])
+	case "test":
+		return runTest(os.Args[2])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", command)
 		return 2
@@ -153,6 +157,25 @@ func runRun(path string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := compiler.RunPath(ctx, path); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func runTest(path string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	diagnostics, err := compiler.TestPath(ctx, path)
+	if len(diagnostics) > 0 {
+		printDiagnostics(path, diagnostics)
+		return 1
+	}
+	if err != nil {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

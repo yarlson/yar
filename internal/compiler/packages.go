@@ -20,7 +20,7 @@ import (
 var errPackageUnavailable = errors.New("package unavailable")
 
 func CompilePath(path, targetTriple string) (*Unit, []diag.Diagnostic, error) {
-	graph, diags, err := loadPackageGraph(path)
+	graph, diags, err := loadPackageGraph(path, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -52,20 +52,22 @@ func CompilePath(path, targetTriple string) (*Unit, []diag.Diagnostic, error) {
 }
 
 type packageLoader struct {
-	rootDir  string
-	packages map[string]*ast.Package
-	diag     diag.List
+	rootDir      string
+	packages     map[string]*ast.Package
+	diag         diag.List
+	includeTests bool
 }
 
-func loadPackageGraph(path string) (*ast.PackageGraph, []diag.Diagnostic, error) {
+func loadPackageGraph(path string, includeTests bool) (*ast.PackageGraph, []diag.Diagnostic, error) {
 	rootDir, entryDir, err := resolveEntryDirs(path)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	loader := &packageLoader{
-		rootDir:  rootDir,
-		packages: make(map[string]*ast.Package),
+		rootDir:      rootDir,
+		packages:     make(map[string]*ast.Package),
+		includeTests: includeTests,
 	}
 
 	entry, err := loader.loadPackage("", entryDir)
@@ -75,7 +77,7 @@ func loadPackageGraph(path string) (*ast.PackageGraph, []diag.Diagnostic, error)
 		}
 		return nil, nil, err
 	}
-	if entry != nil && entry.Name != "main" {
+	if entry != nil && entry.Name != "main" && !includeTests {
 		loader.diag.Add(entry.Files[0].Pos(), "package must be main")
 	}
 
@@ -123,6 +125,9 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 	fileNames := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yar" {
+			continue
+		}
+		if !l.includeTests && strings.HasSuffix(entry.Name(), "_test.yar") {
 			continue
 		}
 		fileNames = append(fileNames, entry.Name())

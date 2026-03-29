@@ -10,7 +10,7 @@ executable.
 
 ## Architecture
 
-- `cmd/yar` exposes the `check`, `emit-ir`, `build`, and `run` commands.
+- `cmd/yar` exposes the `check`, `emit-ir`, `build`, `run`, and `test` commands.
 - `internal/token` defines the token set and source positions shared across stages.
 - `internal/diag` defines source-positioned diagnostics.
 - `internal/ast` defines the file AST plus the `Package` and `PackageGraph` structures used during package loading and lowering.
@@ -20,7 +20,7 @@ executable.
 - `internal/checker` owns semantic validation, scope tracking, struct, interface, and enum metadata, function, method, interface-method, and closure signatures, lexical capture analysis, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
 - `internal/codegen` lowers the checked AST into textual LLVM IR, expanding concrete method calls into ordinary function calls with an explicit receiver argument, lowering interface values to boxed-data-plus-method-table pairs with dynamic dispatch, lowering function values to code-pointer-plus-environment closures, expanding error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation and GC helpers.
 - `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, host filesystem and process calls, environment lookup, stderr output, argv capture, and the runtime-managed allocation plus conservative garbage-collection boundary used during linking.
-- `internal/stdlib` embeds the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
+- `internal/stdlib` embeds the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`, and `testing`) and provides lookup functions for the package loader.
 
 ## Core Flow
 
@@ -28,6 +28,7 @@ executable.
 - `emit-ir` runs the same package loading, lowering, checking, and code-generation pipeline and writes LLVM IR to stdout.
 - `build` compiles the entry package graph, writes IR and runtime C source into a temporary directory, and invokes `clang` to produce a native binary.
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
+- `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
 
 ## System State
 
@@ -62,6 +63,7 @@ executable.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
 - Cross-compile to different OS/architecture targets using `YAR_OS` and `YAR_ARCH` environment variables without requiring knowledge of LLVM triples.
+- Discover and run test functions from `_test.yar` files using `yar test`, with type-specific assertion helpers from the `testing` stdlib package.
 
 ## Tech Stack
 

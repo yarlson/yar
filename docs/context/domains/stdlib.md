@@ -183,6 +183,35 @@ Functions:
 
 - `eprint(msg str) void` — write one string to stderr
 
+### `testing`
+
+Test framework for `yar test`.
+
+Types:
+
+- `T { name str, failed bool, messages []str }`
+
+Methods:
+
+- `fail(msg str) void` — mark test failed with message
+- `log(msg str) void` — record a message
+- `has_failed() bool` — check failure status
+
+Functions:
+
+- `equal[V](t *T, got V, want V) void` — generic equality assertion
+- `not_equal[V](t *T, got V, want V) void` — generic inequality assertion
+- `equal_i32(t *T, got i32, want i32) void` — with "got X, want Y" message
+- `equal_i64(t *T, got i64, want i64) void`
+- `equal_str(t *T, got str, want str) void`
+- `equal_bool(t *T, got bool, want bool) void`
+- `not_equal_i32(t *T, got i32, not_want i32) void`
+- `not_equal_i64(t *T, got i64, not_want i64) void`
+- `not_equal_str(t *T, got str, not_want str) void`
+- `is_true(t *T, value bool) void`
+- `is_false(t *T, value bool) void`
+- `fail(t *T, msg str) void` — explicit failure with message
+
 ## Constraints
 
 - Performance is straightforward and correctness-first. Concatenation-heavy

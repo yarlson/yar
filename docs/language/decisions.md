@@ -141,6 +141,18 @@ values lower to boxed data plus method tables, and interface-to-interface
 conversion is limited to the same exact interface type in the current
 implementation.
 
+### Testing framework with `yar test`
+
+Status: accepted
+
+YAR provides a `testing` stdlib package and a `yar test` CLI command. Test files
+use the `_test.yar` suffix and are excluded from normal builds. Test functions
+follow the `fn test_*(t *testing.T) void` convention and are discovered at
+compile time. Assertions use standalone generic functions (`testing.equal[V]`)
+and type-specific functions (`testing.equal_i32`) rather than methods, because
+Yar does not support generics on methods. The test runner is a generated Yar
+`main()` injected at compile time.
+
 ---
 
 ## Rejected

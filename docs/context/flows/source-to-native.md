@@ -51,3 +51,16 @@
   temporary executable path in its argv.
 - Inherits stdin, stdout, and stderr from the calling process.
 - Removes the temporary build directory and binary after execution.
+
+## `test`
+
+- Resolves the entry file or package directory.
+- Loads the package graph with `_test.yar` files included (normally excluded).
+- Scans test files for functions matching `fn test_*(t *testing.T) void`.
+- Generates a synthetic test runner that replaces the user `main()`, creates a
+  `testing.T` instance for each discovered test, calls each test function, and
+  reports PASS/FAIL results to stdout.
+- Compiles and executes the test binary through the same `clang` pipeline as
+  `run`.
+- Exit code is `0` when all tests pass, `1` when any test fails.
+- Test files are excluded from `check`, `build`, `emit-ir`, and `run` commands.
