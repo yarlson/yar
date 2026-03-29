@@ -216,6 +216,8 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_map_len(ptr)\n")
 	b.WriteString("declare %yar.slice @yar_map_keys(ptr)\n")
 	b.WriteString("declare %yar.str @yar_str_from_byte(i32)\n")
+	b.WriteString("declare %yar.str @yar_to_str_i32(i32)\n")
+	b.WriteString("declare %yar.str @yar_to_str_i64(i64)\n")
 	b.WriteString("declare i32 @yar_fs_read_file(%yar.str, ptr)\n")
 	b.WriteString("declare i32 @yar_fs_write_file(%yar.str, %yar.str)\n")
 	b.WriteString("declare i32 @yar_fs_read_dir(%yar.str, ptr)\n")
@@ -1198,6 +1200,9 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return exprValue{ref: "0", typ: checker.TypeBool}
 	case *ast.NilLiteral:
 		return exprValue{ref: "null", typ: f.exprType(expr)}
+	case *ast.ErrorLiteral:
+		code := f.g.info.ErrorCodes[e.Name]
+		return exprValue{ref: fmt.Sprintf("%d", code), typ: checker.TypeError}
 	case *ast.StringLiteral:
 		return f.emitStringValue(e.Value)
 	case *ast.GroupExpr:
@@ -1795,6 +1800,32 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		panic("missing call signature")
 	}
 
+	if sig.Name == "to_str" && sig.Builtin {
+		arg := f.genExpression(expr.Args[0])
+		argType := sig.Params[0]
+		switch argType {
+		case checker.TypeI32:
+			tmp := f.newTemp("tostr")
+			fmt.Fprintf(&f.builder, "  %%%s = call %%yar.str @yar_to_str_i32(i32 %s)\n", tmp, arg.ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeStr}
+		case checker.TypeI64:
+			tmp := f.newTemp("tostr")
+			fmt.Fprintf(&f.builder, "  %%%s = call %%yar.str @yar_to_str_i64(i64 %s)\n", tmp, arg.ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeStr}
+		case checker.TypeBool:
+			trueVal := f.emitStringValue("true")
+			falseVal := f.emitStringValue("false")
+			tmp := f.newTemp("tostr")
+			fmt.Fprintf(&f.builder, "  %%%s = select i1 %s, %%yar.str %s, %%yar.str %s\n", tmp, arg.ref, trueVal.ref, falseVal.ref)
+			return exprValue{ref: "%" + tmp, typ: checker.TypeStr}
+		case checker.TypeStr:
+			return arg
+		case checker.TypeError:
+			return f.genErrorToStr(arg)
+		default:
+			panic("to_str: unsupported type " + string(argType))
+		}
+	}
 	if sig.Name == "len" && sig.Builtin {
 		arg := f.genExpression(expr.Args[0])
 		if array, ok := checker.ParseArrayType(f.exprType(expr.Args[0])); ok {
@@ -2374,6 +2405,45 @@ func (f *functionEmitter) emitStringValue(value string) exprValue {
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str zeroinitializer, ptr %%%s, 0\n", tmp1, ptrName)
 	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.str %%%s, i64 %d, 1\n", tmp2, tmp1, len([]byte(value)))
 	return exprValue{ref: "%" + tmp2, typ: checker.TypeStr}
+}
+
+func (f *functionEmitter) genErrorToStr(arg exprValue) exprValue {
+	if len(f.g.info.OrderedErrors) == 0 {
+		return f.emitStringValue("error.unknown")
+	}
+
+	endLabel := f.newLabel("tostr.end")
+	resultPtr := f.newTemp("tostr.err.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", resultPtr)
+
+	defaultLabel := f.newLabel("tostr.err.default")
+	var labels []string
+	for _, name := range f.g.info.OrderedErrors {
+		labels = append(labels, f.newLabel("tostr.err."+sanitizeLabel(name)))
+	}
+
+	fmt.Fprintf(&f.builder, "  switch i32 %s, label %%%s [\n", arg.ref, defaultLabel)
+	for i, name := range f.g.info.OrderedErrors {
+		fmt.Fprintf(&f.builder, "    i32 %d, label %%%s\n", f.g.info.ErrorCodes[name], labels[i])
+	}
+	fmt.Fprintf(&f.builder, "  ]\n")
+
+	for i, name := range f.g.info.OrderedErrors {
+		fmt.Fprintf(&f.builder, "%s:\n", labels[i])
+		val := f.emitStringValue("error." + name)
+		fmt.Fprintf(&f.builder, "  store %%yar.str %s, ptr %%%s\n", val.ref, resultPtr)
+		fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	}
+
+	fmt.Fprintf(&f.builder, "%s:\n", defaultLabel)
+	val := f.emitStringValue("error.unknown")
+	fmt.Fprintf(&f.builder, "  store %%yar.str %s, ptr %%%s\n", val.ref, resultPtr)
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+
+	fmt.Fprintf(&f.builder, "%s:\n", endLabel)
+	result := f.newTemp("tostr.err.result")
+	fmt.Fprintf(&f.builder, "  %%%s = load %%yar.str, ptr %%%s\n", result, resultPtr)
+	return exprValue{ref: "%" + result, typ: checker.TypeStr}
 }
 
 func (f *functionEmitter) emitAllocBytes(size string, zeroed bool) string {

@@ -582,10 +582,11 @@ Named errors are written as:
 error.DivideByZero
 ```
 
-Today, `error.Name` is only valid as the direct operand of `return` inside:
+`error.Name` is valid as:
 
-- an errorable function returning `!T`
-- a function returning plain `error`
+- the direct operand of `return` inside an errorable function or a function returning plain `error`
+- a general expression producing a value of type `error`
+- an operand in `==` or `!=` comparisons with other error values
 
 The checker records every distinct returned error name and assigns it a numeric
 code for code generation.
@@ -704,6 +705,7 @@ Builtins are fixed by the compiler:
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
 - `keys(map[K]V) []K`
+- `to_str(i32 | i64 | bool | str | error) str`
 
 They are not user-overridable.
 
@@ -911,20 +913,12 @@ Methods on `*testing.T`:
 - `t.log(msg str) void` — record a message (shown on failure)
 - `t.has_failed() bool` — check if the test has failed
 
-Generic assertions:
+Assertions:
 
-- `testing.equal[V](t *testing.T, got V, want V) void` — fail if `got != want`
+- `testing.equal[V](t *testing.T, got V, want V) void` — fail if `got != want`, with "got X, want Y" message via `to_str`
 - `testing.not_equal[V](t *testing.T, got V, want V) void` — fail if `got == want`
 
-Type-specific assertions with rich failure messages:
-
-- `testing.equal_i32(t *testing.T, got i32, want i32) void`
-- `testing.equal_i64(t *testing.T, got i64, want i64) void`
-- `testing.equal_str(t *testing.T, got str, want str) void`
-- `testing.equal_bool(t *testing.T, got bool, want bool) void`
-- `testing.not_equal_i32(t *testing.T, got i32, not_want i32) void`
-- `testing.not_equal_i64(t *testing.T, got i64, not_want i64) void`
-- `testing.not_equal_str(t *testing.T, got str, not_want str) void`
+`V` can be any `==`-comparable type: `i32`, `i64`, `bool`, `str`, or `error`.
 
 Boolean assertions:
 
@@ -964,11 +958,12 @@ fn test_greeting(t *testing.T) void {
 
 ### Error Testing
 
-Idiomatic error testing uses `or |err| { ... }`:
+Error values support `==` and `!=`, so tests can assert on specific errors:
 
 ```
 fn test_divide_by_zero(t *testing.T) void {
     result := divide(10, 0) or |err| {
+        testing.equal[error](t, err, error.DivideByZero)
         return
     }
     testing.fail(t, "expected error")

@@ -199,6 +199,7 @@
 - `has(map[K]V, K) bool`
 - `delete(map[K]V, K) void`
 - `keys(map[K]V) []K`
+- `to_str(i32 | i64 | bool | str | error) str`
 
 Builtins remain globally available and are not imported.
 
@@ -209,7 +210,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `process`, `env`, and `stdio`.
+  `path`, `fs`, `process`, `env`, `stdio`, and `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and

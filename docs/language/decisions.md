@@ -148,10 +148,28 @@ Status: accepted
 YAR provides a `testing` stdlib package and a `yar test` CLI command. Test files
 use the `_test.yar` suffix and are excluded from normal builds. Test functions
 follow the `fn test_*(t *testing.T) void` convention and are discovered at
-compile time. Assertions use standalone generic functions (`testing.equal[V]`)
-and type-specific functions (`testing.equal_i32`) rather than methods, because
-Yar does not support generics on methods. The test runner is a generated Yar
-`main()` injected at compile time.
+compile time. Assertions use generic standalone functions (`testing.equal[V]`)
+with rich failure messages via the `to_str` builtin. The test runner is a
+generated Yar `main()` injected at compile time.
+
+### `to_str` builtin
+
+Status: accepted
+
+YAR provides a compiler-provided `to_str` builtin that converts primitive values
+(`i32`, `i64`, `bool`, `str`, `error`) to their string representation. This is
+polymorphic like `len` — the compiler selects the conversion strategy based on
+argument type. This eliminated the need for type-specific assertion functions in
+the testing package.
+
+### Error comparison and error expressions
+
+Status: accepted
+
+Error values support `==` and `!=` comparison. `error.Name` expressions are
+valid outside return statements, enabling patterns like
+`testing.equal[error](t, err, error.NotFound)`. Errors are `i32` codes
+internally, so comparison uses integer `icmp`.
 
 ---
 

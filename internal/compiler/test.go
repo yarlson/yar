@@ -78,8 +78,7 @@ func isTestFunction(fn *ast.FunctionDecl) bool {
 func generateTestMain(pkgName string, tests []testFunction) string {
 	var b strings.Builder
 	b.WriteString("package " + pkgName + "\n\n")
-	b.WriteString("import \"testing\"\n")
-	b.WriteString("import \"conv\"\n\n")
+	b.WriteString("import \"testing\"\n\n")
 	b.WriteString("fn main() i32 {\n")
 	b.WriteString("    passed := 0\n")
 	b.WriteString("    failed := 0\n\n")
@@ -102,7 +101,7 @@ func generateTestMain(pkgName string, tests []testFunction) string {
 		b.WriteString("    }\n\n")
 	}
 
-	b.WriteString("    print(\"\\n\" + conv.itoa(passed) + \" passed, \" + conv.itoa(failed) + \" failed\\n\")\n")
+	b.WriteString("    print(\"\\n\" + to_str(passed) + \" passed, \" + to_str(failed) + \" failed\\n\")\n")
 	b.WriteString("    if failed > 0 {\n")
 	b.WriteString("        return 1\n")
 	b.WriteString("    }\n")
@@ -159,10 +158,9 @@ func CompileTestPath(path, targetTriple string) (*Unit, []diag.Diagnostic, error
 	// Add the generated runner as a file in the entry package.
 	graph.Entry.Files = append(graph.Entry.Files, runnerAST)
 
-	// Ensure the runner's imports (testing, conv) are in the entry package's
-	// import list and the package graph. The test file already imports testing,
-	// and testing imports conv, so both should be in graph.Packages. We just
-	// need to register them as entry package imports if not already present.
+	// Ensure the runner's imports are in the entry package's import list and
+	// the package graph. The test file already imports testing, so it should
+	// be in graph.Packages. Register as entry package imports if not present.
 	entryImports := make(map[string]struct{})
 	for _, imp := range graph.Entry.Imports {
 		entryImports[imp.Path] = struct{}{}

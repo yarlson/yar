@@ -400,7 +400,7 @@ func methodReceiverBaseType(typ Type) (Type, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "print_int", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32":
+	case "print", "print_int", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str":
 		return true
 	default:
 		return false
@@ -1250,8 +1250,10 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.ErrorLiteral:
-		c.diag.Add(e.Pos(), "%s is only valid in a return statement", formatErrorName(e.Name))
-		return ExprType{Base: TypeInvalid}
+		c.useErrorName(e.Name)
+		et := ExprType{Base: TypeError}
+		c.info.ExprTypes[expr] = et
+		return et
 	case *ast.GroupExpr:
 		et := c.checkExpression(e.Inner)
 		c.info.ExprTypes[expr] = et
@@ -1691,6 +1693,31 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		c.info.ExprTypes[expr] = et
 		return et
 	}
+	if ok && name == "to_str" {
+		if len(call.Args) != 1 {
+			c.diag.Add(namePos, "function %q expects 1 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		argType := c.checkExpression(call.Args[0])
+		if argType.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		if argType.Base == TypeUntypedInt {
+			argType = c.coerceValue(call.Args[0], argType, TypeI32)
+		}
+		switch argType.Base {
+		case TypeI32, TypeI64, TypeBool, TypeStr, TypeError:
+			// ok
+		default:
+			c.diag.Add(call.Args[0].Pos(), "to_str requires an i32, i64, bool, str, or error argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: TypeStr}
+		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{argType.Base}, Return: TypeStr, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
 	if ok && name == "has" {
 		if len(call.Args) != 2 {
 			c.diag.Add(namePos, "function %q expects 2 arguments, got %d", name, len(call.Args))
@@ -2077,8 +2104,13 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			c.info.ExprTypes[expr] = et
 			return et
 		}
+		if left.Base == TypeError {
+			et := ExprType{Base: TypeBool}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
 		if left.Base != TypeBool {
-			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, pointers, and str")
+			c.diag.Add(binary.OpPos, "comparison is only supported for bool, integers, pointers, str, and error")
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: TypeBool}

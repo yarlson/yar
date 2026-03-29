@@ -3,14 +3,14 @@ package main
 import "testing"
 
 fn test_add(t *testing.T) void {
-    testing.equal_i32(t, add(2, 3), 5)
-    testing.equal_i32(t, add(0, 0), 0)
-    testing.equal_i32(t, add(-1, 1), 0)
+    testing.equal[i32](t, add(2, 3), 5)
+    testing.equal[i32](t, add(0, 0), 0)
+    testing.equal[i32](t, add(-1, 1), 0)
 }
 
 fn test_greet(t *testing.T) void {
-    testing.equal_str(t, greet("world"), "hello world")
-    testing.equal_str(t, greet(""), "hello ")
+    testing.equal[str](t, greet("world"), "hello world")
+    testing.equal[str](t, greet(""), "hello ")
 }
 
 fn test_divide(t *testing.T) void {
@@ -18,11 +18,12 @@ fn test_divide(t *testing.T) void {
         testing.fail(t, "unexpected error from divide(10, 2)")
         return
     }
-    testing.equal_i32(t, result, 5)
+    testing.equal[i32](t, result, 5)
 }
 
 fn test_divide_by_zero(t *testing.T) void {
     result := divide(10, 0) or |err| {
+        testing.equal[error](t, err, error.DivideByZero)
         return
     }
     testing.fail(t, "expected error from divide(10, 0)")

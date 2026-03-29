@@ -199,15 +199,8 @@ Methods:
 
 Functions:
 
-- `equal[V](t *T, got V, want V) void` — generic equality assertion
-- `not_equal[V](t *T, got V, want V) void` — generic inequality assertion
-- `equal_i32(t *T, got i32, want i32) void` — with "got X, want Y" message
-- `equal_i64(t *T, got i64, want i64) void`
-- `equal_str(t *T, got str, want str) void`
-- `equal_bool(t *T, got bool, want bool) void`
-- `not_equal_i32(t *T, got i32, not_want i32) void`
-- `not_equal_i64(t *T, got i64, not_want i64) void`
-- `not_equal_str(t *T, got str, not_want str) void`
+- `equal[V](t *T, got V, want V) void` — equality assertion with "got X, want Y" message via `to_str`
+- `not_equal[V](t *T, got V, want V) void` — inequality assertion
 - `is_true(t *T, value bool) void`
 - `is_false(t *T, value bool) void`
 - `fail(t *T, msg str) void` — explicit failure with message

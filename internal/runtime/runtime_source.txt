@@ -383,6 +383,58 @@ yar_str yar_str_from_byte(int32_t value) {
     return result;
 }
 
+yar_str yar_to_str_i32(int32_t value) {
+    char tmp[12];
+    int neg = 0;
+    int32_t v = value;
+    if (v < 0) {
+        neg = 1;
+        v = -v;
+        if (v < 0) {
+            static const char m[] = "-2147483648";
+            char *b = (char *)yar_alloc(11);
+            for (int i = 0; i < 11; i++) b[i] = m[i];
+            yar_str r; r.ptr = b; r.len = 11;
+            return r;
+        }
+    }
+    int pos = 11;
+    if (v == 0) { tmp[--pos] = '0'; }
+    else { while (v > 0) { tmp[--pos] = '0' + (char)(v % 10); v /= 10; } }
+    if (neg) tmp[--pos] = '-';
+    int len = 11 - pos;
+    char *buf = (char *)yar_alloc(len);
+    for (int i = 0; i < len; i++) buf[i] = tmp[pos + i];
+    yar_str result; result.ptr = buf; result.len = len;
+    return result;
+}
+
+yar_str yar_to_str_i64(int64_t value) {
+    char tmp[21];
+    int neg = 0;
+    int64_t v = value;
+    if (v < 0) {
+        neg = 1;
+        v = -v;
+        if (v < 0) {
+            static const char m[] = "-9223372036854775808";
+            char *b = (char *)yar_alloc(20);
+            for (int i = 0; i < 20; i++) b[i] = m[i];
+            yar_str r; r.ptr = b; r.len = 20;
+            return r;
+        }
+    }
+    int pos = 20;
+    if (v == 0) { tmp[--pos] = '0'; }
+    else { while (v > 0) { tmp[--pos] = '0' + (char)(v % 10); v /= 10; } }
+    if (neg) tmp[--pos] = '-';
+    int len = 20 - pos;
+    char *buf = (char *)yar_alloc(len);
+    for (int i = 0; i < len; i++) buf[i] = tmp[pos + i];
+    yar_str result; result.ptr = buf; result.len = len;
+    return result;
+}
+
 /* --- host process and environment runtime --- */
 
 #define YAR_HOST_OK                0
