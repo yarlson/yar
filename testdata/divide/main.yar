@@ -9,7 +9,7 @@ fn divide(a i32, b i32) !i32 {
 
 fn main() !i32 {
 	x := divide(10, 2)?
-	print_int(x)
+	print(to_str(x))
 	print("\n")
 	return 0
 }

@@ -279,7 +279,7 @@ Supported enum operations:
 ```
 match expr {
 case Expr.Int(v) {
-    print_int(v.value)
+    print(to_str(v.value))
 }
 case Expr.Name(v) {
     print(v.text)
@@ -353,11 +353,11 @@ counts["check"] = 2
 
 if has(counts, "main") {
     x := counts["main"]?
-    print_int(x)
+    print(to_str(x))
 }
 
 delete(counts, "check")
-print_int(len(counts))
+print(to_str(len(counts)))
 ```
 
 Supported map operations:
@@ -698,7 +698,6 @@ They must be handled immediately with one of:
 Builtins are fixed by the compiler:
 
 - `print(str) void`
-- `print_int(i32) void`
 - `panic(str) noreturn`
 - `len([N]T | []T | map[K]V | str) i32`
 - `append([]T, T) []T`

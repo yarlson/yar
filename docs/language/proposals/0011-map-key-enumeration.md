@@ -47,7 +47,7 @@ fn dump(symbols map[str]i32) !void {
         value := symbols[name]?
         print(name)
         print("\n")
-        print_int(value)
+        print(to_str(value))
         print("\n")
     }
 }

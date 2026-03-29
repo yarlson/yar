@@ -16,7 +16,7 @@ fn divide(a i32, b i32) !i32 {
 }
 
 fn main() i32 {
-    print_int(add(2, 3))
+    print(to_str(add(2, 3)))
     print("\n")
     return 0
 }

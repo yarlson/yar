@@ -13,7 +13,7 @@ fn apply_twice(f fn(i32) i32, value i32) i32 {
 fn main() i32 {
 	base := 4
 	add := make_adder(base)
-	print_int(apply_twice(add, 5))
+	print(to_str(apply_twice(add, 5)))
 	print("\n")
 
 	offset := 7
@@ -23,7 +23,7 @@ fn main() i32 {
 	plus_offset := fn(value i32) i32 {
 		return value + offset
 	}
-	print_int(plus_offset(inc(1)))
+	print(to_str(plus_offset(inc(1))))
 	print("\n")
 	return 0
 }

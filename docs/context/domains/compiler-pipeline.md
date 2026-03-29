@@ -4,7 +4,7 @@
 
 - `cmd/yar` is thin CLI wiring. It parses command names and basic arguments,
   compiles an entry file or package directory, formats diagnostics, and sets a
-  timeout for `build` and `run`.
+  timeout for `build`, `run`, and `test`.
 - `internal/token` defines the token type set, token values, and source
   positions used by the lexer, parser, and downstream stages.
 - `internal/diag` defines the diagnostic type and accumulator used to collect

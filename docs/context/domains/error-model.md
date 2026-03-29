@@ -12,10 +12,22 @@
 - Map indexing returns `!V` and uses `error.MissingKey` when the requested key
   is absent.
 
+## Error Expressions and Comparison
+
+- `error.Name` is valid as a general expression that produces a value of type
+  `error`.
+- `error.Name` is valid as the operand of `return` inside an errorable function
+  or a function returning `error`.
+- Error values support `==` and `!=` comparison. Both operands must be `error`.
+- Errors are `i32` codes internally; comparison lowers to integer `icmp`.
+- `to_str(err)` converts an error value to its `"error.Name"` string
+  representation using a generated switch over the program-wide error-code
+  table.
+
 ## Handling Rules
 
-- Returning `error.Name` is only valid inside an errorable function or a
-  function returning `error`.
+- Returning `error.Name` is valid inside an errorable function or a function
+  returning `error`.
 - A raw `!T` expression is rejected in:
   - `:=` bindings
   - `var` initializers

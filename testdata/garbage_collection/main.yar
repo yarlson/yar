@@ -13,7 +13,7 @@ fn main() i32 {
 	for round := 0; round < 200; round = round + 1 {
 		total = total + churn_once(round)
 	}
-	print_int(total)
+	print(to_str(total))
 	print("\n")
 	return 0
 }

@@ -9,7 +9,7 @@ fn main() !i32 {
     counts := map[str]i32{"hello": 1, "world": 2}
 
     // len
-    print_int(len(counts))
+    print(to_str(len(counts)))
     print("\n")
 
     // has
@@ -22,18 +22,18 @@ fn main() !i32 {
 
     // lookup with propagation
     v := lookup(counts, "world")?
-    print_int(v)
+    print(to_str(v))
     print("\n")
 
     // assignment
     counts["new"] = 42
     v2 := lookup(counts, "new")?
-    print_int(v2)
+    print(to_str(v2))
     print("\n")
 
     // delete
     delete(counts, "hello")
-    print_int(len(counts))
+    print(to_str(len(counts)))
     print("\n")
 
     // i32 key map
@@ -45,7 +45,7 @@ fn main() !i32 {
     // bool key map
     flags := map[bool]i32{true: 1, false: 0}
     ft := flags[true]?
-    print_int(ft)
+    print(to_str(ft))
     print("\n")
 
     // missing key handled with or
@@ -53,7 +53,7 @@ fn main() !i32 {
         print("caught\n")
         return 0
     }
-    print_int(val)
+    print(to_str(val))
     print("\n")
     return 0
 }

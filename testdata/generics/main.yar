@@ -22,11 +22,11 @@ fn main() i32 {
     box := wrap[i32](first[i32](values))
     pair := Pair[str, i32]{first: "ok", second: 2}
 
-    print_int(box.value)
+    print(to_str(box.value))
     print("\n")
     print(pair.first)
     print("\n")
-    print_int(pair.second)
+    print(to_str(pair.second))
     print("\n")
     return 0
 }

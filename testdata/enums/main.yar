@@ -28,7 +28,7 @@ fn print_expr(expr Expr) void {
 	case Expr.Int(v) {
 		print("int")
 		print("\n")
-		print_int(v.value)
+		print(to_str(v.value))
 		print("\n")
 	}
 	case Expr.Name(v) {

@@ -80,8 +80,20 @@
   storage, and other heap-backed features. The current runtime reclaims
   unreachable heap-backed objects with a conservative collector. Allocation
   failure is still an unrecoverable runtime failure rather than a YAR `error`.
-- The CLI places a timeout around `build` and `run` operations before invoking
-  external processes.
+- Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
+  and `run` commands. They are included only during `yar test`.
+- Test functions follow the convention `fn test_*(t *testing.T) void` and are
+  discovered at compile time by scanning test file ASTs.
+- The `yar test` command generates a synthetic test runner `main()` that
+  replaces the user `main()`, compiles the result, and executes it.
+- `error.Name` expressions are valid both in return statements and as general
+  expressions that produce values of type `error`.
+- Error values support `==` and `!=` comparison.
+- The `to_str` builtin is polymorphic and accepts `i32`, `i64`, `bool`, `str`,
+  and `error` arguments. For error values, code generation emits a switch over
+  the program-wide error-code table to produce `"error.Name"` strings.
+- The CLI places a timeout around `build`, `run`, and `test` operations before
+  invoking external processes.
 - Cross-compilation is configured through `YAR_OS` and `YAR_ARCH` environment
   variables. The compiler maps the pair to an LLVM target triple internally.
   `yar run` rejects cross-compilation targets.

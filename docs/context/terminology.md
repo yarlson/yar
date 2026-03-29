@@ -57,7 +57,7 @@ direct propagation — Returning an errorable call expression unchanged from a
 function with the same errorable result type.
 
 builtin — A compiler-owned operation with checker-defined behavior: `print`,
-`print_int`, `panic`, `len`, `append`, `has`, `delete`, or `keys`.
+`panic`, `len`, `append`, `has`, `delete`, `keys`, or `to_str`.
 
 host intrinsic — A stdlib declaration whose checker/codegen wiring calls a
 runtime helper directly instead of emitted Yar code.
@@ -72,8 +72,8 @@ unhandled error — An errorable `main` result that reaches the generated native
 wrapper, which prints an error message and exits with code `1`.
 
 stdlib — The embedded standard library of Yar packages (`strings`, `utf8`,
-`conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) compiled through the
-same pipeline as user code.
+`conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`, `testing`) compiled
+through the same pipeline as user code.
 
 internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to
 stdlib packages and rejected in user code by the package lowerer.

@@ -70,10 +70,10 @@ enum Shape {
 
 match shape {
 case Shape.Circle(c) {
-    print_int(c.radius)
+    print(to_str(c.radius))
 }
 case Shape.Rect(r) {
-    print_int(r.w * r.h)
+    print(to_str(r.w * r.h))
 }
 }
 ```
@@ -114,7 +114,7 @@ directly.
 ```
 if has(counts, key) {
     n := counts[key]?
-    print_int(n)
+    print(to_str(n))
 }
 
 n := counts[key] or |err| { return 0 }

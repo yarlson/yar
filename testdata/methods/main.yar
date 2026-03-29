@@ -17,7 +17,7 @@ fn (c *Counter) inc(delta i32) void {
 fn main() i32 {
 	counter := &Counter{value: 2}
 	counter.inc(3)
-	print_int((*counter).current())
+	print(to_str((*counter).current()))
 	print("\n")
 
 	user := people.User{name: "ada"}

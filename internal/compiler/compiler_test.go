@@ -328,7 +328,7 @@ fn divide(a i32, b i32) !i32 {
 
 fn main() !i32 {
 	x := divide(10, 2)?
-	print_int(x)
+	print(to_str(x))
 	print("\n")
 	return 0
 }
@@ -491,7 +491,7 @@ package main
 
 fn main() i32 {
 	values := []i32{1}
-	print_int(values[1])
+	print(to_str(values[1]))
 	return 0
 }
 `
@@ -1335,7 +1335,7 @@ package main
 
 fn main() i32 {
 	s := "hi"
-	print_int(s[2])
+	print(to_str(s[2]))
 	return 0
 }
 `

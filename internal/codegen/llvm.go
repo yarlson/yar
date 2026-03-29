@@ -190,7 +190,6 @@ func Generate(program *ast.Program, info checker.Info, targetTriple string) (str
 
 func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_print(ptr, i64)\n")
-	b.WriteString("declare void @yar_print_int(i32)\n")
 	b.WriteString("declare void @yar_panic(ptr, i64)\n")
 	b.WriteString("declare void @yar_eprint(ptr, i64)\n")
 	b.WriteString("declare ptr @yar_alloc(i64)\n")
@@ -233,13 +232,6 @@ func builtins() map[string]checker.Signature {
 			Name:     "print",
 			FullName: "print",
 			Params:   []checker.Type{checker.TypeStr},
-			Return:   checker.TypeVoid,
-			Builtin:  true,
-		},
-		"print_int": {
-			Name:     "print_int",
-			FullName: "print_int",
-			Params:   []checker.Type{checker.TypeI32},
 			Return:   checker.TypeVoid,
 			Builtin:  true,
 		},
@@ -1991,9 +1983,6 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", ptr, args[0].ref)
 			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", length, args[0].ref)
 			fmt.Fprintf(&f.builder, "  call void @yar_print(ptr %%%s, i64 %%%s)\n", ptr, length)
-			return exprValue{typ: checker.TypeVoid}
-		case "print_int":
-			fmt.Fprintf(&f.builder, "  call void @yar_print_int(i32 %s)\n", args[0].ref)
 			return exprValue{typ: checker.TypeVoid}
 		case "panic":
 			ptr := f.newTemp("panic.ptr")

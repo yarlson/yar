@@ -4,15 +4,15 @@ fn main() i32 {
     counts := map[str]i32{"alpha": 1, "beta": 2, "gamma": 3}
     names := keys(counts)
 
-    print_int(len(names))
+    print(to_str(len(names)))
     print("\n")
 
     delete(counts, "alpha")
     counts["delta"] = 4
 
-    print_int(len(names))
+    print(to_str(len(names)))
     print("\n")
-    print_int(len(counts))
+    print(to_str(len(counts)))
     print("\n")
 
     alpha := 0
@@ -35,17 +35,17 @@ fn main() i32 {
         }
     }
 
-    print_int(alpha)
+    print(to_str(alpha))
     print("\n")
-    print_int(beta)
+    print(to_str(beta))
     print("\n")
-    print_int(gamma)
+    print(to_str(gamma))
     print("\n")
-    print_int(delta)
+    print(to_str(delta))
     print("\n")
 
     flags := map[bool]i32{true: 1, false: 0}
-    print_int(len(keys(flags)))
+    print(to_str(len(keys(flags))))
     print("\n")
 
     return 0

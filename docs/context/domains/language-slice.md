@@ -65,7 +65,7 @@
 - String literals with `\n`, `\t`, `\\`, and `\"` escapes
 - Boolean literals
 - `nil`
-- `error.Name` literals in return position
+- `error.Name` expressions as general values and in return position
 - Struct literals
 - Enum case constructors such as `TokenKind.Ident` and
   `Expr.Name{text: "main"}`
@@ -148,7 +148,7 @@
   runtime bounds checking.
 - String slicing `s[i:j]` returns the byte substring as `str`, with runtime
   bounds checking.
-- Equality and inequality are supported for integers, `bool`, `str`,
+- Equality and inequality are supported for integers, `bool`, `str`, `error`,
   same-typed pointers, and pointer-vs-`nil`.
 - Equality and inequality are not supported for enum values.
 - `&&` and `||` require `bool` operands and evaluate the right operand only
@@ -178,8 +178,9 @@
 - `m[key] = value` inserts or replaces the entry for `key` in a map.
 - `len` requires an array, slice, map, or `str` argument and returns `i32`.
 - `append` requires `append([]T, T)` and returns `[]T`.
-- `error.Name` is only valid as the direct operand of `return` inside an
-  errorable function or a function returning `error`.
+- `error.Name` is valid as a general expression producing a value of type
+  `error`, and as the operand of `return` inside an errorable function or a
+  function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned
   directly, propagated with `?`, or handled with `or |err| { ... }`.
 - `?` is only valid on `!T` or `error` expressions and only inside a function
@@ -192,7 +193,6 @@
 ## Builtins
 
 - `print(str) void`
-- `print_int(i32) void`
 - `panic(str) noreturn`
 - `len([N]T | []T | map[K]V | str) i32`
 - `append([]T, T) []T`

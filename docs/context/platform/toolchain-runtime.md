@@ -45,7 +45,6 @@
 
 - `yar_print(const char *data, long long len)` writes string data to stdout when
   the length is positive.
-- `yar_print_int(int32_t value)` prints a signed 32-bit integer with `printf`.
 - `yar_panic(const char *data, long long len)` writes the message to stderr,
   flushes stderr, and exits with status `1`.
 - `yar_eprint(const char *data, long long len)` writes string data to stderr
@@ -92,6 +91,10 @@ long long b_len)` allocates and returns a new string containing the
   string indexing.
 - `yar_str_from_byte(int32_t value)` allocates a one-byte string from a byte
   value and traps if the value is outside `0..255`.
+- `yar_to_str_i32(int32_t value)` formats a signed 32-bit integer as a
+  decimal string.
+- `yar_to_str_i64(int64_t value)` formats a signed 64-bit integer as a
+  decimal string.
 
 ### Filesystem Runtime
 
@@ -189,6 +192,6 @@ long long b_len)` allocates and returns a new string containing the
   imports, string operations (including indexing, slicing, and concatenation
   edge cases), stdlib imports, host filesystem/path behavior, host
   process/environment behavior, CC override behavior, internal builtin
-  rejection, the embedded allocation/helper surface, and a tight-heap
-  garbage-collection churn fixture through the same `clang` boundary used by
-  the CLI.
+  rejection, the embedded allocation/helper surface, a tight-heap
+  garbage-collection churn fixture, and the `yar test` command with passing and
+  failing test fixtures through the same `clang` boundary used by the CLI.

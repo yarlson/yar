@@ -6,7 +6,7 @@ fn add(a i32, b i32) i32 {
 
 fn main() i32 {
     x := add(2, 3)
-    print_int(x)
+    print(to_str(x))
     print("\n")
     return 0
 }

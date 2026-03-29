@@ -20,9 +20,9 @@ fn main() i32 {
 	}
 
 	next := (*head).next
-	print_int((*head).value)
+	print(to_str((*head).value))
 	print("\n")
-	print_int((*next).value)
+	print(to_str((*next).value))
 	print("\n")
 	return 0
 }

@@ -400,7 +400,7 @@ func methodReceiverBaseType(typ Type) (Type, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "print_int", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str":
+	case "print", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str":
 		return true
 	default:
 		return false
@@ -451,13 +451,6 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Name:     "print",
 				FullName: "print",
 				Params:   []Type{TypeStr},
-				Return:   TypeVoid,
-				Builtin:  true,
-			},
-			"print_int": {
-				Name:     "print_int",
-				FullName: "print_int",
-				Params:   []Type{TypeI32},
 				Return:   TypeVoid,
 				Builtin:  true,
 			},

@@ -112,7 +112,7 @@ fn main() i32 {
 	x := divide(10, 2) or |err| {
 		return 0
 	}
-	print_int(err)
+	print(to_str(err))
 	return x
 }
 `,
@@ -1403,8 +1403,8 @@ fn main() i32 {
 	sub := s[1:3]
 	print(cat)
 	print(sub)
-	print_int(b)
-	print_int(n)
+	print(to_str(b))
+	print(to_str(n))
 	return 0
 }
 `

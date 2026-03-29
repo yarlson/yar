@@ -9,19 +9,19 @@ fn main() i32 {
 	middle := values[1:2]
 	middle[0] = 9
 
-	print_int(len(values))
+	print(to_str(len(values)))
 	print("\n")
-	print_int(values[1])
+	print(to_str(values[1]))
 	print("\n")
-	print_int(len(middle))
+	print(to_str(len(middle)))
 	print("\n")
 
 	grown := append(middle, 4)
-	print_int(len(grown))
+	print(to_str(len(grown)))
 	print("\n")
-	print_int(values[2])
+	print(to_str(values[2]))
 	print("\n")
-	print_int(grown[1])
+	print(to_str(grown[1]))
 	print("\n")
 	return 0
 }
