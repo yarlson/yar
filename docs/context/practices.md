@@ -51,6 +51,8 @@
   indices, dereferences, and map elements.
 - Methods are syntax over ordinary functions with an explicit receiver
   parameter.
+- Function literals have explicit function types and lower to closure values
+  carrying a code pointer plus an optional captured environment.
 - Methods are allowed only on named local struct types, with either value
   receivers or pointer receivers.
 - Methods cannot declare type parameters, and methods on instantiated generic
@@ -59,6 +61,9 @@
   implicit `&` or `*` conversions.
 - Method values are not first-class; `value.method` must be called immediately
   as `value.method(...)`.
+- Closures capture outer locals lexically by value at closure creation time.
+- Captured outer locals are readable inside closures but cannot be assigned
+  through the closure body in the current implementation.
 - Error names are collected across the program, sorted lexicographically, and
   then mapped to integer codes for the generated IR and native `main` wrapper.
 - Builtins are compiler-owned contracts, not user-overridable functions,

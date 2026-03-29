@@ -163,29 +163,8 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 	nameTok := p.expect(token.Ident, "expected function name")
 	typeParams := p.parseOptionalTypeParamList()
 	p.expect(token.LParen, "expected '(' after function name")
-
-	var params []ast.Param
-	for !p.at(token.RParen) && !p.at(token.EOF) {
-		paramName := p.expect(token.Ident, "expected parameter name")
-		paramType := p.parseTypeRef()
-		params = append(params, ast.Param{
-			Name:    paramName.Text,
-			NamePos: paramName.Pos,
-			Type:    paramType,
-		})
-		if !p.at(token.Comma) {
-			break
-		}
-		p.advance()
-	}
-	p.expect(token.RParen, "expected ')' after parameters")
-
-	returnIsBang := false
-	if p.at(token.Bang) {
-		returnIsBang = true
-		p.advance()
-	}
-	returnType := p.parseTypeRef()
+	params := p.parseParamList()
+	returnIsBang, returnType := p.parseReturnType()
 	body := p.parseBlock()
 
 	return &ast.FunctionDecl{
@@ -233,6 +212,28 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		p.expect(token.RBracket, "expected ']' after map key type")
 		valueType := p.parseTypeRef()
 		return ast.TypeRef{Kind: ast.MapTypeRef, Key: &keyType, Value: &valueType, Pos: mapTok.Pos}
+	}
+
+	if p.at(token.Fn) {
+		fnTok := p.expect(token.Fn, "expected fn")
+		p.expect(token.LParen, "expected '(' after fn")
+		var params []ast.TypeRef
+		for !p.at(token.RParen) && !p.at(token.EOF) {
+			params = append(params, p.parseTypeRef())
+			if !p.at(token.Comma) {
+				break
+			}
+			p.advance()
+		}
+		p.expect(token.RParen, "expected ')' after function type parameters")
+		returnIsBang, returnType := p.parseReturnType()
+		return ast.TypeRef{
+			Kind:      ast.FunctionTypeRef,
+			Params:    params,
+			Return:    &returnType,
+			Errorable: returnIsBang,
+			Pos:       fnTok.Pos,
+		}
 	}
 
 	tok := p.current()
@@ -757,6 +758,8 @@ func (p *Parser) parsePrimary() ast.Expression {
 		inner := p.parseExpression()
 		p.expect(token.RParen, "expected ')'")
 		return &ast.GroupExpr{Inner: inner}
+	case token.Fn:
+		return p.parseFunctionLiteral()
 	case token.LBracket:
 		return p.parseSequenceLiteral()
 	case token.Map:
@@ -765,6 +768,21 @@ func (p *Parser) parsePrimary() ast.Expression {
 		p.errorCurrent("expected expression")
 		p.advance()
 		return nil
+	}
+}
+
+func (p *Parser) parseFunctionLiteral() ast.Expression {
+	fnTok := p.expect(token.Fn, "expected fn")
+	p.expect(token.LParen, "expected '(' after fn")
+	params := p.parseParamList()
+	returnIsBang, returnType := p.parseReturnType()
+	body := p.parseBlock()
+	return &ast.FunctionLiteralExpr{
+		FnPos:        fnTok.Pos,
+		Params:       params,
+		Return:       returnType,
+		ReturnIsBang: returnIsBang,
+		Body:         body,
 	}
 }
 
@@ -893,6 +911,34 @@ func (p *Parser) finishCall(callee ast.Expression) ast.Expression {
 		Callee: callee,
 		Args:   args,
 	}
+}
+
+func (p *Parser) parseParamList() []ast.Param {
+	var params []ast.Param
+	for !p.at(token.RParen) && !p.at(token.EOF) {
+		paramName := p.expect(token.Ident, "expected parameter name")
+		paramType := p.parseTypeRef()
+		params = append(params, ast.Param{
+			Name:    paramName.Text,
+			NamePos: paramName.Pos,
+			Type:    paramType,
+		})
+		if !p.at(token.Comma) {
+			break
+		}
+		p.advance()
+	}
+	p.expect(token.RParen, "expected ')' after parameters")
+	return params
+}
+
+func (p *Parser) parseReturnType() (bool, ast.TypeRef) {
+	returnIsBang := false
+	if p.at(token.Bang) {
+		returnIsBang = true
+		p.advance()
+	}
+	return returnIsBang, p.parseTypeRef()
 }
 
 func typeRefFromExpression(expr ast.Expression) (ast.TypeRef, bool) {

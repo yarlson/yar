@@ -33,13 +33,13 @@ stored in the map.
 
 ### Valid examples
 
-```yar
+```
 fn names(symbols map[str]i32) []str {
     return keys(symbols)
 }
 ```
 
-```yar
+```
 fn dump(symbols map[str]i32) !void {
     names := keys(symbols)
     for i := 0; i < len(names); i = i + 1 {
@@ -55,20 +55,20 @@ fn dump(symbols map[str]i32) !void {
 
 ### Invalid examples
 
-```yar
+```
 ks := keys(values)
 ```
 
 Invalid when `values` is not a map.
 
-```yar
+```
 ks := keys(maybe_map()?)
 ```
 
 Invalid because raw errorable expressions remain disallowed in builtin argument
 position.
 
-```yar
+```
 ks := keys(m)
 ks[0] = true
 ```

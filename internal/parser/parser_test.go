@@ -109,6 +109,67 @@ fn main() i32 {
 	}
 }
 
+func TestParseClosures(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+fn make_adder(x i32) fn(i32) i32 {
+	return fn(y i32) i32 {
+		return x + y
+	}
+}
+
+fn main() i32 {
+	f := fn(value i32) !i32 {
+		return value
+	}
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := program.Functions[0].Return.String(), "fn(i32) i32"; got != want {
+		t.Fatalf("unexpected function return type: got %q want %q", got, want)
+	}
+
+	ret, ok := program.Functions[0].Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok {
+		t.Fatalf("expected return statement, got %T", program.Functions[0].Body.Stmts[0])
+	}
+	lit, ok := ret.Value.(*ast.FunctionLiteralExpr)
+	if !ok {
+		t.Fatalf("expected function literal, got %T", ret.Value)
+	}
+	if got, want := len(lit.Params), 1; got != want {
+		t.Fatalf("unexpected literal parameter count: got %d want %d", got, want)
+	}
+	if got, want := lit.Params[0].Name, "y"; got != want {
+		t.Fatalf("unexpected literal parameter name: got %q want %q", got, want)
+	}
+	if lit.ReturnIsBang {
+		t.Fatal("expected outer returned literal to be non-errorable")
+	}
+
+	stmt, ok := program.Functions[1].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[1].Body.Stmts[0])
+	}
+	mainLit, ok := stmt.Value.(*ast.FunctionLiteralExpr)
+	if !ok {
+		t.Fatalf("expected function literal, got %T", stmt.Value)
+	}
+	if !mainLit.ReturnIsBang {
+		t.Fatal("expected bang return on function literal")
+	}
+	if got, want := mainLit.Return.String(), "i32"; got != want {
+		t.Fatalf("unexpected literal return type: got %q want %q", got, want)
+	}
+}
+
 func TestParseEnumAndMatch(t *testing.T) {
 	t.Parallel()
 

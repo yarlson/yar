@@ -22,10 +22,11 @@
 - `internal/parser` builds file ASTs, including top-level `struct`, `enum`,
   `fn`, and receiver-style method declarations, optional `pub` export markers,
   explicit generic type parameter and type argument syntax, `import`
-  declarations, loops, exhaustive enum `match` statements, array and slice
-  literals, enum constructors, pointer types, `nil`, index and slice postfix
-  forms, generalized lvalue forms such as `(*ptr).field`, method-call selector
-  syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
+  declarations, function-literal and function-type syntax, loops, exhaustive
+  enum `match` statements, array and slice literals, enum constructors, pointer
+  types, `nil`, index and slice postfix forms, generalized lvalue forms such
+  as `(*ptr).field`, method-call selector syntax, qualified call syntax, and
+  sugar nodes for `?` and `or |err| { ... }`.
 - `internal/compiler/packages.go` resolves the package graph. It loads local
   `.yar` files from disk, falls back to embedded stdlib packages only when a
   local import path is missing, validates package names and import cycles, and
@@ -33,24 +34,27 @@
   and imported symbols to canonical names.
 - `internal/compiler/generics.go` monomorphizes explicit generic struct and
   function instantiations into ordinary declarations before checking.
-- `internal/checker` validates struct, enum, function, and method shape, tracks
-  scopes, resolves builtin and rewritten user function signatures, resolves
-  user-defined, enum, array, slice, map, and pointer types, assigns expression
-  types, validates exhaustive enum `match`, validates addressability and
-  dereference rules, resolves method lookup from receiver types, validates loop
-  and assignment-target rules, validates slice indexing/slicing and `append`,
-  validates map key type restrictions, indexing, and `keys`, validates
-  error-sugar legality, and records ordered error names.
+- `internal/checker` validates struct, enum, function, method, and function
+  literal shape, tracks scopes, resolves builtin and rewritten user function
+  signatures, resolves user-defined, enum, array, slice, map, pointer, and
+  function types, assigns expression types, records closure captures, validates
+  exhaustive enum `match`, validates addressability and dereference rules,
+  resolves method lookup from receiver types, validates loop and assignment-target
+  rules, validates slice indexing/slicing and `append`, validates map key type
+  restrictions, indexing, and `keys`, validates error-sugar legality, and
+  records ordered error names.
 - `internal/codegen` lowers the checked AST into LLVM IR, expanding method
-  calls into ordinary function calls with an explicit receiver argument, error
-  sugar, enum `match`, and short-circuit boolean operators into explicit
-  checks, branches, and returns, lowering loops and aggregate values, lowering
-  enums to tagged aggregates with aligned payload storage, lowering pointers to
-  LLVM `ptr` values, lowering slices to runtime descriptors plus
-  allocation/copy helpers, lowering maps to opaque runtime-managed hash tables
-  with typed key/value access and key-snapshot extraction, generating the
-  native `main` wrapper around `yar.main`, and declaring the shared runtime
-  allocation helpers used by heap-backed features.
+  calls into ordinary function calls with an explicit receiver argument,
+  lowering function values to closure pairs of code pointer plus environment
+  pointer, lowering function-literal captures into heap-backed environment
+  objects, expanding error sugar, enum `match`, and short-circuit boolean
+  operators into explicit checks, branches, and returns, lowering loops and
+  aggregate values, lowering enums to tagged aggregates with aligned payload
+  storage, lowering pointers to LLVM `ptr` values, lowering slices to runtime
+  descriptors plus allocation/copy helpers, lowering maps to opaque
+  runtime-managed hash tables with typed key/value access and key-snapshot
+  extraction, generating the native `main` wrapper around `yar.main`, and
+  declaring the shared runtime allocation helpers used by heap-backed features.
 - `internal/runtime` exposes embedded runtime C source to the build step,
   including builtin I/O, panic behavior, string operations, slice bounds
   checks, map operations and key enumeration, host filesystem and process
@@ -85,6 +89,9 @@
 - Methods follow the same pattern: receiver-aware syntax survives parsing and
   checking, then code generation emits ordinary function symbols and receiver
   arguments.
+- Closures follow a similar split: function-literal syntax survives parsing and
+  checking, then code generation emits synthetic functions plus explicit
+  captured-environment objects.
 - Generic instantiations follow a different pattern: generic syntax survives
   parsing and package lowering, then the compiler clones concrete declarations
   before semantic analysis.

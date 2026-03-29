@@ -444,6 +444,16 @@ func typeRefHasTypeArgs(ref ast.TypeRef) bool {
 		return ref.Elem != nil && typeRefHasTypeArgs(*ref.Elem)
 	case ast.MapTypeRef:
 		return (ref.Key != nil && typeRefHasTypeArgs(*ref.Key)) || (ref.Value != nil && typeRefHasTypeArgs(*ref.Value))
+	case ast.FunctionTypeRef:
+		if ref.Return != nil && typeRefHasTypeArgs(*ref.Return) {
+			return true
+		}
+		for _, param := range ref.Params {
+			if typeRefHasTypeArgs(param) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -591,6 +601,14 @@ func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref as
 			l.validateExportedLocalTypeRef(packagePath, *ref.Value, allowed, ownerKind, ownerName)
 		}
 		return
+	case ast.FunctionTypeRef:
+		for _, param := range ref.Params {
+			l.validateExportedLocalTypeRef(packagePath, param, allowed, ownerKind, ownerName)
+		}
+		if ref.Return != nil {
+			l.validateExportedLocalTypeRef(packagePath, *ref.Return, allowed, ownerKind, ownerName)
+		}
+		return
 	}
 	if isBuiltinType(ref.Name) || strings.Contains(ref.Name, ".") {
 		return
@@ -626,12 +644,12 @@ func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
 			})
 		}
 		decls = append(decls, &ast.StructDecl{
-			StructPos: decl.StructPos,
-			Exported:  decl.Exported,
-			Name:      canonicalDeclName(pkg, decl.Name),
-			NamePos:   decl.NamePos,
+			StructPos:  decl.StructPos,
+			Exported:   decl.Exported,
+			Name:       canonicalDeclName(pkg, decl.Name),
+			NamePos:    decl.NamePos,
 			TypeParams: decl.TypeParams,
-			Fields:    fields,
+			Fields:     fields,
 		})
 	}
 	return decls
@@ -739,6 +757,19 @@ func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef, typeP
 		if ref.Value != nil {
 			value := l.rewriteTypeRef(pkg, *ref.Value, typeParams)
 			out.Value = &value
+		}
+		return out
+	case ast.FunctionTypeRef:
+		out := ref
+		if len(ref.Params) > 0 {
+			out.Params = make([]ast.TypeRef, 0, len(ref.Params))
+			for _, param := range ref.Params {
+				out.Params = append(out.Params, l.rewriteTypeRef(pkg, param, typeParams))
+			}
+		}
+		if ref.Return != nil {
+			ret := l.rewriteTypeRef(pkg, *ref.Return, typeParams)
+			out.Return = &ret
 		}
 		return out
 	}
@@ -871,6 +902,22 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression, type
 		return &ast.ErrorLiteral{Name: e.Name, ErrPos: e.ErrPos}
 	case *ast.GroupExpr:
 		return &ast.GroupExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams)}
+	case *ast.FunctionLiteralExpr:
+		params := make([]ast.Param, 0, len(e.Params))
+		for _, param := range e.Params {
+			params = append(params, ast.Param{
+				Name:    param.Name,
+				NamePos: param.NamePos,
+				Type:    l.rewriteTypeRef(pkg, param.Type, typeParams),
+			})
+		}
+		return &ast.FunctionLiteralExpr{
+			FnPos:        e.FnPos,
+			Params:       params,
+			Return:       l.rewriteTypeRef(pkg, e.Return, typeParams),
+			ReturnIsBang: e.ReturnIsBang,
+			Body:         l.rewriteBlock(pkg, e.Body, typeParams),
+		}
 	case *ast.TypeApplicationExpr:
 		args := make([]ast.TypeRef, 0, len(e.TypeArgs))
 		for _, arg := range e.TypeArgs {

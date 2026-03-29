@@ -386,6 +386,131 @@ fn main() i32 {
 	}
 }
 
+func TestCheckClosuresValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn apply_twice(f fn(i32) i32, value i32) i32 {
+	return f(f(value))
+}
+
+fn make_adder(base i32) fn(i32) i32 {
+	return fn(delta i32) i32 {
+		return base + delta
+	}
+}
+
+fn main() i32 {
+	base := 10
+	add := make_adder(base)
+	inc := fn(value i32) i32 {
+		return value + 1
+	}
+	return apply_twice(add, inc(1))
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	info, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+	if got, want := len(info.FunctionLiterals), 2; got != want {
+		t.Fatalf("unexpected function literal count: got %d want %d", got, want)
+	}
+}
+
+func TestCheckClosuresInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "captured assignment rejected",
+			src: `
+package main
+
+fn main() i32 {
+	value := 1
+	f := fn() i32 {
+		value = 2
+		return value
+	}
+	return f()
+}
+`,
+			substr: "cannot assign to captured outer local",
+		},
+		{
+			name: "call arity mismatch through function value",
+			src: `
+package main
+
+fn main() i32 {
+	f := fn(value i32) i32 {
+		return value
+	}
+	return f()
+}
+`,
+			substr: "function \"function value\" expects 1 arguments, got 0",
+		},
+		{
+			name: "captured address rejected",
+			src: `
+package main
+
+fn main() i32 {
+	value := 1
+	f := fn() i32 {
+		ptr := &value
+		if ptr == nil {
+			return 1
+		}
+		return value
+	}
+	return f()
+}
+`,
+			substr: "captured outer local \"value\" is not addressable",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
 func TestCheckMethodNameDoesNotShadowFieldAccess(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,7 @@ updated.
 - Entry `package main` plus imported packages
 - Top-level `struct`, `enum`, and `fn` declarations, with optional `pub`
 - Explicit generic structs and functions
+- Function types and anonymous function literals
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
 
 ## File Shape
@@ -42,7 +43,7 @@ Imported packages:
 
 The lexer supports line comments:
 
-```yar
+```
 // this is a comment
 ```
 
@@ -64,6 +65,7 @@ Implemented types:
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
 - map types such as `map[str]i32` and `map[i32]bool`
+- function types such as `fn(i32) i32` and `fn(str) !i32`
 
 ### Error-Related Types
 
@@ -93,7 +95,7 @@ Current restrictions:
 
 The current implementation supports a narrow explicit generic system:
 
-```yar
+```
 struct Box[T] {
     value T
 }
@@ -132,7 +134,7 @@ Current generic restrictions:
 
 Local declarations:
 
-```yar
+```
 x := 1
 msg := "hi"
 var count i32 = 0
@@ -151,7 +153,7 @@ Locals:
 
 User-defined structs are declared at top level:
 
-```yar
+```
 struct User {
     id i32
     name str
@@ -167,7 +169,7 @@ Supported struct operations:
 
 Recursive data is modeled through pointer indirection:
 
-```yar
+```
 struct Node {
     value i32
     next *Node
@@ -181,7 +183,7 @@ There are no:
 
 Top-level visibility uses `pub`:
 
-```yar
+```
 pub struct User {
     id i32
 }
@@ -198,7 +200,7 @@ public fields, parameters, or return types.
 
 Enums model closed sets of named variants:
 
-```yar
+```
 enum TokenKind {
     Ident
     Int
@@ -220,7 +222,7 @@ Supported enum operations:
 
 `match` is a statement in the current implementation:
 
-```yar
+```
 match expr {
 case Expr.Int(v) {
     print_int(v.value)
@@ -243,7 +245,7 @@ Current enum restrictions:
 
 Fixed arrays are supported:
 
-```yar
+```
 nums := [4]i32{1, 2, 3, 4}
 first := nums[0]
 nums[1] = 10
@@ -262,7 +264,7 @@ Supported array operations:
 
 Slices are supported:
 
-```yar
+```
 values := []i32{}
 values = append(values, 1)
 values = append(values, 2)
@@ -290,7 +292,7 @@ Slice indexing and slicing are bounds-checked at runtime and trap on invalid ran
 
 Maps are built-in associative containers:
 
-```yar
+```
 counts := map[str]i32{"main": 1}
 counts["check"] = 2
 
@@ -331,7 +333,7 @@ There are no:
 
 Functions are declared with `fn`:
 
-```yar
+```
 fn add(a i32, b i32) i32 {
     return a + b
 }
@@ -339,9 +341,29 @@ fn add(a i32, b i32) i32 {
 
 Parameters are positional and explicitly typed.
 
+Function values use explicit function types and anonymous literals:
+
+```
+fn make_adder(base i32) fn(i32) i32 {
+    return fn(delta i32) i32 {
+        return base + delta
+    }
+}
+```
+
+Current closure rules:
+
+- function types are written as `fn(T1, T2) R` or `fn(T) !R`
+- anonymous function literals use `fn(...) R { ... }`
+- function values may be stored in locals, passed as parameters, returned, and called
+- closures capture outer locals lexically by value at closure creation time
+- captured outer locals are readable inside a closure but cannot be assigned there
+- captured outer locals are not addressable, so closures cannot mutate captured state indirectly through pointers
+- methods are still not first-class values, so `value.method` without `(...)` is rejected
+
 Methods attach behavior to named struct types:
 
-```yar
+```
 struct User {
     name str
 }
@@ -370,7 +392,7 @@ There are no:
 
 Cross-package function calls stay qualified:
 
-```yar
+```
 package main
 
 import "lexer"
@@ -384,7 +406,7 @@ fn main() i32 {
 
 Pointers are explicit and typed:
 
-```yar
+```
 struct Node {
     value i32
     next *Node
@@ -497,7 +519,7 @@ Errors are explicit values. There are no exceptions, hidden stack unwinding, or
 
 Named errors are written as:
 
-```yar
+```
 error.DivideByZero
 ```
 
@@ -516,7 +538,7 @@ code for code generation.
 An errorable call may be returned directly from a function with the same
 errorable result type:
 
-```yar
+```
 fn fail() !i32 {
     return error.Boom
 }
@@ -537,7 +559,7 @@ It is valid on:
 
 Examples:
 
-```yar
+```
 x := divide(10, 2)?
 user := lookup(1)?
 write_file(path, data)?
@@ -559,7 +581,7 @@ Current checker rule:
 
 Examples:
 
-```yar
+```
 x := divide(10, 2) or |err| {
     return 0
 }
@@ -648,7 +670,7 @@ name exists, it takes priority over the stdlib version.
 
 ### `strings`
 
-```yar
+```
 import "strings"
 ```
 
@@ -669,7 +691,7 @@ Available functions:
 
 ### `utf8`
 
-```yar
+```
 import "utf8"
 ```
 
@@ -686,7 +708,7 @@ UTF-8 errors return `error.InvalidUTF8`. Out-of-range offsets return
 
 ### `conv`
 
-```yar
+```
 import "conv"
 ```
 
@@ -700,7 +722,7 @@ Available functions:
 
 ### `sort`
 
-```yar
+```
 import "sort"
 ```
 
@@ -714,7 +736,7 @@ Current implementation note: these helpers use a simple in-place insertion sort.
 
 ### `path`
 
-```yar
+```
 import "path"
 ```
 
@@ -733,7 +755,7 @@ Current implementation notes:
 
 ### `fs`
 
-```yar
+```
 import "fs"
 ```
 
@@ -765,7 +787,7 @@ uses `TMPDIR` or `/tmp` for `fs.temp_dir`.
 
 ### `process`
 
-```yar
+```
 import "process"
 ```
 
@@ -792,7 +814,7 @@ as data in `process.Result.exit_code` or the returned `i32`, not as a YAR
 
 ### `env`
 
-```yar
+```
 import "env"
 ```
 
@@ -805,7 +827,7 @@ that cannot cross the host boundary return `error.InvalidArgument`.
 
 ### `stdio`
 
-```yar
+```
 import "stdio"
 ```
 
@@ -818,6 +840,5 @@ Available functions:
 The compiler does not currently implement:
 
 - import aliases
-- closures or lambdas
 - exceptions
 - automatic recovery

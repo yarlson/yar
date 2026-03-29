@@ -9,23 +9,23 @@ import (
 )
 
 type genericMonomorphizer struct {
-	diag                 diag.List
-	genericStructs       map[string]*ast.StructDecl
-	genericFunctions     map[string]*ast.FunctionDecl
-	nonGenericFunctions  map[string]struct{}
-	nonGenericNamedTypes map[string]struct{}
-	structInstantiating  map[string]bool
+	diag                  diag.List
+	genericStructs        map[string]*ast.StructDecl
+	genericFunctions      map[string]*ast.FunctionDecl
+	nonGenericFunctions   map[string]struct{}
+	nonGenericNamedTypes  map[string]struct{}
+	structInstantiating   map[string]bool
 	functionInstantiating map[string]bool
-	output               *ast.Program
+	output                *ast.Program
 }
 
 func monomorphizeProgram(program *ast.Program) (*ast.Program, []diag.Diagnostic) {
 	m := &genericMonomorphizer{
-		genericStructs:       make(map[string]*ast.StructDecl),
-		genericFunctions:     make(map[string]*ast.FunctionDecl),
-		nonGenericFunctions:  make(map[string]struct{}),
-		nonGenericNamedTypes: make(map[string]struct{}),
-		structInstantiating:  make(map[string]bool),
+		genericStructs:        make(map[string]*ast.StructDecl),
+		genericFunctions:      make(map[string]*ast.FunctionDecl),
+		nonGenericFunctions:   make(map[string]struct{}),
+		nonGenericNamedTypes:  make(map[string]struct{}),
+		structInstantiating:   make(map[string]bool),
 		functionInstantiating: make(map[string]bool),
 		output: &ast.Program{
 			PackagePos:  program.PackagePos,
@@ -188,6 +188,22 @@ func (m *genericMonomorphizer) rewriteExpr(expr ast.Expression, subst map[string
 		return &ast.ErrorLiteral{Name: e.Name, ErrPos: e.ErrPos}
 	case *ast.GroupExpr:
 		return &ast.GroupExpr{Inner: m.rewriteExpr(e.Inner, subst)}
+	case *ast.FunctionLiteralExpr:
+		params := make([]ast.Param, 0, len(e.Params))
+		for _, param := range e.Params {
+			params = append(params, ast.Param{
+				Name:    param.Name,
+				NamePos: param.NamePos,
+				Type:    m.rewriteTypeRef(param.Type, subst),
+			})
+		}
+		return &ast.FunctionLiteralExpr{
+			FnPos:        e.FnPos,
+			Params:       params,
+			Return:       m.rewriteTypeRef(e.Return, subst),
+			ReturnIsBang: e.ReturnIsBang,
+			Body:         m.rewriteBlock(e.Body, subst),
+		}
 	case *ast.UnaryExpr:
 		return &ast.UnaryExpr{Operator: e.Operator, OpPos: e.OpPos, Inner: m.rewriteExpr(e.Inner, subst)}
 	case *ast.BinaryExpr:
@@ -304,6 +320,19 @@ func (m *genericMonomorphizer) rewriteTypeRef(ref ast.TypeRef, subst map[string]
 		if ref.Value != nil {
 			value := m.rewriteTypeRef(*ref.Value, subst)
 			out.Value = &value
+		}
+		return out
+	case ast.FunctionTypeRef:
+		out := ref
+		if len(ref.Params) > 0 {
+			out.Params = make([]ast.TypeRef, 0, len(ref.Params))
+			for _, param := range ref.Params {
+				out.Params = append(out.Params, m.rewriteTypeRef(param, subst))
+			}
+		}
+		if ref.Return != nil {
+			ret := m.rewriteTypeRef(*ref.Return, subst)
+			out.Return = &ret
 		}
 		return out
 	}
@@ -448,6 +477,16 @@ func cloneTypeRef(ref ast.TypeRef) ast.TypeRef {
 	if ref.Value != nil {
 		value := cloneTypeRef(*ref.Value)
 		out.Value = &value
+	}
+	if len(ref.Params) > 0 {
+		out.Params = make([]ast.TypeRef, 0, len(ref.Params))
+		for _, param := range ref.Params {
+			out.Params = append(out.Params, cloneTypeRef(param))
+		}
+	}
+	if ref.Return != nil {
+		ret := cloneTypeRef(*ref.Return)
+		out.Return = &ret
 	}
 	if len(ref.TypeArgs) > 0 {
 		out.TypeArgs = make([]ast.TypeRef, 0, len(ref.TypeArgs))

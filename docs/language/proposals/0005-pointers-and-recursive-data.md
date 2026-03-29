@@ -30,7 +30,7 @@ Frontend self-hosting creates direct pressure here:
 
 ### Valid examples
 
-```yar
+```
 struct Node {
     value i32
     next *Node
@@ -51,7 +51,7 @@ fn main() i32 {
 
 ### Invalid examples
 
-```yar
+```
 struct Bad {
     next Bad
 }
@@ -59,19 +59,19 @@ struct Bad {
 
 Invalid because direct recursive containment is still not allowed.
 
-```yar
+```
 var p *void
 ```
 
 Invalid because `void` is not a storable pointee type.
 
-```yar
+```
 x := *1
 ```
 
 Invalid because dereference requires a pointer operand.
 
-```yar
+```
 x := &(1 + 2)
 ```
 

@@ -36,7 +36,7 @@ preserving YAR's preference for straightforward, predictable compilation.
 
 ### Valid examples
 
-```yar
+```
 struct Box[T] {
     value T
 }
@@ -58,7 +58,7 @@ fn main() i32 {
 
 ### Invalid examples
 
-```yar
+```
 fn id[T](value T) T {
     return value
 }
@@ -71,7 +71,7 @@ fn main() i32 {
 
 Invalid because generic function calls require explicit type arguments.
 
-```yar
+```
 struct Box[T] {
     value T
 }
@@ -84,7 +84,7 @@ fn main() i32 {
 
 Invalid because generic type uses require explicit type arguments.
 
-```yar
+```
 fn (b Box[i32]) value() i32 {
     return b.value
 }
@@ -125,7 +125,7 @@ first cut.
 
 ## 6. Grammar
 
-```yar
+```
 struct Box[T] {
     value T
 }

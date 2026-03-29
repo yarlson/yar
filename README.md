@@ -50,10 +50,11 @@ Yar currently supports:
 - Top-level `struct`, `enum`, `fn`, and method declarations
 - Explicit generic `struct` and `fn` declarations with explicit type arguments
 - `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`
-- Typed pointers, fixed arrays, slices, and maps
+- Typed pointers, fixed arrays, slices, maps, and function values
 - Multi-file packages rooted at an entry `package main`
 - `if`, `for`, `break`, `continue`, `return`, and exhaustive `match`
 - Methods on named struct types with explicit value or pointer receivers
+- Anonymous function literals and lexical capture-by-value closures
 - String indexing, slicing, concatenation, and equality
 - Native builds, IR emission, and direct execution from the CLI
 
@@ -69,6 +70,14 @@ Current generics support is intentionally small and explicit:
 - Use sites must supply type arguments such as `Box[i32]` and `first[i32](values)`
 - Instantiated generic code is monomorphized before type-checking and code generation
 - There is no type-argument inference, no constraints, and no generic methods
+
+Current closure support is intentionally small and explicit:
+
+- Function types are written as `fn(T1, T2) R` or `fn(T) !R`
+- Anonymous function literals use `fn(...) R { ... }`
+- Closures capture outer locals by value at creation time
+- Captured outer locals are readable inside closure bodies but not assignable there
+- Method values are still not first-class; `value.method` must be called immediately
 
 The embedded standard library currently includes:
 
@@ -87,7 +96,6 @@ The embedded standard library currently includes:
 Yar does not currently have:
 
 - Type-argument inference or generic constraints
-- Closures
 - Interfaces
 - Garbage collection
 
@@ -146,7 +154,7 @@ Use yar when you want:
 - A language with explicit failures instead of implicit exception flow
 - Native executables without a VM boundary
 - A current implementation that already covers packages, enums, maps,
-  pointers, and host-backed stdlib calls
+  pointers, closures, and host-backed stdlib calls
 
 The implemented surface is intentionally explicit. See
 [docs/YAR.md](docs/YAR.md) for the exact behavior the compiler supports today.

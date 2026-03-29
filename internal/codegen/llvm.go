@@ -16,6 +16,10 @@ type Generator struct {
 	stringNames    map[string]string
 	stringOrder    []string
 	nextStringID   int
+	literalNames   map[*ast.FunctionLiteralExpr]string
+	literalQueue   []*ast.FunctionLiteralExpr
+	emittedLits    map[*ast.FunctionLiteralExpr]bool
+	nextLiteralID  int
 	usedResultType map[checker.Type]bool
 }
 
@@ -25,6 +29,8 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		info:           info,
 		functions:      builtins(),
 		stringNames:    make(map[string]string),
+		literalNames:   make(map[*ast.FunctionLiteralExpr]string),
+		emittedLits:    make(map[*ast.FunctionLiteralExpr]bool),
 		usedResultType: make(map[checker.Type]bool),
 	}
 
@@ -40,12 +46,18 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 			g.usedResultType[et.Base] = true
 		}
 	}
+	for _, lit := range info.FunctionLiterals {
+		if lit.Signature.Errorable {
+			g.usedResultType[lit.Signature.Return] = true
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString("; yar v0.2\n")
 	b.WriteString("source_filename = \"yar\"\n\n")
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
 	b.WriteString("%yar.slice = type { ptr, i32, i32 }\n")
+	b.WriteString("%yar.closure = type { ptr, ptr }\n")
 
 	structNames := make([]string, 0, len(info.Structs))
 	for name := range info.Structs {
@@ -93,6 +105,17 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 			continue
 		}
 		emitter := newFunctionEmitter(g, fn, sig)
+		functionIR = append(functionIR, emitter.emit())
+	}
+
+	for len(g.literalQueue) > 0 {
+		lit := g.literalQueue[0]
+		g.literalQueue = g.literalQueue[1:]
+		if g.emittedLits[lit] {
+			continue
+		}
+		g.emittedLits[lit] = true
+		emitter := newFunctionLiteralEmitter(g, lit, g.info.FunctionLiterals[lit], g.literalNames[lit])
 		functionIR = append(functionIR, emitter.emit())
 	}
 
@@ -292,6 +315,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 	if _, ok := checker.ParseMapType(typ); ok {
 		return "ptr"
 	}
+	if _, ok := checker.ParseFunctionType(typ); ok {
+		return "%yar.closure"
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
 	}
@@ -405,6 +431,9 @@ func (g *Generator) typeSize(typ checker.Type) int {
 	if _, ok := checker.ParsePointerType(typ); ok {
 		return 8
 	}
+	if _, ok := checker.ParseFunctionType(typ); ok {
+		return 16
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return array.Len * g.typeSize(array.Elem)
 	}
@@ -448,6 +477,9 @@ func (g *Generator) typeAlign(typ checker.Type) int {
 	}
 
 	if _, ok := checker.ParsePointerType(typ); ok {
+		return 8
+	}
+	if _, ok := checker.ParseFunctionType(typ); ok {
 		return 8
 	}
 	if array, ok := checker.ParseArrayType(typ); ok {
@@ -564,6 +596,9 @@ func sanitizeLabel(name string) string {
 type functionEmitter struct {
 	g            *Generator
 	fn           *ast.FunctionDecl
+	literal      *ast.FunctionLiteralExpr
+	name         string
+	captures     []checker.CaptureInfo
 	sig          checker.Signature
 	builder      strings.Builder
 	tempID       int
@@ -588,8 +623,20 @@ func newFunctionEmitter(g *Generator, fn *ast.FunctionDecl, sig checker.Signatur
 	return &functionEmitter{
 		g:      g,
 		fn:     fn,
+		name:   sig.FullName,
 		sig:    sig,
 		scopes: []map[string]localSlot{{}},
+	}
+}
+
+func newFunctionLiteralEmitter(g *Generator, lit *ast.FunctionLiteralExpr, info checker.FunctionLiteralInfo, name string) *functionEmitter {
+	return &functionEmitter{
+		g:        g,
+		literal:  lit,
+		name:     name,
+		captures: info.Captures,
+		sig:      info.Signature,
+		scopes:   []map[string]localSlot{{}},
 	}
 }
 
@@ -606,27 +653,52 @@ func functionParams(fn *ast.FunctionDecl) []ast.Param {
 	return params
 }
 
+func (f *functionEmitter) body() *ast.BlockStmt {
+	if f.fn != nil {
+		return f.fn.Body
+	}
+	return f.literal.Body
+}
+
+func (f *functionEmitter) params() []ast.Param {
+	if f.fn != nil {
+		return functionParams(f.fn)
+	}
+	return append([]ast.Param(nil), f.literal.Params...)
+}
+
 func (f *functionEmitter) emit() string {
 	retType := f.g.llvmType(f.sig.Return)
 	if f.sig.Errorable {
 		retType = f.g.resultTypeName(f.sig.Return)
 	}
 
-	fnParams := functionParams(f.fn)
-	params := make([]string, 0, len(fnParams))
+	fnParams := f.params()
+	params := make([]string, 0, len(fnParams)+1)
+	if f.literal != nil {
+		params = append(params, "ptr %env")
+	}
 	for i := range fnParams {
 		params = append(params, fmt.Sprintf("%s %%arg%d", f.g.llvmType(f.sig.Params[i]), i))
 	}
 
-	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.sig.FullName), strings.Join(params, ", "))
+	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.name), strings.Join(params, ", "))
 	f.emitLabel("entry")
+	if f.literal != nil && len(f.captures) > 0 {
+		envType := f.g.closureEnvTypeLiteral(f.captures)
+		for i, capture := range f.captures {
+			fieldPtr := f.newTemp("capture.ptr")
+			fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %%env, i32 0, i32 %d\n", fieldPtr, envType, i)
+			f.bindLocal(capture.Name, localSlot{typ: capture.Type, ptr: "%" + fieldPtr})
+		}
+	}
 	for i, param := range fnParams {
 		slot := f.newLocalSlot(f.sig.Params[i])
 		fmt.Fprintf(&f.builder, "  store %s %%arg%d, ptr %s\n", f.g.llvmType(f.sig.Params[i]), i, slot)
 		f.bindLocal(param.Name, localSlot{typ: f.sig.Params[i], ptr: slot})
 	}
 
-	f.genBlock(f.fn.Body)
+	f.genBlock(f.body())
 	if !f.terminated {
 		switch f.sig.Return {
 		case checker.TypeVoid:
@@ -969,6 +1041,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.emitStringValue(e.Value)
 	case *ast.GroupExpr:
 		return f.genExpression(e.Inner)
+	case *ast.FunctionLiteralExpr:
+		return f.genFunctionLiteral(e)
 	case *ast.UnaryExpr:
 		return f.genUnary(expr, e)
 	case *ast.PropagateExpr:
@@ -1002,6 +1076,27 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
 	}
+}
+
+func (f *functionEmitter) genFunctionLiteral(lit *ast.FunctionLiteralExpr) exprValue {
+	name := f.g.queueFunctionLiteral(lit)
+	info := f.g.info.FunctionLiterals[lit]
+	envRef := "null"
+	if len(info.Captures) > 0 {
+		envRef = f.emitAllocBytes(fmt.Sprintf("%d", f.g.closureEnvSize(info.Captures)), false)
+		envType := f.g.closureEnvTypeLiteral(info.Captures)
+		for i, capture := range info.Captures {
+			slot, ok := f.lookupLocal(capture.Name)
+			if !ok {
+				panic("missing captured local " + capture.Name)
+			}
+			value := f.loadValue(slot.ptr, slot.typ)
+			fieldPtr := f.newTemp("closure.env.ptr")
+			fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", fieldPtr, envType, envRef, i)
+			fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(capture.Type), value.ref, fieldPtr)
+		}
+	}
+	return f.emitClosureValue(f.g.functionName(name), envRef, f.exprType(lit))
 }
 
 func (f *functionEmitter) genUnary(expr ast.Expression, unary *ast.UnaryExpr) exprValue {
@@ -1647,6 +1742,28 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		fmt.Fprintf(&f.builder, "  %%%s = call %%yar.slice @yar_map_keys(ptr %s)\n", result, mapArg.ref)
 		return exprValue{ref: "%" + result, typ: sig.Return}
 	}
+	if sig.ValueCall {
+		callee := f.genExpression(expr.Callee)
+		codePtr := f.newTemp("closure.code")
+		envPtr := f.newTemp("closure.env")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.closure %s, 0\n", codePtr, callee.ref)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.closure %s, 1\n", envPtr, callee.ref)
+
+		llvmArgs := make([]string, 0, len(expr.Args)+1)
+		llvmArgs = append(llvmArgs, fmt.Sprintf("ptr %%%s", envPtr))
+		for i, arg := range expr.Args {
+			value := f.genExpression(arg)
+			llvmArgs = append(llvmArgs, fmt.Sprintf("%s %s", f.g.llvmType(sig.Params[i]), value.ref))
+		}
+
+		callType := f.g.llvmType(sig.Return)
+		if sig.Errorable {
+			callType = f.g.resultTypeName(sig.Return)
+		}
+		result := f.newTemp("call")
+		fmt.Fprintf(&f.builder, "  %%%s = call %s %%%s(%s)\n", result, callType, codePtr, strings.Join(llvmArgs, ", "))
+		return exprValue{ref: "%" + result, typ: sig.Return}
+	}
 
 	args := make([]exprValue, 0, len(expr.Args))
 	if sig.Method {
@@ -1946,6 +2063,14 @@ func (f *functionEmitter) emitSliceValue(dataPtr, length, capacity string) strin
 	return "%" + tmp3
 }
 
+func (f *functionEmitter) emitClosureValue(codeRef, envRef string, typ checker.Type) exprValue {
+	tmp1 := f.newTemp("closure")
+	tmp2 := f.newTemp("closure")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.closure zeroinitializer, ptr %s, 0\n", tmp1, codeRef)
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.closure %%%s, ptr %s, 1\n", tmp2, tmp1, envRef)
+	return exprValue{ref: "%" + tmp2, typ: typ}
+}
+
 func (f *functionEmitter) emitArrayAllocSize(elemType checker.Type, count int) string {
 	countRef := fmt.Sprintf("%d", count)
 	return f.emitScaledSize(elemType, countRef)
@@ -2154,6 +2279,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 		if _, ok := checker.ParsePointerType(typ); ok {
 			return "null"
 		}
+		if _, ok := checker.ParseFunctionType(typ); ok {
+			return "zeroinitializer"
+		}
 		if _, ok := checker.ParseArrayType(typ); ok {
 			return "zeroinitializer"
 		}
@@ -2171,6 +2299,42 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 		}
 		return "0"
 	}
+}
+
+func (g *Generator) queueFunctionLiteral(lit *ast.FunctionLiteralExpr) string {
+	if name, ok := g.literalNames[lit]; ok {
+		return name
+	}
+	name := fmt.Sprintf("closure.%d", g.nextLiteralID)
+	g.nextLiteralID++
+	g.literalNames[lit] = name
+	g.literalQueue = append(g.literalQueue, lit)
+	return name
+}
+
+func (g *Generator) closureEnvTypeLiteral(captures []checker.CaptureInfo) string {
+	if len(captures) == 0 {
+		return "{ }"
+	}
+	fields := make([]string, 0, len(captures))
+	for _, capture := range captures {
+		fields = append(fields, g.llvmType(capture.Type))
+	}
+	return "{ " + strings.Join(fields, ", ") + " }"
+}
+
+func (g *Generator) closureEnvSize(captures []checker.CaptureInfo) int {
+	size := 0
+	align := 1
+	for _, capture := range captures {
+		fieldAlign := g.typeAlign(capture.Type)
+		size = alignTo(size, fieldAlign)
+		size += g.typeSize(capture.Type)
+		if fieldAlign > align {
+			align = fieldAlign
+		}
+	}
+	return alignTo(size, align)
 }
 
 func (f *functionEmitter) exprType(expr ast.Expression) checker.Type {

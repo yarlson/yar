@@ -29,6 +29,7 @@
 - `void`
 - `noreturn`
 - `error`
+- function types
 - typed pointer types
 - user-defined struct types
 - user-defined enum types
@@ -69,7 +70,9 @@
 - Array literals
 - Slice literals
 - Map literals
+- Anonymous function literals such as `fn(x i32) i32 { return x + 1 }`
 - Function calls
+- Function-value calls such as `f(1)`
 - Explicit generic function calls such as `first[i32](values)`
 - Grouping with parentheses
 - Field access
@@ -95,6 +98,10 @@
   generic.
 - Methods cannot declare type parameters, and methods on instantiated generic
   types are not supported.
+- Function literals declare explicit parameter and return types.
+- Function literals capture outer locals lexically by value.
+- Captured outer locals are readable inside closures but are not assignable
+  through the closure body in the current implementation.
 - Methods are allowed only on named local struct types or pointers to named
   local struct types.
 - Value receiver methods and pointer receiver methods are distinct; method

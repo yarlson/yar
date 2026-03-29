@@ -48,7 +48,7 @@ Adding new stdlib packages follows the established pattern.
 
 ### Valid examples
 
-```yar
+```
 package main
 
 import "utf8"
@@ -80,19 +80,19 @@ fn byte_to_str(b i32) str {
 
 ### Invalid examples
 
-```yar
+```
 ok := utf8.is_digit("7")
 ```
 
 Invalid because classification helpers operate on decoded rune values as `i32`.
 
-```yar
+```
 value := strings.parse_i64(10)
 ```
 
 Invalid because `parse_i64` requires a string.
 
-```yar
+```
 width := utf8.width(src, true)
 ```
 

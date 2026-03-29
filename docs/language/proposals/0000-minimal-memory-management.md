@@ -45,7 +45,7 @@ landing.
 
 ### Valid examples
 
-```yar
+```
 tail := &Node{value: 2, next: nil}
 
 values := []i32{}
@@ -63,20 +63,20 @@ The user does not explicitly free that storage.
 
 ### Invalid examples
 
-```yar
+```
 free(tail)
 ```
 
 Invalid because the minimal memory model does not expose manual deallocation.
 
-```yar
+```
 p := &Node{}
 q := p + 1
 ```
 
 Invalid because pointer arithmetic is outside the minimal safe memory model.
 
-```yar
+```
 addr := unsafe_addr(node)
 ```
 

@@ -25,7 +25,7 @@ conditions become awkward.
 
 ### Valid examples
 
-```yar
+```
 if ok && ready {
     return 0
 }
@@ -37,13 +37,13 @@ if user.id > 0 || debug {
 
 ### Invalid examples
 
-```yar
+```
 x := 1 && 2
 ```
 
 Invalid because `&&` requires boolean operands.
 
-```yar
+```
 x := maybe() && ok
 ```
 

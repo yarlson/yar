@@ -46,17 +46,21 @@ const (
 	ArrayTypeRef
 	SliceTypeRef
 	MapTypeRef
+	FunctionTypeRef
 )
 
 type TypeRef struct {
-	Kind     TypeRefKind
-	Name     string
-	TypeArgs []TypeRef
-	ArrayLen int
-	Elem     *TypeRef
-	Key      *TypeRef
-	Value    *TypeRef
-	Pos      token.Position
+	Kind      TypeRefKind
+	Name      string
+	TypeArgs  []TypeRef
+	ArrayLen  int
+	Elem      *TypeRef
+	Key       *TypeRef
+	Value     *TypeRef
+	Params    []TypeRef
+	Return    *TypeRef
+	Errorable bool
+	Pos       token.Position
 }
 
 func (r TypeRef) String() string {
@@ -85,6 +89,19 @@ func (r TypeRef) String() string {
 			value = r.Value.String()
 		}
 		return "map[" + key + "]" + value
+	case FunctionTypeRef:
+		params := make([]string, 0, len(r.Params))
+		for _, param := range r.Params {
+			params = append(params, param.String())
+		}
+		ret := ""
+		if r.Return != nil {
+			ret = r.Return.String()
+		}
+		if r.Errorable {
+			ret = "!" + ret
+		}
+		return "fn(" + strings.Join(params, ", ") + ") " + ret
 	default:
 		if len(r.TypeArgs) == 0 {
 			return r.Name
@@ -109,12 +126,12 @@ type TypeParam struct {
 }
 
 type StructDecl struct {
-	StructPos token.Position
-	Exported  bool
-	Name      string
-	NamePos   token.Position
+	StructPos  token.Position
+	Exported   bool
+	Name       string
+	NamePos    token.Position
 	TypeParams []TypeParam
-	Fields    []StructField
+	Fields     []StructField
 }
 
 func (d *StructDecl) Pos() token.Position {
@@ -406,6 +423,20 @@ func (e *CallExpr) Pos() token.Position {
 }
 
 func (*CallExpr) exprNode() {}
+
+type FunctionLiteralExpr struct {
+	FnPos        token.Position
+	Params       []Param
+	Return       TypeRef
+	ReturnIsBang bool
+	Body         *BlockStmt
+}
+
+func (e *FunctionLiteralExpr) Pos() token.Position {
+	return e.FnPos
+}
+
+func (*FunctionLiteralExpr) exprNode() {}
 
 type UnaryExpr struct {
 	Operator token.Kind

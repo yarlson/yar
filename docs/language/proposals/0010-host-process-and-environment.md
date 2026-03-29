@@ -20,7 +20,7 @@ The minimal API is:
 - `env.lookup(name str) !str`
 - `stdio.eprint(msg str) void`
 
-```yar
+```
 struct Result {
     exit_code i32
     stdout str
@@ -49,7 +49,7 @@ permanent Go CLI.
 
 ### Valid examples
 
-```yar
+```
 import "process"
 
 fn main() i32 {
@@ -61,7 +61,7 @@ fn main() i32 {
 }
 ```
 
-```yar
+```
 import "env"
 
 fn cc_name() str {
@@ -72,7 +72,7 @@ fn cc_name() str {
 }
 ```
 
-```yar
+```
 import "process"
 
 fn link(ir_path str, runtime_path str, out_path str, cc str) !i32 {
@@ -88,7 +88,7 @@ fn link(ir_path str, runtime_path str, out_path str, cc str) !i32 {
 }
 ```
 
-```yar
+```
 import "stdio"
 
 fn report(msg str) void {
@@ -98,20 +98,20 @@ fn report(msg str) void {
 
 ### Invalid examples
 
-```yar
+```
 result := process.run("clang")
 ```
 
 Invalid because child-process execution takes `[]str`, not one flat command
 string.
 
-```yar
+```
 name := env.lookup(1)?
 ```
 
 Invalid because environment names are strings.
 
-```yar
+```
 code := process.args()?
 ```
 

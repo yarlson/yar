@@ -38,7 +38,7 @@ the core accumulation patterns that a compiler frontend needs.
 
 ### Valid examples
 
-```yar
+```
 fn collect() []i32 {
     values := []i32{}
     values = append(values, 1)
@@ -57,20 +57,20 @@ fn prefix(values []i32, n i32) []i32 {
 
 ### Invalid examples
 
-```yar
+```
 xs := []void{}
 ```
 
 Invalid because `void` is not a storable element type.
 
-```yar
+```
 xs := []i32{}
 xs = append(xs, true)
 ```
 
 Invalid because appended values must match the slice element type.
 
-```yar
+```
 x := xs[true]
 ```
 
@@ -92,7 +92,7 @@ do not create recursive inline containment the way fixed arrays do.
 
 The caller must keep the returned result of `append`.
 
-```yar
+```
 xs = append(xs, 1)
 ```
 

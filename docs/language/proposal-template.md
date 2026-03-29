@@ -19,13 +19,13 @@ Provide small examples of intended usage.
 
 ### Valid examples
 
-```yar
+```
 // example
 ```
 
 ### Invalid examples
 
-```yar
+```
 // example
 ```
 

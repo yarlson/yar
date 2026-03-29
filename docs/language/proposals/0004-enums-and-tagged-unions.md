@@ -32,7 +32,7 @@ self-hosted frontend.
 
 ### Valid examples
 
-```yar
+```
 enum TokenKind {
     Ident
     Int
@@ -84,7 +84,7 @@ fn is_name(expr Expr) bool {
 
 ### Invalid examples
 
-```yar
+```
 enum Bad {
     A
     A
@@ -93,7 +93,7 @@ enum Bad {
 
 Invalid because enum case names must be unique within the enum.
 
-```yar
+```
 match kind {
 case TokenKind.Ident {
     return 1
@@ -103,7 +103,7 @@ case TokenKind.Ident {
 
 Invalid because `match` on an enum must be exhaustive in the first version.
 
-```yar
+```
 case Expr.Binary(v) {
     return v.value
 }
@@ -161,7 +161,7 @@ Add:
 
 Example declaration shape:
 
-```yar
+```
 enum Result {
     Ok { value i32 }
     Err { code error }
@@ -170,7 +170,7 @@ enum Result {
 
 Example case analysis shape:
 
-```yar
+```
 match result {
 case Result.Ok(v) {
     return v.value

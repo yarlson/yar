@@ -38,7 +38,7 @@ hidden dispatch.
 
 ### Valid examples
 
-```yar
+```
 interface Writer {
     write(msg str) !void
 }
@@ -50,7 +50,7 @@ fn emit(w Writer, msg str) !void {
 
 ### Invalid examples
 
-```yar
+```
 interface Bad {
     value i32
 }
@@ -58,7 +58,7 @@ interface Bad {
 
 Invalid because interface members would be behavior requirements, not fields.
 
-```yar
+```
 fn emit(w Writer, msg str) !void {
     return w.missing(msg)
 }
@@ -91,7 +91,7 @@ receiver-based behavior are not very useful.
 
 Candidate syntax:
 
-```yar
+```
 interface Writer {
     write(msg str) !void
 }

@@ -30,7 +30,7 @@ outside the type they primarily serve.
 
 Current code has to write:
 
-```yar
+```
 pub fn user_name(u User) str {
     return u.name
 }
@@ -46,7 +46,7 @@ name lookup, export rules, and future interface design more complex.
 
 ### Valid examples
 
-```yar
+```
 struct User {
     name str
 }
@@ -62,7 +62,7 @@ fn (u *User) rename(name str) void {
 
 ### Invalid examples
 
-```yar
+```
 fn (n i32) double() i32 {
     return n * 2
 }
@@ -71,7 +71,7 @@ fn (n i32) double() i32 {
 Invalid in the implemented version because the first cut attaches methods only
 to named struct types.
 
-```yar
+```
 counter := &Counter{value: 1}
 counter.current()
 ```
@@ -102,7 +102,7 @@ The first version settles the main design questions as follows:
 
 One candidate shape:
 
-```yar
+```
 fn (u User) display_name() str { ... }
 ```
 

@@ -56,7 +56,7 @@ them.
 
 ### Valid examples
 
-```yar
+```
 import "fs"
 import "path"
 
@@ -66,7 +66,7 @@ fn load_source(root str, pkg str, file str) !str {
 }
 ```
 
-```yar
+```
 import "fs"
 import "path"
 
@@ -86,7 +86,7 @@ fn collect_yar_files(dir str) ![]str {
 }
 ```
 
-```yar
+```
 import "fs"
 import "path"
 
@@ -98,20 +98,20 @@ fn emit_ir(out_dir str, ir str) !void {
 
 ### Invalid examples
 
-```yar
+```
 src := fs.read_file(1)
 ```
 
 Invalid because filesystem functions operate on `str` paths.
 
-```yar
+```
 dir := path.join("a", "b")
 ```
 
 Invalid because the proposed `path.join` takes one `[]str` argument rather than
 variadic arguments.
 
-```yar
+```
 entries := fs.read_dir(path)?
 name := entries.name
 ```
@@ -134,7 +134,7 @@ composition should stay in yar source where practical.
 
 `fs` exposes ordinary functions with explicit `error` behavior.
 
-```yar
+```
 struct DirEntry {
     name str
     is_dir bool

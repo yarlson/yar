@@ -31,7 +31,7 @@ Without these operations, `str` is too limited for frontend self-hosting.
 
 ### Valid examples
 
-```yar
+```
 fn is_main(name str) bool {
     return name == "main"
 }
@@ -51,19 +51,19 @@ fn describe(name str) str {
 
 ### Invalid examples
 
-```yar
+```
 ok := "a" == 1
 ```
 
 Invalid because string equality requires two `str` operands.
 
-```yar
+```
 x := "abc"[true]
 ```
 
 Invalid because string indexing requires an integer index.
 
-```yar
+```
 msg := maybe_name()? + "x"
 ```
 

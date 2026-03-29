@@ -33,7 +33,7 @@ Without imports and multi-file packages, larger YAR programs stay impractical.
 
 ### Valid examples
 
-```yar
+```
 package token
 
 pub enum Kind {
@@ -43,7 +43,7 @@ pub enum Kind {
 }
 ```
 
-```yar
+```
 package lexer
 
 import "token"
@@ -53,7 +53,7 @@ pub fn classify(kind token.Kind) bool {
 }
 ```
 
-```yar
+```
 package main
 
 import "lexer"
@@ -68,7 +68,7 @@ fn main() i32 {
 
 ### Invalid examples
 
-```yar
+```
 package lexer
 
 import "token"
@@ -80,13 +80,13 @@ fn main() i32 {
 
 Invalid because only exported declarations are visible outside their package.
 
-```yar
+```
 package a
 
 import "b"
 ```
 
-```yar
+```
 package b
 
 import "a"
@@ -94,7 +94,7 @@ import "a"
 
 Invalid because package import cycles are not allowed.
 
-```yar
+```
 package main
 
 import "token"
@@ -145,7 +145,7 @@ The first version adds:
 
 Example file shape:
 
-```yar
+```
 package lexer
 
 import "token"

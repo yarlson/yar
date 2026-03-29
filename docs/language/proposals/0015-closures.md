@@ -1,16 +1,20 @@
 # Proposal: Closures
 
-Status: exploring
+Status: accepted and implemented
 
 ## 1. Summary
 
-Consider adding nested functions that can capture surrounding locals.
+Add anonymous function literals and first-class function types with explicit,
+capture-by-value closure semantics.
 
-The smallest plausible version is:
+The implemented first version is:
 
 - anonymous function literals
-- lexical capture of locals
-- no mutation of captured-by-value bindings unless the model is explicit
+- function types spelled as `fn(T1, T2) R` and `fn(T) !R`
+- lexical capture of outer locals by value
+- calls through function-valued expressions
+- no nested named functions
+- no mutation of captured outer bindings inside closure bodies
 - no hidden async or deferred execution semantics
 
 ## 2. Motivation
@@ -37,7 +41,7 @@ in the runtime and memory model.
 
 ### Valid examples
 
-```yar
+```
 fn make_adder(x i32) fn(i32) i32 {
     return fn(y i32) i32 {
         return x + y
@@ -47,7 +51,7 @@ fn make_adder(x i32) fn(i32) i32 {
 
 ### Invalid examples
 
-```yar
+```
 fn main() i32 {
     f := fn() void {
         return 1
@@ -59,7 +63,7 @@ fn main() i32 {
 Invalid because the anonymous function body returns a value inconsistent with
 its declared return type.
 
-```yar
+```
 fn main() i32 {
     f := fn() i32 {
         return missing
@@ -72,18 +76,15 @@ Invalid because closures would not change ordinary name-resolution rules.
 
 ## 4. Semantics
 
-Closures would create function values that may capture bindings from enclosing
-scope.
+Closures create first-class function values that may capture bindings from an
+enclosing scope.
 
-The design must settle:
+The implemented design settles the main questions as follows:
 
-- capture by value, by reference, or a mixed rule
-- lifetime of captured locals after the outer function returns
-- whether nested named functions are also allowed
-- how function types are spelled in the language
-
-This feature has direct pressure on the runtime-managed memory model because
-captured environments must remain valid after the outer scope exits.
+- captures are by value at closure creation time
+- captured environments live in runtime-managed heap storage
+- nested syntax uses anonymous literals only; there is no nested named `fn`
+- function values lower to a code pointer plus environment pointer pair
 
 ## 5. Type Rules
 
@@ -91,28 +92,30 @@ captured environments must remain valid after the outer scope exits.
 - captured names must resolve in lexical scope
 - current rules for `return`, `error`, and value types still apply inside the
   closure body
-- if closures are first-class values, assignment, parameter, and return typing
-  must support function types
+- function values may be assigned, passed, returned, and stored like other
+  first-class values
+- captured outer locals are readable but not assignable inside closure bodies
 
 ## 6. Grammar / Parsing Shape
 
-Candidate syntax:
+Implemented syntax:
 
-```yar
+```
 fn(x i32) i32 { return x + 1 }
 ```
 
-The parser must disambiguate function literals from top-level declarations and
-from grouped expressions.
+The parser disambiguates function literals from top-level declarations by
+position: top-level `fn` still requires a name, while expression-position `fn`
+forms parse as function literals.
 
 ## 7. Lowering / Implementation Model
 
 - parser adds anonymous function literal syntax
 - AST adds closure or function-literal nodes
 - checker adds lexical capture analysis and function-type support
-- codegen likely needs environment objects plus callable code pointers, or a
-  stricter desugaring model
-- runtime likely needs a representation for closure environments
+- codegen emits synthetic functions plus explicit environment objects
+- runtime impact reuses the existing runtime-managed allocation model for
+  captured environments
 
 ## 8. Interactions
 
@@ -156,23 +159,23 @@ runtime decisions honest.
 
 ## 12. Open Questions
 
-- does the first version need capture at all, or only nested functions?
-- how should function types be spelled?
-- should captures be immutable by default?
-- can the current runtime model support closure environments cleanly?
+- should later versions allow nested named functions?
+- should capture-by-reference ever be added explicitly?
+- should top-level functions become directly referencable as function values?
 
 ## 13. Decision
 
-Exploring. Closures are valuable but interaction-heavy. They need a much
-clearer runtime and type-story before they fit an implementation milestone.
+Accepted and implemented as a small, explicit closure system: function literals
+and function types are first-class, captures are by value, and captured outer
+bindings remain read-only inside closure bodies.
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] diagnostics
+- [x] tests
+- [x] `current-state.md` update
+- [x] `decisions.md` update

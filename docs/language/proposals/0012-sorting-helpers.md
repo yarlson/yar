@@ -37,7 +37,7 @@ foundational piece of tooling logic across programs and packages.
 
 ### Valid examples
 
-```yar
+```
 import "sort"
 
 fn stable_files(files []str) []str {
@@ -46,7 +46,7 @@ fn stable_files(files []str) []str {
 }
 ```
 
-```yar
+```
 import "sort"
 
 fn stable_error_codes(codes []i32) []i32 {
@@ -57,19 +57,19 @@ fn stable_error_codes(codes []i32) []i32 {
 
 ### Invalid examples
 
-```yar
+```
 sort.strings(names[0])
 ```
 
 Invalid because `sort.strings` requires `[]str`, not `str`.
 
-```yar
+```
 sort.i32s(values)
 ```
 
 Invalid when `values` is not `[]i32`.
 
-```yar
+```
 sort.values(names)
 ```
 

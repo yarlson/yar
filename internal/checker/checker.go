@@ -36,6 +36,7 @@ type Signature struct {
 	Package       string
 	FullName      string
 	Method        bool
+	ValueCall     bool
 	Receiver      Type
 	Params        []Type
 	Return        Type
@@ -101,14 +102,25 @@ func (e EnumInfo) Case(name string) (EnumCaseInfo, int, bool) {
 }
 
 type Info struct {
-	Functions     map[*ast.FunctionDecl]Signature
-	Calls         map[*ast.CallExpr]Signature
-	ExprTypes     map[ast.Expression]ExprType
-	Locals        map[ast.Node]Type
-	Structs       map[string]StructInfo
-	Enums         map[string]EnumInfo
-	ErrorCodes    map[string]int
-	OrderedErrors []string
+	Functions        map[*ast.FunctionDecl]Signature
+	FunctionLiterals map[*ast.FunctionLiteralExpr]FunctionLiteralInfo
+	Calls            map[*ast.CallExpr]Signature
+	ExprTypes        map[ast.Expression]ExprType
+	Locals           map[ast.Node]Type
+	Structs          map[string]StructInfo
+	Enums            map[string]EnumInfo
+	ErrorCodes       map[string]int
+	OrderedErrors    []string
+}
+
+type CaptureInfo struct {
+	Name string
+	Type Type
+}
+
+type FunctionLiteralInfo struct {
+	Signature Signature
+	Captures  []CaptureInfo
 }
 
 type Checker struct {
@@ -123,8 +135,16 @@ type Checker struct {
 
 type functionContext struct {
 	signature Signature
-	scopes    []map[string]Type
+	parent    *functionContext
+	literal   *ast.FunctionLiteralExpr
+	scopes    []map[string]localBinding
 	loopDepth int
+}
+
+type localBinding struct {
+	typ   Type
+	owner *functionContext
+	node  ast.Node
 }
 
 type coercedIntegers struct {
@@ -151,6 +171,12 @@ type MapType struct {
 	Value Type
 }
 
+type FunctionType struct {
+	Params    []Type
+	Return    Type
+	Errorable bool
+}
+
 func MakeArrayType(length int, elem Type) Type {
 	return Type(fmt.Sprintf("[%d]%s", length, elem))
 }
@@ -165,6 +191,19 @@ func MakePointerType(elem Type) Type {
 
 func MakeMapType(key, value Type) Type {
 	return Type("map[" + string(key) + "]" + string(value))
+}
+
+func MakeFunctionType(params []Type, ret Type, errorable bool) Type {
+	parts := make([]string, 0, len(params))
+	for _, param := range params {
+		parts = append(parts, string(param))
+	}
+	text := "fn(" + strings.Join(parts, ", ") + ") "
+	if errorable {
+		text += "!"
+	}
+	text += string(ret)
+	return Type(text)
 }
 
 func ParseMapType(typ Type) (MapType, bool) {
@@ -234,6 +273,93 @@ func ParsePointerType(typ Type) (PointerType, bool) {
 		return PointerType{}, false
 	}
 	return PointerType{Elem: elem}, true
+}
+
+func ParseFunctionType(typ Type) (FunctionType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "fn(") {
+		return FunctionType{}, false
+	}
+	depth := 1
+	end := -1
+	for i := 3; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				end = i
+				break
+			}
+		}
+	}
+	if end < 0 || end+2 > len(text) || text[end+1] != ' ' {
+		return FunctionType{}, false
+	}
+	paramsText := text[3:end]
+	rest := text[end+2:]
+	errorable := false
+	if strings.HasPrefix(rest, "!") {
+		errorable = true
+		rest = rest[1:]
+	}
+	if rest == "" {
+		return FunctionType{}, false
+	}
+	params, ok := splitFunctionTypeParams(paramsText)
+	if !ok {
+		return FunctionType{}, false
+	}
+	return FunctionType{Params: params, Return: Type(rest), Errorable: errorable}, true
+}
+
+func splitFunctionTypeParams(text string) ([]Type, bool) {
+	if strings.TrimSpace(text) == "" {
+		return nil, true
+	}
+	var (
+		params []Type
+		start  int
+		round  int
+		square int
+	)
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			round++
+		case ')':
+			if round == 0 {
+				return nil, false
+			}
+			round--
+		case '[':
+			square++
+		case ']':
+			if square == 0 {
+				return nil, false
+			}
+			square--
+		case ',':
+			if round == 0 && square == 0 {
+				part := strings.TrimSpace(text[start:i])
+				if part == "" {
+					return nil, false
+				}
+				params = append(params, Type(part))
+				start = i + 1
+			}
+		}
+	}
+	if round != 0 || square != 0 {
+		return nil, false
+	}
+	part := strings.TrimSpace(text[start:])
+	if part == "" {
+		return nil, false
+	}
+	params = append(params, Type(part))
+	return params, true
 }
 
 func methodReceiverBaseType(typ Type) (Type, bool) {
@@ -370,13 +496,14 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 		structs: make(map[string]*ast.StructDecl),
 		enums:   make(map[string]*ast.EnumDecl),
 		info: Info{
-			Functions:  make(map[*ast.FunctionDecl]Signature),
-			Calls:      make(map[*ast.CallExpr]Signature),
-			ExprTypes:  make(map[ast.Expression]ExprType),
-			Locals:     make(map[ast.Node]Type),
-			Structs:    make(map[string]StructInfo),
-			Enums:      make(map[string]EnumInfo),
-			ErrorCodes: make(map[string]int),
+			Functions:        make(map[*ast.FunctionDecl]Signature),
+			FunctionLiterals: make(map[*ast.FunctionLiteralExpr]FunctionLiteralInfo),
+			Calls:            make(map[*ast.CallExpr]Signature),
+			ExprTypes:        make(map[ast.Expression]ExprType),
+			Locals:           make(map[ast.Node]Type),
+			Structs:          make(map[string]StructInfo),
+			Enums:            make(map[string]EnumInfo),
+			ErrorCodes:       make(map[string]int),
 		},
 	}
 
@@ -642,7 +769,7 @@ func (c *Checker) typeDependencies(typ Type) []string {
 func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 	ctx := &functionContext{
 		signature: sig,
-		scopes:    []map[string]Type{{}},
+		scopes:    []map[string]localBinding{{}},
 	}
 	c.current = ctx
 	defer func() {
@@ -651,7 +778,7 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 
 	paramIndex := 0
 	if fn.Receiver != nil {
-		ctx.scopes[0][fn.Receiver.Name] = sig.Params[0]
+		ctx.scopes[0][fn.Receiver.Name] = localBinding{typ: sig.Params[0], owner: ctx, node: fn}
 		paramIndex = 1
 	}
 
@@ -665,7 +792,7 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 			c.diag.Add(param.NamePos, "duplicate parameter %q", param.Name)
 			continue
 		}
-		ctx.scopes[0][param.Name] = paramType
+		ctx.scopes[0][param.Name] = localBinding{typ: paramType, owner: ctx, node: fn}
 	}
 
 	c.checkBlock(fn.Body)
@@ -692,7 +819,7 @@ func (c *Checker) checkBlock(block *ast.BlockStmt) {
 func (c *Checker) checkBlockWithErrorBinding(block *ast.BlockStmt, name string) {
 	c.pushScope()
 	defer c.popScope()
-	c.bindLocal(name, TypeError)
+	c.bindLocal(name, TypeError, block)
 	for _, stmt := range block.Stmts {
 		c.checkStatement(stmt)
 	}
@@ -724,7 +851,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 			c.diag.Add(s.NamePos, "local %q is already declared in this scope", s.Name)
 			return
 		}
-		c.bindLocal(s.Name, value.Base)
+		c.bindLocal(s.Name, value.Base, s)
 		c.info.Locals[s] = value.Base
 	case *ast.VarStmt:
 		declaredType := c.resolveTypeRef(s.Type)
@@ -748,7 +875,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 				return
 			}
 		}
-		c.bindLocal(s.Name, declaredType)
+		c.bindLocal(s.Name, declaredType, s)
 		c.info.Locals[s] = declaredType
 	case *ast.AssignStmt:
 		if mapAssignType, ok := c.checkMapAssignment(s); ok {
@@ -867,7 +994,7 @@ func (c *Checker) checkMatch(stmt *ast.MatchStmt) {
 			c.checkBlock(arm.Body)
 		case len(enumCase.Fields) > 0 && arm.BindName != "" && !arm.BindIgnore:
 			c.pushScope()
-			c.bindLocal(arm.BindName, enumCase.PayloadType)
+			c.bindLocal(arm.BindName, enumCase.PayloadType, arm.Body)
 			for _, nested := range arm.Body.Stmts {
 				c.checkStatement(nested)
 			}
@@ -997,12 +1124,15 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 	}
 	switch e := expr.(type) {
 	case *ast.IdentExpr:
-		typ, ok := c.lookupLocal(e.Name)
+		binding, ok, captured := c.lookupLocalBinding(e.Name)
 		if !ok {
 			c.diag.Add(e.NamePos, "unknown local %q", e.Name)
 			return ExprType{Base: TypeInvalid}
 		}
-		et := ExprType{Base: typ}
+		if captured {
+			c.recordCapture(e.Name, binding.typ)
+		}
+		et := ExprType{Base: binding.typ}
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.IntLiteral:
@@ -1028,6 +1158,8 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		et := c.checkExpression(e.Inner)
 		c.info.ExprTypes[expr] = et
 		return et
+	case *ast.FunctionLiteralExpr:
+		return c.checkFunctionLiteral(expr, e)
 	case *ast.TypeApplicationExpr:
 		c.diag.Add(e.LBracketPos, "type arguments are not valid in expression position")
 		return ExprType{Base: TypeInvalid}
@@ -1064,6 +1196,10 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 func (c *Checker) checkUnary(expr ast.Expression, unary *ast.UnaryExpr) ExprType {
 	switch unary.Operator {
 	case token.Amp:
+		if name, ok := c.addressRootCapturedOuterLocal(unary.Inner); ok {
+			c.diag.Add(unary.OpPos, "captured outer local %q is not addressable", name)
+			return ExprType{Base: TypeInvalid}
+		}
 		typ, ok := c.checkAddressableExpr(unary.Inner, true)
 		if !ok {
 			c.diag.Add(unary.OpPos, "address-of requires an addressable operand or composite literal")
@@ -1570,6 +1706,24 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 
 	switch callee := call.Callee.(type) {
 	case *ast.IdentExpr:
+		if binding, ok, _ := c.lookupLocalBinding(callee.Name); ok {
+			functionType, isFunc := ParseFunctionType(binding.typ)
+			if !isFunc {
+				c.diag.Add(callee.NamePos, "call target must be callable")
+				return ExprType{Base: TypeInvalid}
+			}
+			sig = Signature{
+				Name:      "function value",
+				FullName:  "function value",
+				Params:    append([]Type(nil), functionType.Params...),
+				Return:    functionType.Return,
+				Errorable: functionType.Errorable,
+				ValueCall: true,
+			}
+			name = sig.Name
+			namePos = callee.NamePos
+			break
+		}
 		sig, ok = c.functions[callee.Name]
 		if !ok {
 			c.diag.Add(callee.NamePos, "unknown function %q", callee.Name)
@@ -1583,8 +1737,35 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(callee.DotPos, "method call cannot use an errorable receiver")
 			return ExprType{Base: TypeInvalid}
 		}
+		if functionType, ok := ParseFunctionType(receiver.Base); ok {
+			sig = Signature{
+				Name:      "function value",
+				FullName:  "function value",
+				Params:    append([]Type(nil), functionType.Params...),
+				Return:    functionType.Return,
+				Errorable: functionType.Errorable,
+				ValueCall: true,
+			}
+			name = sig.Name
+			namePos = callee.NamePos
+			break
+		}
 		sig, ok = c.lookupMethod(receiver.Base, callee.Name)
 		if !ok {
+			calleeType := c.checkExpression(call.Callee)
+			if functionType, ok := ParseFunctionType(calleeType.Base); ok && !calleeType.Errorable {
+				sig = Signature{
+					Name:      "function value",
+					FullName:  "function value",
+					Params:    append([]Type(nil), functionType.Params...),
+					Return:    functionType.Return,
+					Errorable: functionType.Errorable,
+					ValueCall: true,
+				}
+				name = sig.Name
+				namePos = callee.NamePos
+				break
+			}
 			c.diag.Add(callee.NamePos, "type %q has no method %q", receiver.Base, callee.Name)
 			return ExprType{Base: TypeInvalid}
 		}
@@ -1596,8 +1777,26 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		namePos = callee.NamePos
 		argOffset = 1
 	default:
-		c.diag.Add(call.Pos(), "call target must be a function or method name")
-		return ExprType{Base: TypeInvalid}
+		calleeType := c.checkExpression(call.Callee)
+		if calleeType.Errorable {
+			c.diag.Add(call.Callee.Pos(), "call target cannot be errorable")
+			return ExprType{Base: TypeInvalid}
+		}
+		functionType, ok := ParseFunctionType(calleeType.Base)
+		if !ok {
+			c.diag.Add(call.Pos(), "call target must be callable")
+			return ExprType{Base: TypeInvalid}
+		}
+		sig = Signature{
+			Name:      "function value",
+			FullName:  "function value",
+			Params:    append([]Type(nil), functionType.Params...),
+			Return:    functionType.Return,
+			Errorable: functionType.Errorable,
+			ValueCall: true,
+		}
+		name = sig.Name
+		namePos = call.Callee.Pos()
 	}
 
 	wantArgs := len(sig.Params) - argOffset
@@ -1820,6 +2019,30 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 			return TypeInvalid
 		}
 		return MakeArrayType(ref.ArrayLen, elemType)
+	case ast.FunctionTypeRef:
+		params := make([]Type, 0, len(ref.Params))
+		for _, param := range ref.Params {
+			paramType := c.resolveTypeRef(param)
+			if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
+				c.diag.Add(param.Pos, "function parameter type %q is not allowed", param.String())
+				return TypeInvalid
+			}
+			params = append(params, paramType)
+		}
+		if ref.Return == nil {
+			c.diag.Add(ref.Pos, "function type is missing a return type")
+			return TypeInvalid
+		}
+		retType := c.resolveTypeRef(*ref.Return)
+		if retType == TypeNoReturn && ref.Errorable {
+			c.diag.Add(ref.Pos, "noreturn functions cannot also be errorable")
+			return TypeInvalid
+		}
+		if retType == TypeError && ref.Errorable {
+			c.diag.Add(ref.Pos, "error functions cannot also be errorable")
+			return TypeInvalid
+		}
+		return MakeFunctionType(params, retType, ref.Errorable)
 	}
 
 	if len(ref.TypeArgs) > 0 {
@@ -1922,15 +2145,19 @@ func packageDisplayName(pkg string) string {
 }
 
 func (c *Checker) pushScope() {
-	c.current.scopes = append(c.current.scopes, map[string]Type{})
+	c.current.scopes = append(c.current.scopes, map[string]localBinding{})
 }
 
 func (c *Checker) popScope() {
 	c.current.scopes = c.current.scopes[:len(c.current.scopes)-1]
 }
 
-func (c *Checker) bindLocal(name string, typ Type) {
-	c.current.scopes[len(c.current.scopes)-1][name] = typ
+func (c *Checker) bindLocal(name string, typ Type, node ast.Node) {
+	c.current.scopes[len(c.current.scopes)-1][name] = localBinding{
+		typ:   typ,
+		owner: c.current,
+		node:  node,
+	}
 }
 
 func (c *Checker) scopeOwns(name string) bool {
@@ -1939,12 +2166,34 @@ func (c *Checker) scopeOwns(name string) bool {
 }
 
 func (c *Checker) lookupLocal(name string) (Type, bool) {
-	for i := len(c.current.scopes) - 1; i >= 0; i-- {
-		if typ, ok := c.current.scopes[i][name]; ok {
-			return typ, true
+	binding, ok, _ := c.lookupLocalBinding(name)
+	if !ok {
+		return TypeInvalid, false
+	}
+	return binding.typ, true
+}
+
+func (c *Checker) lookupLocalBinding(name string) (localBinding, bool, bool) {
+	if c.current == nil {
+		return localBinding{}, false, false
+	}
+	return c.lookupLocalBindingFromContext(c.current, name)
+}
+
+func (c *Checker) lookupLocalBindingFromContext(ctx *functionContext, name string) (localBinding, bool, bool) {
+	for i := len(ctx.scopes) - 1; i >= 0; i-- {
+		if binding, ok := ctx.scopes[i][name]; ok {
+			return binding, true, ctx != c.current
 		}
 	}
-	return TypeInvalid, false
+	if ctx.parent == nil {
+		return localBinding{}, false, false
+	}
+	binding, ok, _ := c.lookupLocalBindingFromContext(ctx.parent, name)
+	if !ok {
+		return localBinding{}, false, false
+	}
+	return binding, true, true
 }
 
 func (c *Checker) lookupMethod(receiver Type, name string) (Signature, bool) {
@@ -1968,6 +2217,20 @@ func (c *Checker) lookupMethodForBase(base Type, name string) (Signature, bool) 
 		}
 	}
 	return Signature{}, false
+}
+
+func (c *Checker) recordCapture(name string, typ Type) {
+	if c.current == nil || c.current.literal == nil {
+		return
+	}
+	info := c.info.FunctionLiterals[c.current.literal]
+	for _, capture := range info.Captures {
+		if capture.Name == name {
+			return
+		}
+	}
+	info.Captures = append(info.Captures, CaptureInfo{Name: name, Type: typ})
+	c.info.FunctionLiterals[c.current.literal] = info
 }
 
 func (c *Checker) useErrorName(name string) {
@@ -2105,6 +2368,71 @@ func (c *Checker) checkHandle(expr ast.Expression, handle *ast.HandleExpr) ExprT
 	}
 }
 
+func (c *Checker) checkFunctionLiteral(expr ast.Expression, lit *ast.FunctionLiteralExpr) ExprType {
+	params := make([]Type, 0, len(lit.Params))
+	for _, param := range lit.Params {
+		paramType := c.resolveTypeRef(param.Type)
+		if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
+			c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.String())
+			return ExprType{Base: TypeInvalid}
+		}
+		params = append(params, paramType)
+	}
+
+	retType := c.resolveTypeRef(lit.Return)
+	if retType == TypeNoReturn && lit.ReturnIsBang {
+		c.diag.Add(lit.Return.Pos, "noreturn functions cannot also be errorable")
+		return ExprType{Base: TypeInvalid}
+	}
+	if retType == TypeError && lit.ReturnIsBang {
+		c.diag.Add(lit.Return.Pos, "error functions cannot also be errorable")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	sig := Signature{
+		Name:      "function value",
+		Return:    retType,
+		Errorable: lit.ReturnIsBang,
+		Params:    params,
+		ValueCall: true,
+	}
+	ctx := &functionContext{
+		signature: sig,
+		parent:    c.current,
+		literal:   lit,
+		scopes:    []map[string]localBinding{{}},
+	}
+
+	prev := c.current
+	c.current = ctx
+	for i, param := range lit.Params {
+		if _, exists := ctx.scopes[0][param.Name]; exists {
+			c.diag.Add(param.NamePos, "duplicate parameter %q", param.Name)
+			continue
+		}
+		ctx.scopes[0][param.Name] = localBinding{typ: params[i], owner: ctx, node: lit}
+	}
+
+	c.checkBlock(lit.Body)
+	c.current = prev
+
+	if retType != TypeVoid && !c.blockDefinitelyReturns(lit.Body) {
+		if retType == TypeNoReturn {
+			c.diag.Add(lit.FnPos, "function literal must not fall through")
+		} else {
+			c.diag.Add(lit.FnPos, "function literal must return a value on all paths")
+		}
+	}
+
+	info := c.info.FunctionLiterals[lit]
+	info.Signature = sig
+	c.info.FunctionLiterals[lit] = info
+
+	et := ExprType{Base: MakeFunctionType(params, retType, lit.ReturnIsBang)}
+	c.info.ExprTypes[expr] = et
+	return et
+}
+
 func formatErrorName(name string) string {
 	return fmt.Sprintf("error.%s", name)
 }
@@ -2136,12 +2464,19 @@ func isIntegerType(typ Type) bool {
 func (c *Checker) checkAddressableExpr(expr ast.Expression, allowCompositeLiteral bool) (Type, bool) {
 	switch e := expr.(type) {
 	case *ast.IdentExpr:
-		typ, ok := c.lookupLocal(e.Name)
+		binding, ok, captured := c.lookupLocalBinding(e.Name)
 		if !ok {
 			c.diag.Add(e.NamePos, "unknown local %q", e.Name)
 			return TypeInvalid, false
 		}
-		return typ, true
+		if captured {
+			c.recordCapture(e.Name, binding.typ)
+			if !allowCompositeLiteral {
+				c.diag.Add(e.NamePos, "cannot assign to captured outer local %q", e.Name)
+				return TypeInvalid, false
+			}
+		}
+		return binding.typ, true
 	case *ast.GroupExpr:
 		typ, ok := c.checkAddressableExpr(e.Inner, allowCompositeLiteral)
 		if ok {
@@ -2232,6 +2567,26 @@ func (c *Checker) checkAddressableExpr(expr ast.Expression, allowCompositeLitera
 		return typ.Base, typ.Base != TypeInvalid
 	default:
 		return TypeInvalid, false
+	}
+}
+
+func (c *Checker) addressRootCapturedOuterLocal(expr ast.Expression) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.IdentExpr:
+		binding, ok, captured := c.lookupLocalBinding(e.Name)
+		if ok && captured {
+			c.recordCapture(e.Name, binding.typ)
+			return e.Name, true
+		}
+		return "", false
+	case *ast.GroupExpr:
+		return c.addressRootCapturedOuterLocal(e.Inner)
+	case *ast.SelectorExpr:
+		return c.addressRootCapturedOuterLocal(e.Inner)
+	case *ast.IndexExpr:
+		return c.addressRootCapturedOuterLocal(e.Inner)
+	default:
+		return "", false
 	}
 }
 

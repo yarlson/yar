@@ -113,6 +113,15 @@ receivers. Method calls use `value.method(...)`, exported methods use `pub`,
 receiver matching is exact, and methods lower to ordinary functions with an
 explicit receiver argument.
 
+### Closures
+
+Status: accepted
+
+YAR supports anonymous function literals and first-class function types.
+Closures capture outer locals lexically by value, calls through function
+values are explicit, and captured outer bindings are read-only inside closure
+bodies in the current implementation.
+
 ---
 
 ## Rejected

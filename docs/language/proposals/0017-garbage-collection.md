@@ -36,7 +36,7 @@ commitment.
 
 ### Valid examples
 
-```yar
+```
 fn main() i32 {
     values := []i32{}
     values = append(values, 1)
@@ -50,14 +50,14 @@ collector existed under the runtime.
 
 ### Invalid examples
 
-```yar
+```
 gc()
 ```
 
 Invalid in the smallest version because collection would remain a runtime
 concern, not a user-visible builtin.
 
-```yar
+```
 free(values)
 ```
 
