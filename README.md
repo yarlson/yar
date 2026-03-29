@@ -41,6 +41,8 @@ hello, world
 - Packages are explicit. Imports stay qualified. Exported APIs use `pub`.
 - Generics use explicit type arguments. The compiler does not guess.
 - Methods use explicit receivers. Value and pointer receivers are distinct.
+- Interfaces are named and implicit. Concrete values satisfy them by matching
+  the required methods exactly.
 - Closures capture by value at creation time. No surprises.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.

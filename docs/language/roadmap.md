@@ -29,6 +29,7 @@ Current baseline already includes:
 - typed pointers and recursive data
 - enums with exhaustive `match`
 - explicit generic structs and functions
+- named interfaces with dynamic dispatch
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
@@ -152,8 +153,6 @@ These are interesting but not currently committed:
 - more numeric types
 - explicit conversion syntax
 - pattern matching
-- interfaces / traits
-- `0016-interfaces.md`
 - closures
 - `0015-closures.md`
 - garbage collection

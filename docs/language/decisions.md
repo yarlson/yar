@@ -122,6 +122,16 @@ Closures capture outer locals lexically by value, calls through function
 values are explicit, and captured outer bindings are read-only inside closure
 bodies in the current implementation.
 
+### Interfaces
+
+Status: accepted
+
+YAR supports named interfaces with method requirements only. Concrete
+satisfaction is implicit, exact receiver matching still applies, interface
+values lower to boxed data plus method tables, and interface-to-interface
+conversion is limited to the same exact interface type in the current
+implementation.
+
 ---
 
 ## Rejected

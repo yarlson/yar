@@ -49,6 +49,7 @@ const (
 	Let
 	Var
 	Struct
+	Interface
 	Enum
 	Or
 	If
@@ -150,6 +151,8 @@ func (k Kind) String() string {
 		return "var"
 	case Struct:
 		return "struct"
+	case Interface:
+		return "interface"
 	case Enum:
 		return "enum"
 	case Or:

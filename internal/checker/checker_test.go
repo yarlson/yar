@@ -511,6 +511,163 @@ fn main() i32 {
 	}
 }
 
+func TestCheckInterfacesValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+interface Writer {
+	write(msg str) !void
+}
+
+struct Buffer {
+	prefix str
+}
+
+fn (b Buffer) write(msg str) !void {
+	print(b.prefix + msg)
+	return
+}
+
+fn emit(w Writer, msg str) !void {
+	return w.write(msg)
+}
+
+fn main() !i32 {
+	writer := Buffer{prefix: "hi "}
+	emit(writer, "yar")?
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckInterfacesInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "missing method",
+			src: `
+package main
+
+interface Writer {
+	write(msg str) !void
+}
+
+struct Buffer {
+	prefix str
+}
+
+fn main() !i32 {
+	writer := Buffer{prefix: "hi "}
+	consume(writer)?
+	return 0
+}
+
+fn consume(w Writer) !void {
+	return w.write("yar")
+}
+`,
+			substr: "type \"Buffer\" does not satisfy interface \"Writer\"",
+		},
+		{
+			name: "signature mismatch",
+			src: `
+package main
+
+interface Writer {
+	write(msg str) !void
+}
+
+struct Buffer {
+	prefix str
+}
+
+fn (b Buffer) write(msg str) str {
+	return b.prefix + msg
+}
+
+fn main() !i32 {
+	writer := Buffer{prefix: "hi "}
+	consume(writer)?
+	return 0
+}
+
+fn consume(w Writer) !void {
+	return w.write("yar")
+}
+`,
+			substr: "method \"write\" on \"Buffer\" does not match interface \"Writer\"",
+		},
+		{
+			name: "interface to interface mismatch",
+			src: `
+package main
+
+interface Reader {
+	read() str
+}
+
+interface Writer {
+	write(msg str) !void
+}
+
+fn main() !i32 {
+	var reader Reader
+	consume(reader)?
+	return 0
+}
+
+fn consume(w Writer) !void {
+	return
+}
+`,
+			substr: "argument 1 to \"consume\" must be Writer, got Reader",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			joined := strings.Join(messages, "\n")
+			if !strings.Contains(joined, tc.substr) {
+				t.Fatalf("expected diagnostics to contain %q, got %s", tc.substr, joined)
+			}
+		})
+	}
+}
+
 func TestCheckMethodNameDoesNotShadowFieldAccess(t *testing.T) {
 	t.Parallel()
 

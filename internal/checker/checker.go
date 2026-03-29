@@ -101,6 +101,30 @@ func (e EnumInfo) Case(name string) (EnumCaseInfo, int, bool) {
 	return EnumCaseInfo{}, -1, false
 }
 
+type InterfaceMethodInfo struct {
+	Name      string
+	Params    []Type
+	Return    Type
+	Errorable bool
+}
+
+type InterfaceInfo struct {
+	Name     string
+	Package  string
+	FullName string
+	Exported bool
+	Methods  []InterfaceMethodInfo
+}
+
+func (i InterfaceInfo) Method(name string) (InterfaceMethodInfo, int, bool) {
+	for idx, method := range i.Methods {
+		if method.Name == name {
+			return method, idx, true
+		}
+	}
+	return InterfaceMethodInfo{}, -1, false
+}
+
 type Info struct {
 	Functions        map[*ast.FunctionDecl]Signature
 	FunctionLiterals map[*ast.FunctionLiteralExpr]FunctionLiteralInfo
@@ -108,6 +132,7 @@ type Info struct {
 	ExprTypes        map[ast.Expression]ExprType
 	Locals           map[ast.Node]Type
 	Structs          map[string]StructInfo
+	Interfaces       map[string]InterfaceInfo
 	Enums            map[string]EnumInfo
 	ErrorCodes       map[string]int
 	OrderedErrors    []string
@@ -124,13 +149,14 @@ type FunctionLiteralInfo struct {
 }
 
 type Checker struct {
-	diag      diag.List
-	functions map[string]Signature
-	methods   map[Type]map[string]Signature
-	structs   map[string]*ast.StructDecl
-	enums     map[string]*ast.EnumDecl
-	info      Info
-	current   *functionContext
+	diag       diag.List
+	functions  map[string]Signature
+	methods    map[Type]map[string]Signature
+	structs    map[string]*ast.StructDecl
+	interfaces map[string]*ast.InterfaceDecl
+	enums      map[string]*ast.EnumDecl
+	info       Info
+	current    *functionContext
 }
 
 type functionContext struct {
@@ -492,9 +518,10 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Builtin:  true,
 			},
 		},
-		methods: make(map[Type]map[string]Signature),
-		structs: make(map[string]*ast.StructDecl),
-		enums:   make(map[string]*ast.EnumDecl),
+		methods:    make(map[Type]map[string]Signature),
+		structs:    make(map[string]*ast.StructDecl),
+		interfaces: make(map[string]*ast.InterfaceDecl),
+		enums:      make(map[string]*ast.EnumDecl),
 		info: Info{
 			Functions:        make(map[*ast.FunctionDecl]Signature),
 			FunctionLiterals: make(map[*ast.FunctionLiteralExpr]FunctionLiteralInfo),
@@ -502,6 +529,7 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 			ExprTypes:        make(map[ast.Expression]ExprType),
 			Locals:           make(map[ast.Node]Type),
 			Structs:          make(map[string]StructInfo),
+			Interfaces:       make(map[string]InterfaceInfo),
 			Enums:            make(map[string]EnumInfo),
 			ErrorCodes:       make(map[string]int),
 		},
@@ -525,15 +553,38 @@ func (c *Checker) checkProgram(program *ast.Program) {
 			c.diag.Add(decl.NamePos, "struct %q is already declared", decl.Name)
 			continue
 		}
+		if _, exists := c.interfaces[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
+			continue
+		}
 		if _, exists := c.enums[decl.Name]; exists {
 			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
 			continue
 		}
 		c.structs[decl.Name] = decl
 	}
+	for _, decl := range program.Interfaces {
+		if _, exists := c.interfaces[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "interface %q is already declared", decl.Name)
+			continue
+		}
+		if _, exists := c.structs[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
+			continue
+		}
+		if _, exists := c.enums[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
+			continue
+		}
+		c.interfaces[decl.Name] = decl
+	}
 	for _, decl := range program.Enums {
 		if _, exists := c.enums[decl.Name]; exists {
 			c.diag.Add(decl.NamePos, "enum %q is already declared", decl.Name)
+			continue
+		}
+		if _, exists := c.interfaces[decl.Name]; exists {
+			c.diag.Add(decl.NamePos, "type %q is already declared", decl.Name)
 			continue
 		}
 		if _, exists := c.structs[decl.Name]; exists {
@@ -567,6 +618,50 @@ func (c *Checker) checkProgram(program *ast.Program) {
 			})
 		}
 		c.info.Structs[decl.Name] = info
+	}
+
+	for _, decl := range program.Interfaces {
+		if _, exists := c.info.Interfaces[decl.Name]; exists {
+			continue
+		}
+		info := InterfaceInfo{Name: decl.Name}
+		seenMethods := make(map[string]struct{})
+		for _, method := range decl.Methods {
+			if _, exists := seenMethods[method.Name]; exists {
+				c.diag.Add(method.NamePos, "method %q is already declared in interface %q", method.Name, decl.Name)
+				continue
+			}
+			seenMethods[method.Name] = struct{}{}
+
+			methodInfo := InterfaceMethodInfo{
+				Name:      method.Name,
+				Return:    c.resolveTypeRef(method.Return),
+				Errorable: method.ReturnIsBang,
+			}
+			if methodInfo.Return == TypeNoReturn && methodInfo.Errorable {
+				c.diag.Add(method.Return.Pos, "noreturn methods cannot also be errorable")
+				continue
+			}
+			if methodInfo.Return == TypeError && methodInfo.Errorable {
+				c.diag.Add(method.Return.Pos, "error methods cannot also be errorable")
+				continue
+			}
+			valid := true
+			for _, param := range method.Params {
+				paramType := c.resolveTypeRef(param.Type)
+				if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
+					c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.String())
+					valid = false
+					break
+				}
+				methodInfo.Params = append(methodInfo.Params, paramType)
+			}
+			if !valid {
+				continue
+			}
+			info.Methods = append(info.Methods, methodInfo)
+		}
+		c.info.Interfaces[decl.Name] = info
 	}
 
 	for _, decl := range program.Enums {
@@ -755,6 +850,9 @@ func (c *Checker) typeDependencies(typ Type) []string {
 		return nil
 	}
 	if _, ok := ParseMapType(typ); ok {
+		return nil
+	}
+	if _, ok := c.info.Interfaces[string(typ)]; ok {
 		return nil
 	}
 	if _, ok := c.info.Structs[string(typ)]; ok {
@@ -1288,6 +1386,14 @@ func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr)
 			return et
 		}
 	}
+	if iface, ok := c.info.Interfaces[string(inner.Base)]; ok {
+		if _, _, ok := iface.Method(selector.Name); ok {
+			c.diag.Add(selector.NamePos, "method values are not supported")
+			return ExprType{Base: TypeInvalid}
+		}
+		c.diag.Add(selector.NamePos, "interface %q has no method %q", iface.Name, selector.Name)
+		return ExprType{Base: TypeInvalid}
+	}
 	if _, ok := c.lookupMethod(inner.Base, selector.Name); ok {
 		c.diag.Add(selector.NamePos, "method values are not supported")
 		return ExprType{Base: TypeInvalid}
@@ -1737,6 +1843,26 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(callee.DotPos, "method call cannot use an errorable receiver")
 			return ExprType{Base: TypeInvalid}
 		}
+		if iface, ok := c.info.Interfaces[string(receiver.Base)]; ok {
+			method, _, ok := iface.Method(callee.Name)
+			if !ok {
+				c.diag.Add(callee.NamePos, "interface %q has no method %q", iface.Name, callee.Name)
+				return ExprType{Base: TypeInvalid}
+			}
+			sig = Signature{
+				Name:      callee.Name,
+				FullName:  string(receiver.Base) + "." + callee.Name,
+				Method:    true,
+				Receiver:  receiver.Base,
+				Params:    append([]Type{receiver.Base}, method.Params...),
+				Return:    method.Return,
+				Errorable: method.Errorable,
+			}
+			name = callee.Name
+			namePos = callee.NamePos
+			argOffset = 1
+			break
+		}
 		if functionType, ok := ParseFunctionType(receiver.Base); ok {
 			sig = Signature{
 				Name:      "function value",
@@ -2055,6 +2181,9 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 		return Type(ref.Name)
 	}
 	if _, ok := c.structs[ref.Name]; ok {
+		return Type(ref.Name)
+	}
+	if _, ok := c.interfaces[ref.Name]; ok {
 		return Type(ref.Name)
 	}
 	if _, ok := c.enums[ref.Name]; ok {
@@ -2442,6 +2571,11 @@ func isPointerType(typ Type) bool {
 	return ok
 }
 
+func (c *Checker) isInterfaceType(typ Type) bool {
+	_, ok := c.info.Interfaces[string(typ)]
+	return ok
+}
+
 func sequenceElementType(typ Type) (Type, bool) {
 	if array, ok := ParseArrayType(typ); ok {
 		return array.Elem, true
@@ -2645,6 +2779,20 @@ func (c *Checker) coerceValue(expr ast.Expression, exprType ExprType, target Typ
 		c.setExprType(expr, coerced)
 		return coerced
 	}
+	if c.isInterfaceType(target) {
+		if exprType.Base == target {
+			return ExprType{Base: target}
+		}
+		if _, ok := c.info.Interfaces[string(exprType.Base)]; ok {
+			return exprType
+		}
+		if ok, message := c.satisfiesInterface(exprType.Base, target); ok {
+			return ExprType{Base: target}
+		} else if message != "" {
+			c.diag.Add(expr.Pos(), "%s", message)
+			return ExprType{Base: TypeInvalid}
+		}
+	}
 	return c.coerceUntypedInteger(expr, exprType, target)
 }
 
@@ -2771,4 +2919,38 @@ func (c *Checker) lookupEnumCaseType(name string) (EnumInfo, EnumCaseInfo, bool)
 		return EnumInfo{}, EnumCaseInfo{}, false
 	}
 	return enumInfo, enumCase, true
+}
+
+func (c *Checker) satisfiesInterface(concrete, iface Type) (ok bool, message string) {
+	if concrete == iface {
+		return true, ""
+	}
+	if concrete == TypeInvalid || iface == TypeInvalid {
+		return false, ""
+	}
+	if _, ok := c.info.Interfaces[string(concrete)]; ok {
+		return false, fmt.Sprintf("cannot assign %s to %s", concrete, iface)
+	}
+	info, ok := c.info.Interfaces[string(iface)]
+	if !ok {
+		return false, ""
+	}
+	for _, method := range info.Methods {
+		sig, ok := c.lookupMethod(concrete, method.Name)
+		if !ok {
+			return false, fmt.Sprintf("type %q does not satisfy interface %q (missing method %q)", concrete, iface, method.Name)
+		}
+		if len(sig.Params) != len(method.Params)+1 {
+			return false, fmt.Sprintf("method %q on %q does not match interface %q", method.Name, concrete, iface)
+		}
+		if sig.Return != method.Return || sig.Errorable != method.Errorable {
+			return false, fmt.Sprintf("method %q on %q does not match interface %q", method.Name, concrete, iface)
+		}
+		for i, param := range method.Params {
+			if sig.Params[i+1] != param {
+				return false, fmt.Sprintf("method %q on %q does not match interface %q", method.Name, concrete, iface)
+			}
+		}
+	}
+	return true, ""
 }

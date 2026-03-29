@@ -464,6 +464,55 @@ fn main() i32 {
 	}
 }
 
+func TestParseInterfaceDeclarations(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+interface Writer {
+	write(msg str) !void
+}
+
+interface Labeler {
+	label(prefix str) str
+}
+
+fn main() i32 {
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := len(program.Interfaces), 2; got != want {
+		t.Fatalf("unexpected interface count: got %d want %d", got, want)
+	}
+
+	writer := program.Interfaces[0]
+	if got, want := writer.Name, "Writer"; got != want {
+		t.Fatalf("unexpected interface name: got %q want %q", got, want)
+	}
+	if got, want := len(writer.Methods), 1; got != want {
+		t.Fatalf("unexpected method count: got %d want %d", got, want)
+	}
+	if got, want := writer.Methods[0].Name, "write"; got != want {
+		t.Fatalf("unexpected method name: got %q want %q", got, want)
+	}
+	if got, want := writer.Methods[0].Params[0].Type.String(), "str"; got != want {
+		t.Fatalf("unexpected param type: got %q want %q", got, want)
+	}
+	if !writer.Methods[0].ReturnIsBang {
+		t.Fatal("expected errorable interface method")
+	}
+
+	labeler := program.Interfaces[1]
+	if got, want := labeler.Methods[0].Return.String(), "str"; got != want {
+		t.Fatalf("unexpected return type: got %q want %q", got, want)
+	}
+}
+
 func TestParseForClausePointerAssignment(t *testing.T) {
 	t.Parallel()
 

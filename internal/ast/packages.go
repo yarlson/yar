@@ -7,14 +7,15 @@ type PackageImport struct {
 }
 
 type Package struct {
-	Path      string
-	Name      string
-	Stdlib    bool
-	Files     []*Program
-	Imports   []PackageImport
-	Structs   []*StructDecl
-	Enums     []*EnumDecl
-	Functions []*FunctionDecl
+	Path       string
+	Name       string
+	Stdlib     bool
+	Files      []*Program
+	Imports    []PackageImport
+	Structs    []*StructDecl
+	Interfaces []*InterfaceDecl
+	Enums      []*EnumDecl
+	Functions  []*FunctionDecl
 }
 
 type PackageGraph struct {

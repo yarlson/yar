@@ -58,6 +58,10 @@ func (p *Parser) parseProgram() *ast.Program {
 			if decl := p.parseStruct(exported); decl != nil {
 				program.Structs = append(program.Structs, decl)
 			}
+		case token.Interface:
+			if decl := p.parseInterface(exported); decl != nil {
+				program.Interfaces = append(program.Interfaces, decl)
+			}
 		case token.Enum:
 			if decl := p.parseEnum(exported); decl != nil {
 				program.Enums = append(program.Enums, decl)
@@ -67,7 +71,7 @@ func (p *Parser) parseProgram() *ast.Program {
 				program.Functions = append(program.Functions, fn)
 			}
 		default:
-			p.errorCurrent("expected function, struct, or enum declaration")
+			p.errorCurrent("expected function, struct, interface, or enum declaration")
 			p.advance()
 		}
 	}
@@ -107,6 +111,34 @@ func (p *Parser) parseStruct(exported bool) *ast.StructDecl {
 		})
 	}
 	p.expect(token.RBrace, "expected '}' after struct body")
+	return decl
+}
+
+func (p *Parser) parseInterface(exported bool) *ast.InterfaceDecl {
+	interfaceTok := p.expect(token.Interface, "expected interface")
+	nameTok := p.expect(token.Ident, "expected interface name")
+	p.expect(token.LBrace, "expected '{' after interface name")
+
+	decl := &ast.InterfaceDecl{
+		InterfacePos: interfaceTok.Pos,
+		Exported:     exported,
+		Name:         nameTok.Text,
+		NamePos:      nameTok.Pos,
+	}
+	for !p.at(token.RBrace) && !p.at(token.EOF) {
+		methodName := p.expect(token.Ident, "expected interface method name")
+		p.expect(token.LParen, "expected '(' after interface method name")
+		params := p.parseParamList()
+		returnIsBang, returnType := p.parseReturnType()
+		decl.Methods = append(decl.Methods, ast.InterfaceMethodDecl{
+			Name:         methodName.Text,
+			NamePos:      methodName.Pos,
+			Params:       params,
+			Return:       returnType,
+			ReturnIsBang: returnIsBang,
+		})
+	}
+	p.expect(token.RBrace, "expected '}' after interface body")
 	return decl
 }
 

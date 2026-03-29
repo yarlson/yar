@@ -38,6 +38,10 @@ func monomorphizeProgram(program *ast.Program) (*ast.Program, []diag.Diagnostic)
 	for _, decl := range program.Enums {
 		m.nonGenericNamedTypes[decl.Name] = struct{}{}
 	}
+	for _, decl := range program.Interfaces {
+		m.nonGenericNamedTypes[decl.Name] = struct{}{}
+		m.output.Interfaces = append(m.output.Interfaces, m.rewriteInterfaceDecl(decl, nil))
+	}
 	for _, decl := range program.Structs {
 		if len(decl.TypeParams) > 0 {
 			m.genericStructs[decl.Name] = decl
@@ -84,6 +88,34 @@ func (m *genericMonomorphizer) rewriteStructDecl(decl *ast.StructDecl, subst map
 		Name:      decl.Name,
 		NamePos:   decl.NamePos,
 		Fields:    fields,
+	}
+}
+
+func (m *genericMonomorphizer) rewriteInterfaceDecl(decl *ast.InterfaceDecl, subst map[string]ast.TypeRef) *ast.InterfaceDecl {
+	methods := make([]ast.InterfaceMethodDecl, 0, len(decl.Methods))
+	for _, method := range decl.Methods {
+		params := make([]ast.Param, 0, len(method.Params))
+		for _, param := range method.Params {
+			params = append(params, ast.Param{
+				Name:    param.Name,
+				NamePos: param.NamePos,
+				Type:    m.rewriteTypeRef(param.Type, subst),
+			})
+		}
+		methods = append(methods, ast.InterfaceMethodDecl{
+			Name:         method.Name,
+			NamePos:      method.NamePos,
+			Params:       params,
+			Return:       m.rewriteTypeRef(method.Return, subst),
+			ReturnIsBang: method.ReturnIsBang,
+		})
+	}
+	return &ast.InterfaceDecl{
+		InterfacePos: decl.InterfacePos,
+		Exported:     decl.Exported,
+		Name:         decl.Name,
+		NamePos:      decl.NamePos,
+		Methods:      methods,
 	}
 }
 

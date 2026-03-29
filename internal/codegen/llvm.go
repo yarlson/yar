@@ -10,17 +10,21 @@ import (
 )
 
 type Generator struct {
-	program        *ast.Program
-	info           checker.Info
-	functions      map[string]checker.Signature
-	stringNames    map[string]string
-	stringOrder    []string
-	nextStringID   int
-	literalNames   map[*ast.FunctionLiteralExpr]string
-	literalQueue   []*ast.FunctionLiteralExpr
-	emittedLits    map[*ast.FunctionLiteralExpr]bool
-	nextLiteralID  int
-	usedResultType map[checker.Type]bool
+	program           *ast.Program
+	info              checker.Info
+	functions         map[string]checker.Signature
+	methods           map[checker.Type]map[string]checker.Signature
+	stringNames       map[string]string
+	stringOrder       []string
+	nextStringID      int
+	literalNames      map[*ast.FunctionLiteralExpr]string
+	literalQueue      []*ast.FunctionLiteralExpr
+	emittedLits       map[*ast.FunctionLiteralExpr]bool
+	nextLiteralID     int
+	usedResultType    map[checker.Type]bool
+	interfaceGlobals  []string
+	interfaceAdapters []string
+	interfaceImpls    map[string]string
 }
 
 func Generate(program *ast.Program, info checker.Info) (string, error) {
@@ -28,14 +32,22 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		program:        program,
 		info:           info,
 		functions:      builtins(),
+		methods:        make(map[checker.Type]map[string]checker.Signature),
 		stringNames:    make(map[string]string),
 		literalNames:   make(map[*ast.FunctionLiteralExpr]string),
 		emittedLits:    make(map[*ast.FunctionLiteralExpr]bool),
 		usedResultType: make(map[checker.Type]bool),
+		interfaceImpls: make(map[string]string),
 	}
 
 	for _, sig := range info.Functions {
 		g.functions[sig.FullName] = sig
+		if sig.Method {
+			if _, ok := g.methods[sig.Receiver]; !ok {
+				g.methods[sig.Receiver] = make(map[string]checker.Signature)
+			}
+			g.methods[sig.Receiver][sig.Name] = sig
+		}
 		if sig.Errorable {
 			g.usedResultType[sig.Return] = true
 		}
@@ -58,6 +70,25 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
 	b.WriteString("%yar.slice = type { ptr, i32, i32 }\n")
 	b.WriteString("%yar.closure = type { ptr, ptr }\n")
+	b.WriteString("%yar.iface = type { ptr, ptr }\n")
+
+	interfaceNames := make([]string, 0, len(info.Interfaces))
+	for name := range info.Interfaces {
+		interfaceNames = append(interfaceNames, name)
+	}
+	sort.Strings(interfaceNames)
+	for _, name := range interfaceNames {
+		methods := info.Interfaces[name].Methods
+		fields := make([]string, len(methods))
+		for i := range methods {
+			fields[i] = "ptr"
+		}
+		literal := "{ }"
+		if len(fields) > 0 {
+			literal = "{ " + strings.Join(fields, ", ") + " }"
+		}
+		fmt.Fprintf(&b, "%s = type %s\n", g.interfaceTableTypeName(checker.Type(name)), literal)
+	}
 
 	structNames := make([]string, 0, len(info.Structs))
 	for name := range info.Structs {
@@ -124,6 +155,14 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 		return "", err
 	}
 	functionIR = append(functionIR, wrapper)
+	functionIR = append(functionIR, g.interfaceAdapters...)
+
+	for _, global := range g.interfaceGlobals {
+		b.WriteString(global)
+	}
+	if len(g.interfaceGlobals) > 0 {
+		b.WriteByte('\n')
+	}
 
 	for _, value := range g.stringOrder {
 		name := g.stringNames[value]
@@ -318,6 +357,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 	if _, ok := checker.ParseFunctionType(typ); ok {
 		return "%yar.closure"
 	}
+	if _, ok := g.info.Interfaces[string(typ)]; ok {
+		return "%yar.iface"
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return fmt.Sprintf("[%d x %s]", array.Len, g.llvmType(array.Elem))
 	}
@@ -336,6 +378,10 @@ func (g *Generator) structTypeName(name string) string {
 
 func (g *Generator) enumTypeName(name string) string {
 	return "%yar.enum." + sanitizeLabel(name)
+}
+
+func (g *Generator) interfaceTableTypeName(name checker.Type) string {
+	return "%yar.iface.table." + sanitizeLabel(string(name))
 }
 
 func (g *Generator) enumTypeLiteral(info checker.EnumInfo) string {
@@ -434,6 +480,9 @@ func (g *Generator) typeSize(typ checker.Type) int {
 	if _, ok := checker.ParseFunctionType(typ); ok {
 		return 16
 	}
+	if _, ok := g.info.Interfaces[string(typ)]; ok {
+		return 16
+	}
 	if array, ok := checker.ParseArrayType(typ); ok {
 		return array.Len * g.typeSize(array.Elem)
 	}
@@ -480,6 +529,9 @@ func (g *Generator) typeAlign(typ checker.Type) int {
 		return 8
 	}
 	if _, ok := checker.ParseFunctionType(typ); ok {
+		return 8
+	}
+	if _, ok := g.info.Interfaces[string(typ)]; ok {
 		return 8
 	}
 	if array, ok := checker.ParseArrayType(typ); ok {
@@ -590,6 +642,108 @@ func sanitizeLabel(name string) string {
 		}
 		fmt.Fprintf(&b, "_%02X", c)
 	}
+	return b.String()
+}
+
+func (g *Generator) globalName(name string) string {
+	if isPlainLLVMName(name) {
+		return "@" + name
+	}
+	return "@\"" + name + "\""
+}
+
+func (g *Generator) lookupMethod(receiver checker.Type, name string) (checker.Signature, bool) {
+	methods, ok := g.methods[receiver]
+	if !ok {
+		return checker.Signature{}, false
+	}
+	sig, ok := methods[name]
+	return sig, ok
+}
+
+func (g *Generator) interfaceImplKey(iface, concrete checker.Type) string {
+	return string(iface) + "=>" + string(concrete)
+}
+
+func (g *Generator) interfaceTableGlobalName(iface, concrete checker.Type) string {
+	return "yar.iface.table." + sanitizeLabel(string(iface)) + "." + sanitizeLabel(string(concrete))
+}
+
+func (g *Generator) interfaceAdapterName(iface, concrete checker.Type, method string) string {
+	return "iface.adapter." + sanitizeLabel(string(iface)) + "." + sanitizeLabel(string(concrete)) + "." + sanitizeLabel(method)
+}
+
+func (g *Generator) ensureInterfaceImpl(iface, concrete checker.Type) string {
+	key := g.interfaceImplKey(iface, concrete)
+	if name, ok := g.interfaceImpls[key]; ok {
+		return g.globalName(name)
+	}
+
+	ifaceInfo, ok := g.info.Interfaces[string(iface)]
+	if !ok {
+		panic("missing interface info for " + string(iface))
+	}
+
+	fields := make([]string, 0, len(ifaceInfo.Methods))
+	for _, method := range ifaceInfo.Methods {
+		sig, ok := g.lookupMethod(concrete, method.Name)
+		if !ok {
+			panic("missing interface method implementation for " + string(concrete) + "." + method.Name)
+		}
+		adapterName := g.interfaceAdapterName(iface, concrete, method.Name)
+		g.interfaceAdapters = append(g.interfaceAdapters, g.emitInterfaceAdapter(adapterName, sig))
+		fields = append(fields, "ptr "+g.functionName(adapterName))
+	}
+
+	globalName := g.interfaceTableGlobalName(iface, concrete)
+	literal := "{ }"
+	if len(fields) > 0 {
+		literal = "{ " + strings.Join(fields, ", ") + " }"
+	}
+	g.interfaceGlobals = append(g.interfaceGlobals, fmt.Sprintf("%s = private unnamed_addr constant %s %s\n", g.globalName(globalName), g.interfaceTableTypeName(iface), literal))
+	g.interfaceImpls[key] = globalName
+	return g.globalName(globalName)
+}
+
+func (g *Generator) emitInterfaceAdapter(name string, sig checker.Signature) string {
+	var b strings.Builder
+	retType := g.llvmType(sig.Return)
+	if sig.Errorable {
+		retType = g.resultTypeName(sig.Return)
+	}
+
+	params := []string{"ptr %data"}
+	for i := 1; i < len(sig.Params); i++ {
+		params = append(params, fmt.Sprintf("%s %%arg%d", g.llvmType(sig.Params[i]), i-1))
+	}
+	fmt.Fprintf(&b, "define %s %s(%s) {\n", retType, g.functionName(name), strings.Join(params, ", "))
+	b.WriteString("entry:\n")
+
+	callArgs := make([]string, 0, len(sig.Params))
+	if _, ok := checker.ParsePointerType(sig.Receiver); ok {
+		callArgs = append(callArgs, "ptr %data")
+	} else {
+		b.WriteString("  %recv = load ")
+		b.WriteString(g.llvmType(sig.Receiver))
+		b.WriteString(", ptr %data\n")
+		callArgs = append(callArgs, fmt.Sprintf("%s %%recv", g.llvmType(sig.Receiver)))
+	}
+	for i := 1; i < len(sig.Params); i++ {
+		callArgs = append(callArgs, fmt.Sprintf("%s %%arg%d", g.llvmType(sig.Params[i]), i-1))
+	}
+
+	switch {
+	case sig.Return == checker.TypeVoid && !sig.Errorable:
+		fmt.Fprintf(&b, "  call void %s(%s)\n", g.functionName(sig.FullName), strings.Join(callArgs, ", "))
+		b.WriteString("  ret void\n")
+	case sig.Return == checker.TypeNoReturn:
+		fmt.Fprintf(&b, "  call void %s(%s)\n", g.functionName(sig.FullName), strings.Join(callArgs, ", "))
+		b.WriteString("  unreachable\n")
+	default:
+		fmt.Fprintf(&b, "  %%call = call %s %s(%s)\n", retType, g.functionName(sig.FullName), strings.Join(callArgs, ", "))
+		fmt.Fprintf(&b, "  ret %s %%call\n", retType)
+	}
+	b.WriteString("}\n")
 	return b.String()
 }
 
@@ -751,7 +905,7 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		slot := f.newLocalSlot(typ)
 		value := f.g.zeroValue(typ)
 		if s.Value != nil {
-			value = f.genExpression(s.Value).ref
+			value = f.genCoercedExpression(s.Value, typ).ref
 		}
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value, slot)
 		f.bindLocal(s.Name, localSlot{typ: typ, ptr: slot})
@@ -760,14 +914,14 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 			innerType := f.exprType(indexExpr.Inner)
 			if mapType, ok := checker.ParseMapType(innerType); ok {
 				mapValue := f.genExpression(indexExpr.Inner)
-				keyValue := f.genExpression(indexExpr.Index)
-				value := f.genExpression(s.Value)
+				keyValue := f.genCoercedExpression(indexExpr.Index, mapType.Key)
+				value := f.genCoercedExpression(s.Value, mapType.Value)
 				f.emitMapSet(mapValue.ref, mapType.Key, keyValue, mapType.Value, value)
 				return
 			}
 		}
 		ptr, typ := f.addressOfTarget(s.Target)
-		value := f.genExpression(s.Value)
+		value := f.genCoercedExpression(s.Value, typ)
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(typ), value.ref, ptr)
 	case *ast.IfStmt:
 		f.genIf(s)
@@ -982,7 +1136,7 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 			return
 		}
 
-		value := f.genExpression(stmt.Value)
+		value := f.genCoercedExpression(stmt.Value, f.sig.Return)
 		if exprType, ok := f.g.info.ExprTypes[stmt.Value]; ok && exprType.Errorable {
 			fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.resultTypeName(f.sig.Return), value.ref)
 			f.terminated = true
@@ -1007,7 +1161,7 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 		return
 	}
 
-	value := f.genExpression(stmt.Value)
+	value := f.genCoercedExpression(stmt.Value, f.sig.Return)
 	fmt.Fprintf(&f.builder, "  ret %s %s\n", f.g.llvmType(value.typ), value.ref)
 	f.terminated = true
 }
@@ -1165,7 +1319,7 @@ func (f *functionEmitter) emitStructValue(typ checker.Type, fields []ast.StructL
 	info := f.g.info.Structs[string(typ)]
 	for _, fieldInit := range fields {
 		field, index, _ := info.Field(fieldInit.Name)
-		fieldValue := f.genExpression(fieldInit.Value)
+		fieldValue := f.genCoercedExpression(fieldInit.Value, field.Type)
 		next := f.newTemp("struct")
 		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(field.Type), fieldValue.ref, index)
 		value = "%" + next
@@ -1352,7 +1506,7 @@ func (f *functionEmitter) genArrayLiteral(expr ast.Expression, lit *ast.ArrayLit
 
 	value := "zeroinitializer"
 	for i, element := range lit.Elements {
-		elementValue := f.genExpression(element)
+		elementValue := f.genCoercedExpression(element, array.Elem)
 		next := f.newTemp("array")
 		fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, %d\n", next, f.g.llvmType(typ), value, f.g.llvmType(array.Elem), elementValue.ref, i)
 		value = "%" + next
@@ -1368,7 +1522,7 @@ func (f *functionEmitter) genSliceLiteral(expr ast.Expression, lit *ast.SliceLit
 	}
 	dataPtr := f.emitAllocBytes(f.emitArrayAllocSize(sliceType.Elem, len(lit.Elements)), false)
 	for i, element := range lit.Elements {
-		elementValue := f.genExpression(element)
+		elementValue := f.genCoercedExpression(element, sliceType.Elem)
 		ptr := f.newTemp("slice.elem.ptr")
 		fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %s, i64 %d\n", ptr, f.g.llvmType(sliceType.Elem), dataPtr, i)
 		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(sliceType.Elem), elementValue.ref, ptr)
@@ -1390,8 +1544,8 @@ func (f *functionEmitter) genMapLiteral(expr ast.Expression, lit *ast.MapLiteral
 	fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_map_new(i32 %d, i32 %d, i32 %d)\n", mapPtr, keyKind, keySize, valueSize)
 
 	for _, pair := range lit.Pairs {
-		keyValue := f.genExpression(pair.Key)
-		valValue := f.genExpression(pair.Value)
+		keyValue := f.genCoercedExpression(pair.Key, mapType.Key)
+		valValue := f.genCoercedExpression(pair.Value, mapType.Value)
 		f.emitMapSet("%"+mapPtr, mapType.Key, keyValue, mapType.Value, valValue)
 	}
 
@@ -1679,8 +1833,8 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	}
 	if sig.Name == "append" && sig.Builtin {
 		sliceValue := f.genExpression(expr.Args[0])
-		element := f.genExpression(expr.Args[1])
 		sliceType, _ := checker.ParseSliceType(sig.Return)
+		element := f.genCoercedExpression(expr.Args[1], sliceType.Elem)
 		oldData := f.extractSliceField(sliceValue.ref, 0, "append.data")
 		oldLen := f.extractSliceField(sliceValue.ref, 1, "append.len")
 		oldCap := f.extractSliceField(sliceValue.ref, 2, "append.cap")
@@ -1752,7 +1906,7 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		llvmArgs := make([]string, 0, len(expr.Args)+1)
 		llvmArgs = append(llvmArgs, fmt.Sprintf("ptr %%%s", envPtr))
 		for i, arg := range expr.Args {
-			value := f.genExpression(arg)
+			value := f.genCoercedExpression(arg, sig.Params[i])
 			llvmArgs = append(llvmArgs, fmt.Sprintf("%s %s", f.g.llvmType(sig.Params[i]), value.ref))
 		}
 
@@ -1773,8 +1927,18 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		}
 		args = append(args, f.genExpression(selector.Inner))
 	}
-	for _, arg := range expr.Args {
-		args = append(args, f.genExpression(arg))
+	argOffset := 0
+	if sig.Method {
+		argOffset = 1
+	}
+	for i, arg := range expr.Args {
+		args = append(args, f.genCoercedExpression(arg, sig.Params[i+argOffset]))
+	}
+
+	if sig.Method {
+		if _, ok := f.g.info.Interfaces[string(sig.Receiver)]; ok {
+			return f.genInterfaceCall(sig, args[0], args[1:])
+		}
 	}
 
 	if sig.HostIntrinsic {
@@ -1842,6 +2006,60 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		ref: "%" + tmp,
 		typ: sig.Return,
 	}
+}
+
+func (f *functionEmitter) genInterfaceCall(sig checker.Signature, receiver exprValue, args []exprValue) exprValue {
+	tablePtr := f.newTemp("iface.table")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.iface %s, 1\n", tablePtr, receiver.ref)
+	isNil := f.newTemp("iface.nil")
+	panicLabel := f.newLabel("iface.nil")
+	callLabel := f.newLabel("iface.call")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp eq ptr %%%s, null\n", isNil, tablePtr)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isNil, panicLabel, callLabel)
+	f.terminated = true
+
+	f.emitLabel(panicLabel)
+	f.emitNilInterfacePanic()
+	f.terminated = true
+
+	f.emitLabel(callLabel)
+	dataPtr := f.newTemp("iface.data")
+	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.iface %s, 0\n", dataPtr, receiver.ref)
+
+	ifaceInfo := f.g.info.Interfaces[string(sig.Receiver)]
+	method, index, ok := ifaceInfo.Method(sig.Name)
+	if !ok {
+		panic("missing interface method " + sig.Name)
+	}
+	methodPtrPtr := f.newTemp("iface.method.ptr")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %%%s, i32 0, i32 %d\n", methodPtrPtr, f.g.interfaceTableTypeName(sig.Receiver), tablePtr, index)
+	methodPtr := f.newTemp("iface.method")
+	fmt.Fprintf(&f.builder, "  %%%s = load ptr, ptr %%%s\n", methodPtr, methodPtrPtr)
+
+	callArgs := make([]string, 0, len(args)+1)
+	callArgs = append(callArgs, fmt.Sprintf("ptr %%%s", dataPtr))
+	for i, arg := range args {
+		callArgs = append(callArgs, fmt.Sprintf("%s %s", f.g.llvmType(method.Params[i]), arg.ref))
+	}
+
+	callType := f.g.llvmType(method.Return)
+	if method.Errorable {
+		callType = f.g.resultTypeName(method.Return)
+	}
+	if method.Return == checker.TypeVoid && !method.Errorable {
+		fmt.Fprintf(&f.builder, "  call void %%%s(%s)\n", methodPtr, strings.Join(callArgs, ", "))
+		return exprValue{typ: checker.TypeVoid}
+	}
+	if method.Return == checker.TypeNoReturn {
+		fmt.Fprintf(&f.builder, "  call void %%%s(%s)\n", methodPtr, strings.Join(callArgs, ", "))
+		f.builder.WriteString("  unreachable\n")
+		f.terminated = true
+		return exprValue{typ: checker.TypeNoReturn}
+	}
+
+	result := f.newTemp("iface.call")
+	fmt.Fprintf(&f.builder, "  %%%s = call %s %%%s(%s)\n", result, callType, methodPtr, strings.Join(callArgs, ", "))
+	return exprValue{ref: "%" + result, typ: method.Return}
 }
 
 func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exprValue) exprValue {
@@ -2071,6 +2289,47 @@ func (f *functionEmitter) emitClosureValue(codeRef, envRef string, typ checker.T
 	return exprValue{ref: "%" + tmp2, typ: typ}
 }
 
+func (f *functionEmitter) emitInterfaceValue(dataRef, tableRef string, typ checker.Type) exprValue {
+	tmp1 := f.newTemp("iface")
+	tmp2 := f.newTemp("iface")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.iface zeroinitializer, ptr %s, 0\n", tmp1, dataRef)
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %%yar.iface %%%s, ptr %s, 1\n", tmp2, tmp1, tableRef)
+	return exprValue{ref: "%" + tmp2, typ: typ}
+}
+
+func (f *functionEmitter) genCoercedExpression(expr ast.Expression, target checker.Type) exprValue {
+	value := f.genExpression(expr)
+	if value.typ == target {
+		return value
+	}
+	if _, ok := f.g.info.Interfaces[string(target)]; ok {
+		return f.coerceToInterface(value, target)
+	}
+	return value
+}
+
+func (f *functionEmitter) coerceToInterface(value exprValue, target checker.Type) exprValue {
+	if value.typ == target {
+		return value
+	}
+	tableRef := f.g.ensureInterfaceImpl(target, value.typ)
+	dataRef := value.ref
+	if _, ok := checker.ParsePointerType(value.typ); !ok {
+		dataRef = f.emitAllocType(value.typ, false)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %s\n", f.g.llvmType(value.typ), value.ref, dataRef)
+	}
+	return f.emitInterfaceValue(dataRef, tableRef, target)
+}
+
+func (f *functionEmitter) emitNilInterfacePanic() {
+	msg := f.g.stringConstant("nil interface method call")
+	temp := f.newTemp("iface.panic.ptr")
+	ptr, length := f.g.stringPointer(msg, temp)
+	fmt.Fprintf(&f.builder, "  %s\n", ptr)
+	fmt.Fprintf(&f.builder, "  call void @yar_panic(ptr %%%s, i64 %d)\n", temp, length)
+	f.builder.WriteString("  unreachable\n")
+}
+
 func (f *functionEmitter) emitArrayAllocSize(elemType checker.Type, count int) string {
 	countRef := fmt.Sprintf("%d", count)
 	return f.emitScaledSize(elemType, countRef)
@@ -2280,6 +2539,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 			return "null"
 		}
 		if _, ok := checker.ParseFunctionType(typ); ok {
+			return "zeroinitializer"
+		}
+		if _, ok := g.info.Interfaces[string(typ)]; ok {
 			return "zeroinitializer"
 		}
 		if _, ok := checker.ParseArrayType(typ); ok {

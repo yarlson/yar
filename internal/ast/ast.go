@@ -30,6 +30,7 @@ type Program struct {
 	PackageName string
 	Imports     []ImportDecl
 	Structs     []*StructDecl
+	Interfaces  []*InterfaceDecl
 	Enums       []*EnumDecl
 	Functions   []*FunctionDecl
 }
@@ -144,6 +145,28 @@ type StructField struct {
 	Name    string
 	NamePos token.Position
 	Type    TypeRef
+}
+
+type InterfaceDecl struct {
+	InterfacePos token.Position
+	Exported     bool
+	Name         string
+	NamePos      token.Position
+	Methods      []InterfaceMethodDecl
+}
+
+func (d *InterfaceDecl) Pos() token.Position {
+	return d.InterfacePos
+}
+
+func (*InterfaceDecl) declNode() {}
+
+type InterfaceMethodDecl struct {
+	Name         string
+	NamePos      token.Position
+	Params       []Param
+	Return       TypeRef
+	ReturnIsBang bool
 }
 
 type EnumDecl struct {

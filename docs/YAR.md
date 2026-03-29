@@ -10,7 +10,7 @@ updated.
 
 - Multi-file packages
 - Entry `package main` plus imported packages
-- Top-level `struct`, `enum`, and `fn` declarations, with optional `pub`
+- Top-level `struct`, `interface`, `enum`, and `fn` declarations, with optional `pub`
 - Explicit generic structs and functions
 - Function types and anonymous function literals
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
@@ -23,6 +23,7 @@ A valid entry package:
 - may contain one or more `.yar` files in the same directory
 - may contain zero or more `import "path"` declarations after the package clause
 - contains zero or more top-level `struct` declarations
+- contains zero or more top-level `interface` declarations
 - contains zero or more top-level `enum` declarations
 - contains zero or more top-level `fn` declarations
 - must define `main`
@@ -32,7 +33,7 @@ Imported packages:
 - live in subdirectories under the entry package root
 - use `import "path"` with slash-separated package paths
 - must declare a package name matching the final import path segment
-- may expose top-level `struct`, `enum`, and `fn` declarations with `pub`
+- may expose top-level `struct`, `interface`, `enum`, and `fn` declarations with `pub`
 
 `main` must return either:
 
@@ -60,6 +61,7 @@ Implemented types:
 - `error`
 - typed pointer types such as `*Node` and `*[4]i32`
 - user-defined `struct` types
+- user-defined `interface` types
 - instantiated generic struct types such as `Box[i32]`
 - user-defined `enum` types
 - fixed-size array types such as `[4]i32` and `[3]User`
@@ -193,8 +195,49 @@ pub fn lookup() User {
 }
 ```
 
-Exported declarations cannot expose package-local types (struct or enum) through
-public fields, parameters, or return types.
+Exported declarations cannot expose package-local types (struct, interface, or
+enum) through public fields, parameters, or return types.
+
+## Interfaces
+
+Interfaces describe required behavior through method signatures:
+
+```
+interface Writer {
+    write(msg str) !void
+}
+```
+
+Concrete values satisfy interfaces implicitly when the exact receiver type
+provides matching methods:
+
+```
+struct Buffer {
+    prefix str
+}
+
+fn (b Buffer) write(msg str) !void {
+    print(b.prefix + msg)
+    return
+}
+
+fn emit(w Writer) !void {
+    return w.write("ok")
+}
+```
+
+Current interface rules:
+
+- interface bodies contain method requirements only; fields are not allowed
+- interface methods may return ordinary or errorable results
+- concrete satisfaction is implicit
+- satisfaction uses the exact receiver type, so `T` and `*T` remain distinct
+- interface values support method calls only through the declared method set
+- interface values are not comparable
+- interface-to-interface conversion is supported only for the same exact interface type
+- `nil` remains pointer-only; it does not coerce to interface types
+- calling a zero-valued interface panics with `nil interface method call`
+- interfaces are not generic in the current implementation
 
 ## Enums
 
@@ -383,6 +426,7 @@ Current method rules:
 - receivers may be either `T` or `*T`
 - method calls use `value.method(...)`
 - pointer and value receivers do not auto-convert; match the receiver type explicitly
+- interface satisfaction follows the same exact receiver matching
 - methods are not first-class values, so `value.method` without `(...)` is rejected
 - exported methods use `pub fn (...)`
 

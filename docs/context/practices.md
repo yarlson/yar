@@ -17,11 +17,11 @@
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary
   `value.method(...)` syntax.
-- Top-level declarations may be `struct`, `enum`, `fn`, or receiver-style
-  method declarations, optionally prefixed with `pub`.
+- Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
+  receiver-style method declarations, optionally prefixed with `pub`.
 - Cross-package references may use only exported top-level declarations.
-- Exported declarations may not expose package-local struct or enum types in
-  their public surface.
+- Exported declarations may not expose package-local struct, interface, or enum
+  types in their public surface.
 - Import cycles are rejected.
 - Package lowering rewrites package-local and imported declarations to
   canonical package-qualified names before checking and code generation.

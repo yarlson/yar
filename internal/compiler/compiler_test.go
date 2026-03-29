@@ -568,6 +568,18 @@ func TestBuildAndRunMethodFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestBuildAndRunInterfaceProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "interfaces", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "hi ada\n5\n8\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildPathAllSamplePrograms(t *testing.T) {
 	samples, err := sampleProgramPaths()
 	if err != nil {

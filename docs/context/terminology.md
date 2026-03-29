@@ -3,7 +3,7 @@
 Yar — The compiler CLI and the source language implemented in this repository.
 
 file AST — A parsed source file with a package declaration, optional imports,
-and top-level `struct`, `enum`, `fn`, and method declarations.
+and top-level `struct`, `interface`, `enum`, `fn`, and method declarations.
 
 package — A directory of one or more `.yar` files that declare the same package
 name and share one top-level namespace.
@@ -84,8 +84,8 @@ length, and capacity descriptor.
 map — A runtime-managed hash table type `map[K]V` with key types restricted to
 `bool`, `i32`, `i64`, and `str`.
 
-pub — Export marker for top-level `struct`, `enum`, `fn`, and method
-declarations, making them visible to importing packages.
+pub — Export marker for top-level `struct`, `interface`, `enum`, `fn`, and
+method declarations, making them visible to importing packages.
 
 method — A top-level function declaration with an explicit receiver such as
 `fn (u User) label() str`, callable with `value.label()`.

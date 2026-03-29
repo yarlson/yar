@@ -218,6 +218,7 @@ func (l *packageLoader) resolveImports(pkg *ast.Package) (*ast.Package, error) {
 	seenImports := make(map[string]struct{})
 	for _, file := range pkg.Files {
 		pkg.Structs = append(pkg.Structs, file.Structs...)
+		pkg.Interfaces = append(pkg.Interfaces, file.Interfaces...)
 		pkg.Enums = append(pkg.Enums, file.Enums...)
 		pkg.Functions = append(pkg.Functions, file.Functions...)
 		for _, decl := range file.Imports {
@@ -340,21 +341,23 @@ func appendCycle(stack []string, target string) []string {
 }
 
 type packageLowerer struct {
-	graph     *ast.PackageGraph
-	structs   map[string]map[string]*ast.StructDecl
-	enums     map[string]map[string]*ast.EnumDecl
-	functions map[string]map[string]*ast.FunctionDecl
-	imports   map[string]map[string]*ast.Package
-	diag      diag.List
+	graph      *ast.PackageGraph
+	structs    map[string]map[string]*ast.StructDecl
+	interfaces map[string]map[string]*ast.InterfaceDecl
+	enums      map[string]map[string]*ast.EnumDecl
+	functions  map[string]map[string]*ast.FunctionDecl
+	imports    map[string]map[string]*ast.Package
+	diag       diag.List
 }
 
 func lowerPackageGraph(graph *ast.PackageGraph) (*ast.Program, []diag.Diagnostic) {
 	l := &packageLowerer{
-		graph:     graph,
-		structs:   make(map[string]map[string]*ast.StructDecl),
-		enums:     make(map[string]map[string]*ast.EnumDecl),
-		functions: make(map[string]map[string]*ast.FunctionDecl),
-		imports:   make(map[string]map[string]*ast.Package),
+		graph:      graph,
+		structs:    make(map[string]map[string]*ast.StructDecl),
+		interfaces: make(map[string]map[string]*ast.InterfaceDecl),
+		enums:      make(map[string]map[string]*ast.EnumDecl),
+		functions:  make(map[string]map[string]*ast.FunctionDecl),
+		imports:    make(map[string]map[string]*ast.Package),
 	}
 	l.indexPackages()
 	if !l.diag.Empty() {
@@ -387,6 +390,7 @@ func lowerPackageGraph(graph *ast.PackageGraph) (*ast.Program, []diag.Diagnostic
 			continue
 		}
 		program.Enums = append(program.Enums, l.lowerEnums(pkg)...)
+		program.Interfaces = append(program.Interfaces, l.lowerInterfaces(pkg)...)
 		program.Structs = append(program.Structs, l.lowerStructs(pkg)...)
 		program.Functions = append(program.Functions, l.lowerFunctions(pkg)...)
 	}
@@ -474,6 +478,16 @@ func (l *packageLowerer) indexPackages() {
 		}
 		l.structs[path] = structs
 
+		interfaces := make(map[string]*ast.InterfaceDecl)
+		for _, decl := range pkg.Interfaces {
+			if _, ok := interfaces[decl.Name]; ok {
+				l.diag.Add(decl.NamePos, "interface %q is already declared", decl.Name)
+				continue
+			}
+			interfaces[decl.Name] = decl
+		}
+		l.interfaces[path] = interfaces
+
 		enums := make(map[string]*ast.EnumDecl)
 		for _, decl := range pkg.Enums {
 			if _, ok := enums[decl.Name]; ok {
@@ -532,6 +546,17 @@ func (l *packageLowerer) validateExportedDeclarations() {
 			params := typeParamSet(decl.TypeParams)
 			for _, field := range decl.Fields {
 				l.validateExportedLocalTypeRef(path, field.Type, params, "struct", decl.Name)
+			}
+		}
+		for _, decl := range pkg.Interfaces {
+			if !decl.Exported {
+				continue
+			}
+			for _, method := range decl.Methods {
+				for _, param := range method.Params {
+					l.validateExportedLocalTypeRef(path, param.Type, nil, "interface", decl.Name)
+				}
+				l.validateExportedLocalTypeRef(path, method.Return, nil, "interface", decl.Name)
 			}
 		}
 		for _, decl := range pkg.Enums {
@@ -629,6 +654,44 @@ func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref as
 		}
 		l.diag.Add(ref.Pos, "exported %s %q cannot use non-exported type %q", ownerKind, ownerName, ref.Name)
 	}
+	if decl, ok := l.interfaces[packagePath][ref.Name]; ok {
+		if decl.Exported {
+			return
+		}
+		l.diag.Add(ref.Pos, "exported %s %q cannot use non-exported type %q", ownerKind, ownerName, ref.Name)
+	}
+}
+
+func (l *packageLowerer) lowerInterfaces(pkg *ast.Package) []*ast.InterfaceDecl {
+	decls := make([]*ast.InterfaceDecl, 0, len(pkg.Interfaces))
+	for _, decl := range pkg.Interfaces {
+		methods := make([]ast.InterfaceMethodDecl, 0, len(decl.Methods))
+		for _, method := range decl.Methods {
+			params := make([]ast.Param, 0, len(method.Params))
+			for _, param := range method.Params {
+				params = append(params, ast.Param{
+					Name:    param.Name,
+					NamePos: param.NamePos,
+					Type:    l.rewriteTypeRef(pkg, param.Type, nil),
+				})
+			}
+			methods = append(methods, ast.InterfaceMethodDecl{
+				Name:         method.Name,
+				NamePos:      method.NamePos,
+				Params:       params,
+				Return:       l.rewriteTypeRef(pkg, method.Return, nil),
+				ReturnIsBang: method.ReturnIsBang,
+			})
+		}
+		decls = append(decls, &ast.InterfaceDecl{
+			InterfacePos: decl.InterfacePos,
+			Exported:     decl.Exported,
+			Name:         canonicalDeclName(pkg, decl.Name),
+			NamePos:      decl.NamePos,
+			Methods:      methods,
+		})
+	}
+	return decls
 }
 
 func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
@@ -799,6 +862,14 @@ func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef, typeP
 			out.Name = canonicalDeclName(target, parts[1])
 			return out
 		}
+		if decl := l.interfaces[target.Path][parts[1]]; decl != nil {
+			if !decl.Exported {
+				l.diag.Add(ref.Pos, "package %q does not export interface %q", target.Name, parts[1])
+				return out
+			}
+			out.Name = canonicalDeclName(target, parts[1])
+			return out
+		}
 		if decl := l.enums[target.Path][parts[1]]; decl != nil {
 			if !decl.Exported {
 				l.diag.Add(ref.Pos, "package %q does not export enum %q", target.Name, parts[1])
@@ -811,6 +882,10 @@ func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef, typeP
 		return out
 	}
 	if _, ok := l.structs[pkg.Path][ref.Name]; ok {
+		out.Name = canonicalDeclName(pkg, ref.Name)
+		return out
+	}
+	if _, ok := l.interfaces[pkg.Path][ref.Name]; ok {
 		out.Name = canonicalDeclName(pkg, ref.Name)
 		return out
 	}

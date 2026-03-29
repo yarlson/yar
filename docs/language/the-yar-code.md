@@ -59,7 +59,8 @@ line := fs.read_file(path) or |err| { return "" }
 **V. Model variants with enums and `match`.**
 Enums represent closed sets. `match` must cover every case — the compiler
 enforces exhaustiveness. Use payload cases to carry data. Use `_` to ignore a
-payload you don't need.
+payload you don't need. When branching on an enum, prefer `match` over chains
+of `if`; enum values do not support `==` or `!=`.
 
 ```
 enum Shape {
@@ -135,7 +136,25 @@ pub fn new_user(id i32, name str) User {
 }
 ```
 
-**X. Closures capture by value.**
+**X. Use interfaces for behavior, not structure.**
+Interfaces describe methods only. Concrete types satisfy them implicitly, but
+receiver matching stays exact: a method on `T` does not satisfy a requirement
+implemented only on `*T`, and vice versa.
+
+```
+interface Writer {
+    write(msg str) !void
+}
+
+fn emit(w Writer) !void {
+    return w.write("ok")
+}
+```
+
+Keep interfaces small and behavior-focused. They are best at package
+boundaries, not as a replacement for clear concrete data types.
+
+**XI. Closures capture by value.**
 Function literals capture outer locals at creation time, by value. The captured
 values are read-only inside the closure. If you need a closure to observe later
 changes, pass a pointer explicitly.
@@ -148,27 +167,7 @@ fn make_adder(base i32) fn(i32) i32 {
 }
 ```
 
-**XI. Match receivers exactly.**
-Value receivers and pointer receivers are distinct. A method declared on `User`
-cannot be called on `*User`, and a method declared on `*User` cannot be called
-on `User`. The compiler does not insert `&` or `*` for you.
-
-```
-fn (u User) display() str {
-    return u.name
-}
-
-fn (u *User) rename(name str) void {
-    (*u).name = name
-}
-```
-
-**XII. Let `match` replace your `if` chains.**
-When branching on an enum value, use `match` — not a chain of `if` comparisons.
-`match` is exhaustive, so the compiler tells you when you miss a case. Enum
-values do not support `==` or `!=`.
-
-**XIII. Use the stdlib before writing your own.**
+**XII. Use the stdlib before writing your own.**
 The embedded standard library covers strings, UTF-8, conversions, sorting,
 paths, filesystem, process execution, environment, and stderr. Stdlib packages
 are imported like any other package, and local packages shadow them if you need
@@ -184,7 +183,7 @@ sort.strings(parts)
 joined := strings.join(parts, ", ")
 ```
 
-**XIV. `nil` needs a type.**
+**XIII. `nil` needs a type.**
 `nil` is only valid where the compiler knows the pointer type. You cannot write
 `p := nil` because there is no type to infer. Declare the variable with a type,
 or use `nil` in a context that already expects a specific pointer.
