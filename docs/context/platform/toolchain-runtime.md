@@ -112,9 +112,13 @@ long long b_len)` allocates and returns a new string containing the
 - Runtime filesystem status codes map in code generation to stable YAR error
   names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and
   `IO`.
-- The current implementation uses POSIX interfaces (`stat`, `opendir`, `mkdir`,
-  `remove`, `mkstemp`) and relies on the `path` stdlib package for path
-  normalization rather than a platform-specific separator API.
+- On POSIX, the implementation uses `stat`, `opendir`, `mkdir`, `remove`, and
+  `mkstemp`. On Windows, the implementation uses Win32 APIs
+  (`CreateFileA`, `FindFirstFileA`, `CreateDirectoryA`,
+  `GetEnvironmentVariableA`, and related functions).
+- Path normalization relies on the `path` stdlib package rather than a
+  platform-specific separator API. The runtime adjusts separator handling
+  per-platform where needed.
 
 ### Process / Environment Runtime
 
@@ -130,9 +134,10 @@ long long b_len)` allocates and returns a new string containing the
   variable and returns a stable host-process status code.
 - Host-process status codes map in code generation to stable YAR error names:
   `NotFound`, `PermissionDenied`, `InvalidArgument`, and `IO`.
-- The current implementation uses POSIX interfaces (`fork`, `execvp`,
-  `waitpid`, `mkstemp`, `getenv`) and captures child stdout/stderr through
-  temporary files.
+- On POSIX, the implementation uses `fork`, `execvp`, `waitpid`, `mkstemp`,
+  and `getenv`. On Windows, the implementation uses `CreateProcessA`,
+  `GetEnvironmentVariableA`, and Win32 pipe/file handles. Both paths capture
+  child stdout/stderr through temporary files.
 
 ### Map Runtime
 

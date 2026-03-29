@@ -11,8 +11,13 @@
 
 ## `emit-ir`
 
+- Resolves the build target from `YAR_OS` and `YAR_ARCH` environment variables
+  using `compiler.ResolveTarget`, falling back to the host platform when neither
+  is set.
 - Runs the same package loading, lowering, checking, and code-generation stages
-  as `check`.
+  as `check`, passing the resolved target triple into code generation.
+- When a target is resolved, the generated LLVM IR includes a `target triple`
+  directive.
 - Writes the generated LLVM IR text to stdout on success.
 - Stops before any `clang` invocation.
 

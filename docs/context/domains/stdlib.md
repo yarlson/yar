@@ -188,13 +188,15 @@ Functions:
 - Performance is straightforward and correctness-first. Concatenation-heavy
   functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for
   large inputs, and `sort` uses O(n^2) insertion sort.
-- The `fs` runtime boundary is POSIX-oriented (`stat`, `opendir`, `mkdir`,
-  `remove`, `TMPDIR`) rather than a full cross-platform abstraction.
-- The `process` runtime boundary is POSIX-oriented (`fork`, `execvp`,
-  `waitpid`, `mkstemp`) and captures child stdout/stderr through temporary
-  files before copying them into runtime-managed strings.
+- The `fs` and `process` runtime boundaries use `#ifdef _WIN32` conditionals to
+  support both POSIX and Windows from a single C source file. On POSIX, the
+  implementations use `stat`, `opendir`, `mkdir`, `remove`, `fork`, `execvp`,
+  `waitpid`, and `mkstemp`. On Windows, the implementations use Win32 APIs
+  (`CreateFileA`, `FindFirstFileA`, `CreateDirectoryA`, `CreateProcessA`,
+  `GetEnvironmentVariableA`, and related functions).
 - `process.run` and `process.run_inherit` require at least one argv element.
   Empty command vectors and strings that cannot cross the host boundary surface
   `error.InvalidArgument`.
 - `fs.temp_dir` rejects prefixes containing path separators or embedded NUL
-  bytes and creates directories under `TMPDIR` or `/tmp`.
+  bytes and creates directories under `TMPDIR` or `/tmp` on POSIX, or under
+  the system temporary directory on Windows.
