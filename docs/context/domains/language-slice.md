@@ -12,9 +12,9 @@
 - Import paths are slash-separated logical package names. Absolute paths,
   dot-prefixed paths, empty segments, and invalid identifier segments are
   rejected.
-- Top-level declarations may be `struct`, `enum`, or `fn`, optionally prefixed
-  with `pub`.
-- Functions have positional parameters and an explicit return type.
+- Top-level declarations may be `struct`, `enum`, `fn`, or receiver-style
+  method declarations, optionally prefixed with `pub`.
+- Functions and methods have positional parameters and an explicit return type.
 - Return types may be prefixed with `!` to mark the function as errorable.
 - `let` is not supported; local declarations use `:=` or `var`.
 
@@ -55,6 +55,7 @@
 
 - Local identifier lookup
 - Package-qualified function calls such as `lexer.classify()`
+- Method calls such as `user.display_name()`
 - Integer literals with coercion into `i32` or `i64`
 - String literals with `\n`, `\t`, `\\`, and `\"` escapes
 - Boolean literals
@@ -84,10 +85,17 @@
 
 - Entry `main` must exist and return `i32` or `!i32`.
 - Imported package references must stay qualified.
+- Methods are allowed only on named local struct types or pointers to named
+  local struct types.
+- Value receiver methods and pointer receiver methods are distinct; method
+  calls require an exact receiver type match.
+- Methods are not first-class values; `value.method` is rejected outside an
+  immediate call.
 - Local packages shadow stdlib packages with the same import path.
 - Imported packages expose only `pub` top-level declarations.
-- Exported functions, structs, and enums cannot expose non-exported local
-  struct or enum types in parameters, returns, or fields.
+- Exported functions, structs, enums, and methods cannot expose non-exported
+  local struct or enum types in parameters, returns, fields, or receiver
+  types.
 - Duplicate top-level names are rejected package-wide, including across files.
 - Import cycles are rejected.
 - Enum case names must be unique within their enum.

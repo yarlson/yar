@@ -104,6 +104,15 @@ YAR exposes deterministic in-place sorting through a small stdlib `sort`
 package rather than new builtins or syntax. The initial surface is
 `sort.strings([]str)`, `sort.i32s([]i32)`, and `sort.i64s([]i64)`.
 
+### Methods
+
+Status: accepted
+
+YAR supports methods on named struct types with explicit value or pointer
+receivers. Method calls use `value.method(...)`, exported methods use `pub`,
+receiver matching is exact, and methods lower to ordinary functions with an
+explicit receiver argument.
+
 ---
 
 ## Rejected
@@ -129,13 +138,6 @@ Features should not be added purely from intuition or implementation momentum.
 ---
 
 ## Deferred
-
-### Methods
-
-Status: deferred
-
-Deferred until there is a stronger need for associated behavior and a clear
-interaction story with structs and future modules.
 
 ### Generics
 

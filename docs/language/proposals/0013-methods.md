@@ -1,17 +1,19 @@
 # Proposal: Methods
 
-Status: exploring
+Status: accepted
 
 ## 1. Summary
 
-Consider adding method declarations on named types so common operations can be
-attached to structs and, if justified later, possibly other user-defined types.
+Method declarations on named struct types let common operations live next to
+the data they primarily serve.
 
-The smallest plausible version is:
+The implemented first version is:
 
 - methods on `struct` types only
 - value receivers and pointer receivers
 - method calls with `value.method(...)`
+- exact receiver-type matching at call sites
+- no method values
 - no operator overloading or implicit interfaces
 
 ## 2. Motivation
@@ -66,37 +68,34 @@ fn (n i32) double() i32 {
 }
 ```
 
-Invalid in the smallest version because the first cut would attach methods only
+Invalid in the implemented version because the first cut attaches methods only
 to named struct types.
 
 ```yar
-fn (u User) rename(name str) void {
-    u.name = name
-}
+counter := &Counter{value: 1}
+counter.current()
 ```
 
-Invalid if value receivers are immutable copies in the source model.
+Invalid when `current` is declared on `Counter` rather than `*Counter`, because
+this version does not insert implicit `&` or `*` conversions for method calls.
 
 ## 4. Semantics
 
 Methods are declaration sugar for functions with an explicit receiver.
 
-Questions the design must settle:
+The first version settles the main design questions as follows:
 
-- whether the receiver participates in ordinary overload resolution
-- whether method syntax is only call-site sugar or a distinct declaration kind
-- whether pointer receivers require explicit pointer values at call sites
-- whether exported methods follow the same `pub` rules as exported functions
-
-The smallest coherent design likely keeps methods as syntax over ordinary
-functions during lowering.
+- the receiver is part of method lookup, not ordinary function overload resolution
+- exported methods use the same `pub` spelling as exported functions
+- pointer receivers require an explicit pointer-typed receiver value at the call site
+- methods are not first-class values in this version
+- lowering keeps methods as ordinary functions plus an explicit receiver argument
 
 ## 5. Type Rules
 
-- the receiver type must be a named user-defined type allowed by the proposal
+- the receiver type must be a named local struct type or a pointer to one
 - receiver names are local bindings within the method body
-- value receiver methods do not mutate the original caller value unless the
-  receiver contains shared indirection
+- value receiver methods receive a copy of the caller value
 - pointer receiver methods require a pointer-typed receiver
 
 ## 6. Grammar / Parsing Shape
@@ -118,8 +117,8 @@ Potential ambiguity is low, but the parser must clearly separate:
 - parser adds receiver syntax to function declarations
 - AST either stores a receiver field or desugars immediately into an ordinary
   function form
-- checker adds method lookup and validates receiver legality
-- codegen can likely reuse ordinary function lowering after canonicalization
+- checker adds method lookup, export checks, and receiver legality validation
+- codegen reuses ordinary function lowering and prepends the receiver argument
 - runtime impact is likely none
 
 ## 8. Interactions
@@ -130,7 +129,8 @@ Potential ambiguity is low, but the parser must clearly separate:
 - control flow: no special interaction
 - returns: same as ordinary functions
 - builtins: method names must not shadow builtin semantics in confusing ways
-- future modules/imports: import and export rules must cover methods clearly
+- future modules/imports: exported methods are callable on imported exported
+  struct values; non-exported methods stay package-local
 - future richer type features: methods strongly influence interface and generic
   design, so this feature should not land casually
 
@@ -164,23 +164,23 @@ appears in examples or downstream ideas.
 
 ## 12. Open Questions
 
-- should methods be allowed only on structs in the first version?
-- should value receiver mutation be rejected explicitly?
-- how should exported methods be spelled and documented?
-- should methods remain pure sugar over functions in the internal model?
+- should a later version add implicit address-of or dereference for method calls?
+- should methods remain struct-only once interfaces or generics arrive?
+- should method values or closures be introduced later?
 
 ## 13. Decision
 
-Exploring. Methods are plausible, but the language does not yet have a settled
-receiver model or a clear milestone that requires them.
+Accepted and implemented as a small, explicit feature: methods exist only on
+named struct types, use exact receiver matching, and lower to ordinary
+functions.
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] diagnostics
+- [x] tests
+- [x] `current-state.md` update
+- [x] `decisions.md` update

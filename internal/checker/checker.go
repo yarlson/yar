@@ -35,6 +35,8 @@ type Signature struct {
 	Name          string
 	Package       string
 	FullName      string
+	Method        bool
+	Receiver      Type
 	Params        []Type
 	Return        Type
 	Errorable     bool
@@ -112,6 +114,7 @@ type Info struct {
 type Checker struct {
 	diag      diag.List
 	functions map[string]Signature
+	methods   map[Type]map[string]Signature
 	structs   map[string]*ast.StructDecl
 	enums     map[string]*ast.EnumDecl
 	info      Info
@@ -231,6 +234,16 @@ func ParsePointerType(typ Type) (PointerType, bool) {
 		return PointerType{}, false
 	}
 	return PointerType{Elem: elem}, true
+}
+
+func methodReceiverBaseType(typ Type) (Type, bool) {
+	if pointer, ok := ParsePointerType(typ); ok {
+		typ = pointer.Elem
+	}
+	if typ == TypeInvalid {
+		return TypeInvalid, false
+	}
+	return typ, true
 }
 
 func IsBuiltinFunction(name string) bool {
@@ -353,6 +366,7 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Builtin:  true,
 			},
 		},
+		methods: make(map[Type]map[string]Signature),
 		structs: make(map[string]*ast.StructDecl),
 		enums:   make(map[string]*ast.EnumDecl),
 		info: Info{
@@ -478,22 +492,34 @@ func (c *Checker) checkProgram(program *ast.Program) {
 	c.checkTypeCycles()
 
 	for _, fn := range program.Functions {
-		if IsBuiltinFunction(fn.Name) {
-			c.diag.Add(fn.NamePos, "function %q is already declared", fn.Name)
-			continue
-		}
-		if _, exists := c.functions[fn.Name]; exists {
+		if fn.Receiver == nil && IsBuiltinFunction(fn.Name) {
 			c.diag.Add(fn.NamePos, "function %q is already declared", fn.Name)
 			continue
 		}
 		sig := Signature{
-			Name:          fn.Name,
-			FullName:      fn.Name,
-			Return:        c.resolveTypeRef(fn.Return),
-			Errorable:     fn.ReturnIsBang,
-			HostIntrinsic: IsHostIntrinsic(fn.NamePos.File, fn.Name),
-			Exported:      fn.Exported,
+			Name:      fn.Name,
+			FullName:  fn.Name,
+			Return:    c.resolveTypeRef(fn.Return),
+			Errorable: fn.ReturnIsBang,
+			Exported:  fn.Exported,
 		}
+		if fn.Receiver != nil {
+			sig.Method = true
+			sig.Receiver = c.resolveMethodReceiverType(fn.Receiver.Type)
+			if sig.Receiver == TypeInvalid {
+				continue
+			}
+			sig.FullName = methodFullName(sig.Receiver, fn.Name)
+			sig.Package = packageForMethodReceiver(sig.Receiver)
+			sig.Params = append(sig.Params, sig.Receiver)
+		} else {
+			if _, exists := c.functions[fn.Name]; exists {
+				c.diag.Add(fn.NamePos, "function %q is already declared", fn.Name)
+				continue
+			}
+			sig.Package = packageForFunction(sig.FullName)
+		}
+		sig.HostIntrinsic = IsHostIntrinsic(fn.NamePos.File, sig.FullName)
 		if sig.Return == TypeNoReturn && sig.Errorable {
 			c.diag.Add(fn.Return.Pos, "noreturn functions cannot also be errorable")
 		}
@@ -503,7 +529,19 @@ func (c *Checker) checkProgram(program *ast.Program) {
 		for _, param := range fn.Params {
 			sig.Params = append(sig.Params, c.resolveTypeRef(param.Type))
 		}
-		c.functions[fn.Name] = sig
+		if sig.Method {
+			base, _ := methodReceiverBaseType(sig.Receiver)
+			if _, ok := c.lookupMethodForBase(base, fn.Name); ok {
+				c.diag.Add(fn.NamePos, "method %q is already declared for %q", fn.Name, base)
+				continue
+			}
+			if _, ok := c.methods[sig.Receiver]; !ok {
+				c.methods[sig.Receiver] = make(map[string]Signature)
+			}
+			c.methods[sig.Receiver][fn.Name] = sig
+		} else {
+			c.functions[fn.Name] = sig
+		}
 		c.info.Functions[fn] = sig
 	}
 
@@ -611,8 +649,14 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 		c.current = nil
 	}()
 
+	paramIndex := 0
+	if fn.Receiver != nil {
+		ctx.scopes[0][fn.Receiver.Name] = sig.Params[0]
+		paramIndex = 1
+	}
+
 	for i, param := range fn.Params {
-		paramType := sig.Params[i]
+		paramType := sig.Params[i+paramIndex]
 		if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
 			c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.Name)
 			continue
@@ -1097,20 +1141,24 @@ func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr)
 	}
 
 	info, ok := c.info.Structs[string(inner.Base)]
+	if ok {
+		field, _, hasField := info.Field(selector.Name)
+		if hasField {
+			et := ExprType{Base: field.Type}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
+	}
+	if _, ok := c.lookupMethod(inner.Base, selector.Name); ok {
+		c.diag.Add(selector.NamePos, "method values are not supported")
+		return ExprType{Base: TypeInvalid}
+	}
 	if !ok {
 		c.diag.Add(selector.DotPos, "field access requires a struct value")
 		return ExprType{Base: TypeInvalid}
 	}
-
-	field, _, ok := info.Field(selector.Name)
-	if !ok {
-		c.diag.Add(selector.NamePos, "struct %q has no field %q", info.Name, selector.Name)
-		return ExprType{Base: TypeInvalid}
-	}
-
-	et := ExprType{Base: field.Type}
-	c.info.ExprTypes[expr] = et
-	return et
+	c.diag.Add(selector.NamePos, "struct %q has no field %q", info.Name, selector.Name)
+	return ExprType{Base: TypeInvalid}
 }
 
 func (c *Checker) checkIndex(expr ast.Expression, index *ast.IndexExpr) ExprType {
@@ -1514,18 +1562,44 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		return et
 	}
 
-	if !ok {
-		c.diag.Add(call.Pos(), "call target must be a function name")
+	argOffset := 0
+	var sig Signature
+
+	switch callee := call.Callee.(type) {
+	case *ast.IdentExpr:
+		sig, ok = c.functions[callee.Name]
+		if !ok {
+			c.diag.Add(callee.NamePos, "unknown function %q", callee.Name)
+			return ExprType{Base: TypeInvalid}
+		}
+		name = callee.Name
+		namePos = callee.NamePos
+	case *ast.SelectorExpr:
+		receiver := c.checkExpression(callee.Inner)
+		if receiver.Errorable {
+			c.diag.Add(callee.DotPos, "method call cannot use an errorable receiver")
+			return ExprType{Base: TypeInvalid}
+		}
+		sig, ok = c.lookupMethod(receiver.Base, callee.Name)
+		if !ok {
+			c.diag.Add(callee.NamePos, "type %q has no method %q", receiver.Base, callee.Name)
+			return ExprType{Base: TypeInvalid}
+		}
+		if sig.Package != "" && sig.Package != c.current.signature.Package && !sig.Exported {
+			c.diag.Add(callee.NamePos, "package %q does not export method %q", packageDisplayName(sig.Package), callee.Name)
+			return ExprType{Base: TypeInvalid}
+		}
+		name = callee.Name
+		namePos = callee.NamePos
+		argOffset = 1
+	default:
+		c.diag.Add(call.Pos(), "call target must be a function or method name")
 		return ExprType{Base: TypeInvalid}
 	}
 
-	sig, ok := c.functions[name]
-	if !ok {
-		c.diag.Add(namePos, "unknown function %q", name)
-		return ExprType{Base: TypeInvalid}
-	}
-	if len(call.Args) != len(sig.Params) {
-		c.diag.Add(namePos, "function %q expects %d arguments, got %d", name, len(sig.Params), len(call.Args))
+	wantArgs := len(sig.Params) - argOffset
+	if len(call.Args) != wantArgs {
+		c.diag.Add(namePos, "function %q expects %d arguments, got %d", name, wantArgs, len(call.Args))
 	}
 	for i, arg := range call.Args {
 		argType := c.checkExpression(arg)
@@ -1537,12 +1611,13 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 			c.diag.Add(arg.Pos(), "argument %d to %q requires a value", i+1, name)
 			continue
 		}
-		if i >= len(sig.Params) {
+		paramIndex := i + argOffset
+		if paramIndex >= len(sig.Params) {
 			continue
 		}
-		argType = c.coerceValue(arg, argType, sig.Params[i])
-		if argType.Base != sig.Params[i] {
-			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, name, sig.Params[i], argType.Base)
+		argType = c.coerceValue(arg, argType, sig.Params[paramIndex])
+		if argType.Base != sig.Params[paramIndex] {
+			c.diag.Add(arg.Pos(), "argument %d to %q must be %s, got %s", i+1, name, sig.Params[paramIndex], argType.Base)
 		}
 	}
 	et := ExprType{Base: sig.Return, Errorable: sig.Errorable}
@@ -1749,6 +1824,66 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	return TypeInvalid
 }
 
+func (c *Checker) resolveMethodReceiverType(ref ast.TypeRef) Type {
+	typ := c.resolveTypeRef(ref)
+	if typ == TypeInvalid {
+		return TypeInvalid
+	}
+	base, _ := methodReceiverBaseType(typ)
+	if _, ok := c.info.Structs[string(base)]; ok {
+		return typ
+	}
+	c.diag.Add(ref.Pos, "method receiver must be a named struct type or pointer to one")
+	return TypeInvalid
+}
+
+func packageForFunction(fullName string) string {
+	if fullName == "main" {
+		return "main"
+	}
+	idx := strings.LastIndex(fullName, ".")
+	if idx <= 0 {
+		return ""
+	}
+	return fullName[:idx]
+}
+
+func methodFullName(receiver Type, name string) string {
+	base, ok := methodReceiverBaseType(receiver)
+	if !ok {
+		return name
+	}
+	return string(base) + "." + name
+}
+
+func packageForMethodReceiver(receiver Type) string {
+	base, ok := methodReceiverBaseType(receiver)
+	if !ok {
+		return ""
+	}
+	return packageForType(base)
+}
+
+func packageForType(typ Type) string {
+	text := string(typ)
+	idx := strings.LastIndex(text, ".")
+	if idx <= 0 {
+		return ""
+	}
+	return text[:idx]
+}
+
+func packageDisplayName(pkg string) string {
+	if pkg == "" {
+		return ""
+	}
+	idx := strings.LastIndex(pkg, ".")
+	if idx < 0 {
+		return pkg
+	}
+	return pkg[idx+1:]
+}
+
 func (c *Checker) pushScope() {
 	c.current.scopes = append(c.current.scopes, map[string]Type{})
 }
@@ -1773,6 +1908,29 @@ func (c *Checker) lookupLocal(name string) (Type, bool) {
 		}
 	}
 	return TypeInvalid, false
+}
+
+func (c *Checker) lookupMethod(receiver Type, name string) (Signature, bool) {
+	methods, ok := c.methods[receiver]
+	if !ok {
+		return Signature{}, false
+	}
+	sig, ok := methods[name]
+	return sig, ok
+}
+
+func (c *Checker) lookupMethodForBase(base Type, name string) (Signature, bool) {
+	for receiver, methods := range c.methods {
+		receiverBase, ok := methodReceiverBaseType(receiver)
+		if !ok || receiverBase != base {
+			continue
+		}
+		sig, ok := methods[name]
+		if ok {
+			return sig, true
+		}
+	}
+	return Signature{}, false
 }
 
 func (c *Checker) useErrorName(name string) {

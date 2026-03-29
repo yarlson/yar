@@ -258,6 +258,169 @@ fn main() !i32 {
 	}
 }
 
+func TestCheckMethodsValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct Counter {
+	value i32
+}
+
+fn (c Counter) current() i32 {
+	return c.value
+}
+
+fn (c *Counter) inc(delta i32) void {
+	(*c).value = (*c).value + delta
+}
+
+fn main() i32 {
+	counter := &Counter{value: 2}
+	counter.inc(3)
+	return (*counter).current()
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckMethodsInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "non struct receiver",
+			src: `
+package main
+
+fn (n i32) double() i32 {
+	return n * 2
+}
+
+fn main() i32 {
+	return 0
+}
+`,
+			substr: "method receiver must be a named struct type or pointer to one",
+		},
+		{
+			name: "pointer mismatch",
+			src: `
+package main
+
+struct Counter {
+	value i32
+}
+
+fn (c Counter) current() i32 {
+	return c.value
+}
+
+fn main() i32 {
+	counter := &Counter{value: 2}
+	return counter.current()
+}
+`,
+			substr: "type \"*Counter\" has no method \"current\"",
+		},
+		{
+			name: "method values unsupported",
+			src: `
+package main
+
+struct Counter {
+	value i32
+}
+
+fn (c Counter) current() i32 {
+	return c.value
+}
+
+fn main() i32 {
+	counter := Counter{value: 2}
+	value := counter.current
+	return 0
+}
+`,
+			substr: "method values are not supported",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
+func TestCheckMethodNameDoesNotShadowFieldAccess(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+struct User {
+	name str
+}
+
+fn (u User) name() str {
+	return "method"
+}
+
+fn main() i32 {
+	user := User{name: "field"}
+	print(user.name)
+	print("\n")
+	print(user.name())
+	print("\n")
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckEnumsAndMatchValid(t *testing.T) {
 	t.Parallel()
 

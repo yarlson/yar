@@ -136,7 +136,6 @@ compiler and tooling programs become practical end to end.
 
 ### v0.5 likely non-goals
 
-- methods
 - generics
 - a full stream or descriptor API
 - shell syntax or pipelines
@@ -149,8 +148,6 @@ compiler and tooling programs become practical end to end.
 
 These are interesting but not currently committed:
 
-- methods
-- `0013-methods.md`
 - richer builtin library
 - more numeric types
 - explicit conversion syntax

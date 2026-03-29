@@ -89,6 +89,7 @@ type FunctionDecl struct {
 	Exported     bool
 	Name         string
 	NamePos      token.Position
+	Receiver     *ReceiverDecl
 	Params       []Param
 	Return       TypeRef
 	ReturnIsBang bool
@@ -102,6 +103,12 @@ func (f *FunctionDecl) Pos() token.Position {
 func (*FunctionDecl) declNode() {}
 
 type Param struct {
+	Name    string
+	NamePos token.Position
+	Type    TypeRef
+}
+
+type ReceiverDecl struct {
 	Name    string
 	NamePos token.Position
 	Type    TypeRef

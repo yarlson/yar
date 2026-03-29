@@ -146,6 +146,18 @@ func (p *Parser) parseEnum(exported bool) *ast.EnumDecl {
 
 func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 	p.expect(token.Fn, "expected fn")
+	var receiver *ast.ReceiverDecl
+	if p.at(token.LParen) {
+		p.advance()
+		recvName := p.expect(token.Ident, "expected receiver name")
+		recvType := p.parseTypeRef()
+		p.expect(token.RParen, "expected ')' after receiver")
+		receiver = &ast.ReceiverDecl{
+			Name:    recvName.Text,
+			NamePos: recvName.Pos,
+			Type:    recvType,
+		}
+	}
 	nameTok := p.expect(token.Ident, "expected function name")
 	p.expect(token.LParen, "expected '(' after function name")
 
@@ -177,6 +189,7 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 		Exported:     exported,
 		Name:         nameTok.Text,
 		NamePos:      nameTok.Pos,
+		Receiver:     receiver,
 		Params:       params,
 		Return:       returnType,
 		ReturnIsBang: returnIsBang,

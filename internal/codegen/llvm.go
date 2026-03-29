@@ -573,20 +573,34 @@ func newFunctionEmitter(g *Generator, fn *ast.FunctionDecl, sig checker.Signatur
 	}
 }
 
+func functionParams(fn *ast.FunctionDecl) []ast.Param {
+	params := make([]ast.Param, 0, len(fn.Params)+1)
+	if fn.Receiver != nil {
+		params = append(params, ast.Param{
+			Name:    fn.Receiver.Name,
+			NamePos: fn.Receiver.NamePos,
+			Type:    fn.Receiver.Type,
+		})
+	}
+	params = append(params, fn.Params...)
+	return params
+}
+
 func (f *functionEmitter) emit() string {
 	retType := f.g.llvmType(f.sig.Return)
 	if f.sig.Errorable {
 		retType = f.g.resultTypeName(f.sig.Return)
 	}
 
-	params := make([]string, 0, len(f.fn.Params))
-	for i := range f.fn.Params {
+	fnParams := functionParams(f.fn)
+	params := make([]string, 0, len(fnParams))
+	for i := range fnParams {
 		params = append(params, fmt.Sprintf("%s %%arg%d", f.g.llvmType(f.sig.Params[i]), i))
 	}
 
 	fmt.Fprintf(&f.builder, "define %s %s(%s) {\n", retType, f.g.functionName(f.sig.FullName), strings.Join(params, ", "))
 	f.emitLabel("entry")
-	for i, param := range f.fn.Params {
+	for i, param := range fnParams {
 		slot := f.newLocalSlot(f.sig.Params[i])
 		fmt.Fprintf(&f.builder, "  store %s %%arg%d, ptr %s\n", f.g.llvmType(f.sig.Params[i]), i, slot)
 		f.bindLocal(param.Name, localSlot{typ: f.sig.Params[i], ptr: slot})
@@ -1615,6 +1629,13 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 	}
 
 	args := make([]exprValue, 0, len(expr.Args))
+	if sig.Method {
+		selector, ok := expr.Callee.(*ast.SelectorExpr)
+		if !ok {
+			panic("method call requires selector callee")
+		}
+		args = append(args, f.genExpression(selector.Inner))
+	}
 	for _, arg := range expr.Args {
 		args = append(args, f.genExpression(arg))
 	}

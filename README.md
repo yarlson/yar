@@ -47,13 +47,20 @@ hello, world
 
 Yar currently supports:
 
-- Top-level `struct`, `enum`, and `fn` declarations
+- Top-level `struct`, `enum`, `fn`, and method declarations
 - `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`
 - Typed pointers, fixed arrays, slices, and maps
 - Multi-file packages rooted at an entry `package main`
 - `if`, `for`, `break`, `continue`, `return`, and exhaustive `match`
+- Methods on named struct types with explicit value or pointer receivers
 - String indexing, slicing, concatenation, and equality
 - Native builds, IR emission, and direct execution from the CLI
+
+Current method support is intentionally small and explicit:
+
+- Methods are declared as `fn (u User) label() str { ... }`
+- Calls use `value.method(...)`
+- Receiver matching is exact; yar does not insert implicit `&` or `*`
 
 The embedded standard library currently includes:
 
@@ -71,7 +78,6 @@ The embedded standard library currently includes:
 
 Yar does not currently have:
 
-- Methods
 - Generics
 - Closures
 - Interfaces

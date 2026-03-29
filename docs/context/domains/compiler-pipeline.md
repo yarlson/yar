@@ -19,26 +19,28 @@
 - `internal/lexer` tokenizes source text, including control-flow, aggregate,
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.
-- `internal/parser` builds file ASTs, including top-level `struct` and `enum`
-  declarations, optional `pub` export markers, `import` declarations, loops,
-  exhaustive enum `match` statements, array and slice literals, enum
-  constructors, pointer types, `nil`, index and slice postfix forms,
-  generalized lvalue forms such as `(*ptr).field`, qualified call syntax, and
-  sugar nodes for `?` and `or |err| { ... }`.
+- `internal/parser` builds file ASTs, including top-level `struct`, `enum`,
+  `fn`, and receiver-style method declarations, optional `pub` export markers,
+  `import` declarations, loops, exhaustive enum `match` statements, array and
+  slice literals, enum constructors, pointer types, `nil`, index and slice
+  postfix forms, generalized lvalue forms such as `(*ptr).field`, method-call
+  selector syntax, qualified call syntax, and sugar nodes for `?` and
+  `or |err| { ... }`.
 - `internal/compiler/packages.go` resolves the package graph. It loads local
   `.yar` files from disk, falls back to embedded stdlib packages only when a
   local import path is missing, validates package names and import cycles, and
   lowers the graph into one combined `ast.Program` by rewriting package-local
   and imported symbols to canonical names.
-- `internal/checker` validates struct, enum, and function shape, tracks scopes,
-  resolves builtin and rewritten user function signatures, resolves
+- `internal/checker` validates struct, enum, function, and method shape, tracks
+  scopes, resolves builtin and rewritten user function signatures, resolves
   user-defined, enum, array, slice, map, and pointer types, assigns expression
   types, validates exhaustive enum `match`, validates addressability and
-  dereference rules, validates loop and assignment-target rules, validates
-  slice indexing/slicing and `append`, validates map key type restrictions,
-  indexing, and `keys`, validates error-sugar legality, and records ordered
-  error names.
-- `internal/codegen` lowers the checked AST into LLVM IR, expanding error
+  dereference rules, resolves method lookup from receiver types, validates loop
+  and assignment-target rules, validates slice indexing/slicing and `append`,
+  validates map key type restrictions, indexing, and `keys`, validates
+  error-sugar legality, and records ordered error names.
+- `internal/codegen` lowers the checked AST into LLVM IR, expanding method
+  calls into ordinary function calls with an explicit receiver argument, error
   sugar, enum `match`, and short-circuit boolean operators into explicit
   checks, branches, and returns, lowering loops and aggregate values, lowering
   enums to tagged aggregates with aligned payload storage, lowering pointers to
@@ -76,6 +78,9 @@
 - Front-end sugar is preserved through parsing and semantic analysis, then
   lowered during code generation rather than being represented as a runtime
   feature.
+- Methods follow the same pattern: receiver-aware syntax survives parsing and
+  checking, then code generation emits ordinary function symbols and receiver
+  arguments.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
 - Pointer-taking of locals and parameters is implemented conservatively by

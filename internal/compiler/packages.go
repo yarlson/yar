@@ -429,6 +429,10 @@ func (l *packageLowerer) indexPackages() {
 
 		functions := make(map[string]*ast.FunctionDecl)
 		for _, decl := range pkg.Functions {
+			if decl.Receiver != nil {
+				l.validateMethodReceiver(path, decl)
+				continue
+			}
 			if checker.IsBuiltinFunction(decl.Name) {
 				l.diag.Add(decl.NamePos, "function %q is already declared", decl.Name)
 				continue
@@ -486,12 +490,33 @@ func (l *packageLowerer) validateExportedDeclarations() {
 			if !decl.Exported {
 				continue
 			}
+			if decl.Receiver != nil {
+				l.validateExportedLocalTypeRef(path, decl.Receiver.Type, "method", decl.Name)
+			}
 			for _, param := range decl.Params {
 				l.validateExportedLocalTypeRef(path, param.Type, "function", decl.Name)
 			}
 			l.validateExportedLocalTypeRef(path, decl.Return, "function", decl.Name)
 		}
 	}
+}
+
+func (l *packageLowerer) validateMethodReceiver(packagePath string, decl *ast.FunctionDecl) {
+	if decl.Receiver == nil {
+		return
+	}
+	base := decl.Receiver.Type.Name
+	if pointer, ok := checker.ParsePointerType(checker.Type(base)); ok {
+		base = string(pointer.Elem)
+	}
+	if strings.Contains(base, ".") {
+		l.diag.Add(decl.Receiver.Type.Pos, "method receiver must be a named local struct type or pointer to one")
+		return
+	}
+	if _, ok := l.structs[packagePath][base]; ok {
+		return
+	}
+	l.diag.Add(decl.Receiver.Type.Pos, "method receiver must be a named local struct type or pointer to one")
 }
 
 func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref ast.TypeRef, ownerKind, ownerName string) {
@@ -580,6 +605,14 @@ func (l *packageLowerer) lowerEnums(pkg *ast.Package) []*ast.EnumDecl {
 func (l *packageLowerer) lowerFunctions(pkg *ast.Package) []*ast.FunctionDecl {
 	decls := make([]*ast.FunctionDecl, 0, len(pkg.Functions))
 	for _, decl := range pkg.Functions {
+		var receiver *ast.ReceiverDecl
+		if decl.Receiver != nil {
+			receiver = &ast.ReceiverDecl{
+				Name:    decl.Receiver.Name,
+				NamePos: decl.Receiver.NamePos,
+				Type:    l.rewriteTypeRef(pkg, decl.Receiver.Type),
+			}
+		}
 		params := make([]ast.Param, 0, len(decl.Params))
 		for _, param := range decl.Params {
 			params = append(params, ast.Param{
@@ -588,10 +621,15 @@ func (l *packageLowerer) lowerFunctions(pkg *ast.Package) []*ast.FunctionDecl {
 				Type:    l.rewriteTypeRef(pkg, param.Type),
 			})
 		}
+		name := canonicalFunctionName(l.graph.Entry, pkg, decl.Name)
+		if receiver != nil {
+			name = decl.Name
+		}
 		decls = append(decls, &ast.FunctionDecl{
 			Exported:     decl.Exported,
-			Name:         canonicalFunctionName(l.graph.Entry, pkg, decl.Name),
+			Name:         name,
 			NamePos:      decl.NamePos,
+			Receiver:     receiver,
 			Params:       params,
 			Return:       l.rewriteTypeRef(pkg, decl.Return),
 			ReturnIsBang: decl.ReturnIsBang,

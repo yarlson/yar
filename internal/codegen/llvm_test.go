@@ -231,6 +231,43 @@ fn main() i32 {
 	}
 }
 
+func TestGenerateLowersMethods(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+struct Counter {
+	value i32
+}
+
+fn (c Counter) current() i32 {
+	return c.value
+}
+
+fn (c *Counter) inc(delta i32) void {
+	(*c).value = (*c).value + delta
+}
+
+fn main() i32 {
+	counter := &Counter{value: 2}
+	counter.inc(3)
+	return (*counter).current()
+}
+`)
+
+	for _, want := range []string{
+		"define i32 @yar.Counter.current(",
+		"define void @yar.Counter.inc(",
+		"call void @yar.Counter.inc(",
+		"call i32 @yar.Counter.current(",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, ir)
+		}
+	}
+}
+
 func TestEmitAllocHelpers(t *testing.T) {
 	t.Parallel()
 

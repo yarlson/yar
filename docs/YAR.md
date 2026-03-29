@@ -135,7 +135,6 @@ struct Node {
 
 There are no:
 
-- methods
 - embedding
 - tags
 
@@ -299,9 +298,33 @@ fn add(a i32, b i32) i32 {
 
 Parameters are positional and explicitly typed.
 
+Methods attach behavior to named struct types:
+
+```yar
+struct User {
+    name str
+}
+
+fn (u User) label() str {
+    return u.name
+}
+
+fn (u *User) rename(name str) void {
+    (*u).name = name
+}
+```
+
+Current method rules:
+
+- methods are allowed only on named struct types declared in the same package
+- receivers may be either `T` or `*T`
+- method calls use `value.method(...)`
+- pointer and value receivers do not auto-convert; match the receiver type explicitly
+- methods are not first-class values, so `value.method` without `(...)` is rejected
+- exported methods use `pub fn (...)`
+
 There are no:
 
-- methods
 - generics
 - variadics
 
@@ -373,6 +396,7 @@ Implemented expressions:
 
 - local identifiers
 - package-qualified function calls
+- method calls
 - integer literals
 - string literals
 - boolean literals
@@ -753,7 +777,6 @@ Available functions:
 
 The compiler does not currently implement:
 
-- methods
 - import aliases
 - generics
 - closures or lambdas

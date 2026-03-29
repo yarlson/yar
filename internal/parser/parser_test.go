@@ -261,6 +261,78 @@ fn main() i32 {
 	}
 }
 
+func TestParseMethodDeclarations(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+struct User {
+	name str
+}
+
+fn (u User) label(prefix str) str {
+	return prefix + u.name
+}
+
+fn (u *User) rename(name str) void {
+	(*u).name = name
+}
+
+fn main() i32 {
+	user := User{name: "ada"}
+	print(user.label("hi "))
+	print("\n")
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	valueMethod := program.Functions[0]
+	if valueMethod.Receiver == nil {
+		t.Fatal("expected value receiver")
+	}
+	if got, want := valueMethod.Receiver.Name, "u"; got != want {
+		t.Fatalf("unexpected receiver name: got %q want %q", got, want)
+	}
+	if got, want := valueMethod.Receiver.Type.Name, "User"; got != want {
+		t.Fatalf("unexpected receiver type: got %q want %q", got, want)
+	}
+	if got, want := valueMethod.Params[0].Name, "prefix"; got != want {
+		t.Fatalf("unexpected param name: got %q want %q", got, want)
+	}
+
+	pointerMethod := program.Functions[1]
+	if pointerMethod.Receiver == nil {
+		t.Fatal("expected pointer receiver")
+	}
+	if got, want := pointerMethod.Receiver.Type.Name, "*User"; got != want {
+		t.Fatalf("unexpected receiver type: got %q want %q", got, want)
+	}
+
+	stmt, ok := program.Functions[2].Body.Stmts[1].(*ast.ExprStmt)
+	if !ok {
+		t.Fatalf("expected expression statement, got %T", program.Functions[2].Body.Stmts[1])
+	}
+	call, ok := stmt.Expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expression, got %T", stmt.Expr)
+	}
+	selector, ok := call.Args[0].(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected nested method call argument, got %T", call.Args[0])
+	}
+	callee, ok := selector.Callee.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("expected selector callee, got %T", selector.Callee)
+	}
+	if got, want := callee.Name, "label"; got != want {
+		t.Fatalf("unexpected method name: got %q want %q", got, want)
+	}
+}
+
 func TestParseForClausePointerAssignment(t *testing.T) {
 	t.Parallel()
 

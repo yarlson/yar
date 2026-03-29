@@ -520,6 +520,18 @@ func TestBuildAndRunImportFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestBuildAndRunMethodFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "methods", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "5\nada\neve\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildPathAllSamplePrograms(t *testing.T) {
 	samples, err := sampleProgramPaths()
 	if err != nil {
@@ -568,6 +580,46 @@ fn hidden() i32 {
 		t.Fatal("expected diagnostics")
 	}
 	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "package \"lib\" does not export function \"hidden\"") {
+		t.Fatalf("unexpected diagnostics: %s", got)
+	}
+}
+
+func TestCompilePathRejectsUnexportedMethod(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "main.yar"), `package main
+
+import "lib"
+
+fn main() i32 {
+	box := lib.make_box(3)
+	return box.secret()
+}
+`)
+	writeSourceFile(t, filepath.Join(root, "lib", "lib.yar"), `package lib
+
+pub struct Box {
+	value i32
+}
+
+pub fn make_box(value i32) Box {
+	return Box{value: value}
+}
+
+fn (b Box) secret() i32 {
+	return b.value
+}
+`)
+
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics")
+	}
+	if got := joinDiagnosticMessages(diags); !strings.Contains(got, "package \"lib\" does not export method \"secret\"") {
 		t.Fatalf("unexpected diagnostics: %s", got)
 	}
 }

@@ -16,9 +16,9 @@ executable.
 - `internal/ast` defines the file AST plus the `Package` and `PackageGraph` structures used during package loading and lowering.
 - `internal/compiler` resolves entry paths, loads local packages, falls back to embedded stdlib packages when local imports are missing, validates the import graph, rewrites package-local and imported symbols to canonical names, and orchestrates checking, IR generation, native linking, and execution.
 - `internal/lexer` tokenizes source text into a token stream with lexical diagnostics.
-- `internal/parser` builds file ASTs, including imports, structs, enums, loops, `match`, aggregate literals, pointers, and error-handling sugar.
-- `internal/checker` owns semantic validation, scope tracking, struct and enum metadata, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
-- `internal/codegen` lowers the checked AST into textual LLVM IR, expanding error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation helpers.
+- `internal/parser` builds file ASTs, including imports, structs, enums, methods, loops, `match`, aggregate literals, pointers, and error-handling sugar.
+- `internal/checker` owns semantic validation, scope tracking, struct and enum metadata, function and method signatures, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
+- `internal/codegen` lowers the checked AST into textual LLVM IR, expanding method calls into ordinary function calls with an explicit receiver argument, error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation helpers.
 - `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, host filesystem and process calls, environment lookup, stderr output, argv capture, and the shared allocation/trap boundary used during linking.
 - `internal/stdlib` embeds the standard library written in yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
 
@@ -32,10 +32,10 @@ executable.
 ## System State
 
 - The repository contains one deployable unit: the `yar` CLI compiler.
-- Programs are package graphs rooted at an entry `package main`, with one or more `.yar` files per package, explicit `import` declarations, package-qualified cross-package references, and optional `pub` on top-level `struct`, `enum`, and `fn` declarations.
+- Programs are package graphs rooted at an entry `package main`, with one or more `.yar` files per package, explicit `import` declarations, package-qualified cross-package references, top-level `struct`, `enum`, `fn`, and method declarations, and optional `pub` on exported structs, enums, functions, and methods.
 - Local imports resolve under the entry root directory. When a local import path is absent, the loader falls back to the embedded stdlib package of the same name. A local package shadows a stdlib package with the same import path.
 - The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, typed pointers, user-defined structs, user-defined enums with optional payload cases, fixed arrays, slices, and maps.
-- The language supports `:=`, `var`, assignment to locals, fields, array indices, slice indices, dereferences, and map elements, `if` / `else`, `for`, `break`, `continue`, exhaustive `match` over enum values, struct literals, enum constructors, array literals, slice literals, map literals, pointer address-of and dereference, `nil`, field access, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean/string/pointer comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
+- The language supports `:=`, `var`, assignment to locals, fields, array indices, slice indices, dereferences, and map elements, `if` / `else`, `for`, `break`, `continue`, exhaustive `match` over enum values, struct literals, enum constructors, array literals, slice literals, map literals, pointer address-of and dereference, `nil`, field access, method calls with explicit receiver syntax, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer and boolean/string/pointer comparisons, string literals, explicit `error.Name` returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
 - String operations include `len(str)`, `str == str`, `str != str`, `str + str`, `s[i]`, and `s[i:j]`.
 - Builtins are fixed in the compiler and runtime: `print(str)`, `print_int(i32)`, `panic(str)`, `len(array-or-slice-or-map-or-str)`, `append(slice, value)`, `has(map, key)`, `delete(map, key)`, and `keys(map)`. Three additional builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the standard library and not available to user code.
 - The embedded stdlib is imported like normal packages. `sort` provides in-place ascending helpers for `[]str`, `[]i32`, and `[]i64`; `path` provides pure path helpers; `fs` exposes host-backed text file and directory operations with explicit `error` behavior; `process` exposes the raw host argv plus child-process execution; `env` exposes environment lookup; and `stdio` provides stderr output.
@@ -50,6 +50,7 @@ executable.
 - Handle errors locally with `or |err| { ... }`.
 - Model closed variants with enums, payload-carrying enum cases, and exhaustive `match`.
 - Support aggregate values and return types with structs, fixed arrays, slices, maps, and pointers.
+- Declare methods on named struct types with value or pointer receivers.
 - Enumerate map keys through snapshot slices with `keys(map[K]V) []K`.
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
