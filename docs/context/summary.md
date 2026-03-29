@@ -20,7 +20,7 @@ executable.
 - `internal/checker` owns semantic validation, scope tracking, struct and enum metadata, function, method, and closure signatures, lexical capture analysis, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
 - `internal/codegen` lowers the checked AST into textual LLVM IR, expanding method calls into ordinary function calls with an explicit receiver argument, lowering function values to code-pointer-plus-environment closures, expanding error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation helpers.
 - `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, host filesystem and process calls, environment lookup, stderr output, argv capture, and the shared allocation/trap boundary used during linking.
-- `internal/stdlib` embeds the standard library written in yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
+- `internal/stdlib` embeds the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
 
 ## Core Flow
 
@@ -57,8 +57,8 @@ executable.
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
 - Expose a runtime-managed allocation boundary for slices, maps, pointers, and other heap-backed features.
-- Read and write text files, inspect directories, create temporary directories, and manipulate host paths from yar programs.
-- Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from yar programs.
+- Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
+- Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
 
 ## Tech Stack
 
@@ -66,5 +66,5 @@ executable.
 - Custom lexer, parser, checker, and LLVM IR generator
 - External `clang` invocation for compile and link, overridable via `CC`
 - Embedded C runtime source for builtin functions, host integration, and shared allocation helpers
-- Embedded yar standard library compiled through the same frontend as user code
+- Embedded Yar standard library compiled through the same frontend as user code
 - Go tests that validate compilation, executable output, panic behavior, unhandled errors, package imports, strings, maps, slices, pointers, enums, stdlib packages, host filesystem and process behavior, and toolchain/runtime boundaries

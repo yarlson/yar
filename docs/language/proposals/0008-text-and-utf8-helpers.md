@@ -141,7 +141,7 @@ called through the existing package-qualified syntax.
 
 ## 7. Lowering / Implementation Model
 
-### What can be written in pure yar
+### What can be written in pure Yar
 
 With proposal 0006 primitives (`len`, `s[i]`, `s[i:j]`, `+`, `==`):
 
@@ -156,25 +156,25 @@ With proposal 0006 primitives (`len`, `s[i]`, `s[i:j]`, `+`, `==`):
 ### What needs new builtins or runtime support
 
 - `strings.from_byte(i32) str`: requires constructing a `%yar.str` from a
-  single byte value. This cannot be expressed in pure yar today. Options:
+  single byte value. This cannot be expressed in pure Yar today. Options:
   - Add a minimal `chr(i32) str` builtin that creates a one-byte string
   - Add a runtime helper `yar_str_from_byte(i32) %yar.str`
 
 - `conv.itoa(i32) str` and `conv.itoa64(i64) str`: technically implementable
-  in pure yar using digit extraction and `strings.from_byte`, but awkward
+  in pure Yar using digit extraction and `strings.from_byte`, but awkward
   without a string builder. Options:
-  - Implement in yar once `from_byte` exists (correct but O(n^2) from concat)
+  - Implement in Yar once `from_byte` exists (correct but O(n^2) from concat)
   - Add runtime helpers for efficiency
 
 ### Recommended approach
 
 Add one small builtin or runtime helper — `chr(i32) str` — that constructs a
-one-byte string. Everything else can be written in pure yar on top of it.
+one-byte string. Everything else can be written in pure Yar on top of it.
 
-- `internal/stdlib/packages/utf8/utf8.yar` — all five utf8 functions in yar
+- `internal/stdlib/packages/utf8/utf8.yar` — all five utf8 functions in Yar
 - `internal/stdlib/packages/strings/strings.yar` — add `parse_i64` and
   `from_byte` (wrapping `chr`)
-- `internal/stdlib/packages/conv/conv.yar` — `itoa` and `itoa64` in yar using
+- `internal/stdlib/packages/conv/conv.yar` — `itoa` and `itoa64` in Yar using
   `from_byte` for digit characters
 
 ### Implementation steps
@@ -256,7 +256,7 @@ Accepted.
 Implemented with three builtins (`chr`, `i32_to_i64`, `i64_to_i32`) instead of
 the originally proposed single `chr` builtin. The additional integer conversion
 builtins were needed because the language lacks implicit widening/narrowing
-between `i32` and `i64`, making pure-yar implementations of `parse_i64` and
+between `i32` and `i64`, making pure-Yar implementations of `parse_i64` and
 `itoa64` impossible without them.
 
 This proposal deliberately keeps the helper set small and focused on the needs

@@ -126,9 +126,9 @@ The important implementation constraint is to keep the host boundary as small as
 possible.
 
 The public `fs` and `path` packages should remain stdlib packages written in
-yar. Only the irreducible host-facing operations should require
+Yar. Only the irreducible host-facing operations should require
 compiler/runtime support. Deterministic path logic and higher-level filesystem
-composition should stay in yar source where practical.
+composition should stay in Yar source where practical.
 
 ### `fs`
 
@@ -166,8 +166,8 @@ The intended design is:
 
 - keep low-level host-touching operations behind compiler-known intrinsics or
   runtime shims
-- implement recursive or composed behavior in yar where possible
-- allow `fs.mkdir_all` and `fs.remove_all` to be ordinary yar functions layered
+- implement recursive or composed behavior in Yar where possible
+- allow `fs.mkdir_all` and `fs.remove_all` to be ordinary Yar functions layered
   over smaller host primitives if that keeps the runtime smaller
 
 All host failures are explicit errors. Expected error names in the initial
@@ -194,7 +194,7 @@ but the language/runtime contract must preserve these stable user-visible names.
 - `path.base(p)` returns the final path element
 - `path.ext(p)` returns the suffix starting at the final `.`, or `""`
 
-The intended implementation is that `path` lives entirely in yar unless one
+The intended implementation is that `path` lives entirely in Yar unless one
 small platform-normalization hook proves necessary. The default design target is
 to keep `path` logic out of the runtime.
 
@@ -237,19 +237,19 @@ ordinary package-qualified calls:
 - codegen: lower selected stdlib calls to a minimal set of compiler-known host
   intrinsics or runtime shims
 - runtime: expose only the low-level host boundary that cannot be expressed
-  cleanly in yar or portable generated LLVM
+  cleanly in Yar or portable generated LLVM
 
 The preferred split is:
 
-- move all deterministic path logic into yar
-- move recursive or composed filesystem logic into yar where possible
+- move all deterministic path logic into Yar
+- move recursive or composed filesystem logic into Yar where possible
 - keep only low-level host calls as intrinsics/runtime shims
 - let codegen perform the lowering from public stdlib calls to those low-level
   shims
 
 This means the runtime surface should be smaller than the public stdlib surface.
 For example, it is acceptable for public `fs.mkdir_all` or `fs.remove_all` to be
-implemented in yar on top of lower-level host operations rather than mirrored as
+implemented in Yar on top of lower-level host operations rather than mirrored as
 1:1 runtime functions.
 
 The most important design choice is that `fs` is still presented as standard
@@ -280,7 +280,7 @@ FFI.
 ### Keep host I/O outside the language entirely
 
 Rejected because a self-hosted frontend still needs to load packages and emit
-artifacts from yar code, not from a permanently privileged Go wrapper.
+artifacts from Yar code, not from a permanently privileged Go wrapper.
 
 ### Add file I/O as builtins only
 
@@ -290,7 +290,7 @@ than to the global builtin namespace.
 ### Mirror the public `fs` / `path` API directly in the runtime
 
 Rejected as the default design because it makes the runtime surface grow too
-quickly and duplicates logic that can live in yar or codegen. The public stdlib
+quickly and duplicates logic that can live in Yar or codegen. The public stdlib
 API should be larger than the irreducible host boundary when that keeps the
 runtime smaller and clearer.
 
@@ -328,7 +328,7 @@ boundary.
   unspecified order?
 - Should `path` use platform-native separators in all returned strings, or
   preserve slash forms where possible?
-- What is the smallest low-level host primitive set that still lets yar
+- What is the smallest low-level host primitive set that still lets Yar
   implement `fs.mkdir_all` and `fs.remove_all` without pushing that logic back
   into the runtime?
 - Should local packages be allowed to shadow host stdlib package names such as
@@ -346,8 +346,8 @@ accepted in isolation from the rest of the host-bound surface.
 - stdlib package API design
 - runtime host I/O boundary
 - lowering/codegen hooks for host calls
-- yar-level implementation plan for `path`
-- yar-level implementation plan for recursive/composed `fs` helpers
+- Yar-level implementation plan for `path`
+- Yar-level implementation plan for recursive/composed `fs` helpers
 - diagnostics for host-failure error names
 - integration tests for file loading and output writing
 - package-loader migration plan

@@ -1,7 +1,9 @@
-# yar
+# Yar
 
-Errors are visible. Variants are closed. Output is native. Read
-[The Yar Code](docs/language/the-yar-code.md) before you write a line.
+Yar is a compiled programming language. Errors are visible. Variants are
+closed. Output is native.
+
+Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 
 ## Quick look
 
@@ -30,7 +32,7 @@ fn main() !i32 {
 hello, world
 ```
 
-## What yar does
+## What Yar does
 
 - Functions that can fail return `!T`. The caller handles it or propagates it.
   There are no exceptions.
@@ -42,7 +44,7 @@ hello, world
 - Closures capture by value at creation time. No surprises.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
-- The standard library is written in yar and compiled through the same pipeline
+- The standard library is written in Yar and compiled through the same pipeline
   as user code.
 
 ## Standard library
@@ -100,7 +102,7 @@ yar <command> <path> [-o output]
 
 ## Documentation
 
-- [The Yar Code](docs/language/the-yar-code.md) — how to write yar programs
+- [The Yar Code](docs/language/the-yar-code.md) — how to write Yar programs
 - [Language reference](docs/YAR.md) — what the compiler implements today
 - [Language design docs](docs/language/) — proposals, decisions, and process
 - [Context docs](docs/context/) — architecture, runtime, and compiler internals
@@ -122,7 +124,7 @@ internal/
   codegen/        LLVM IR generation
   compiler/       Pipeline orchestration and package loading
   runtime/        Embedded C runtime
-  stdlib/         Embedded standard library (yar source)
+  stdlib/         Embedded standard library (Yar source)
 testdata/         Representative sample programs
 docs/             Language and design documentation
 ```

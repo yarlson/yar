@@ -2,7 +2,7 @@
 
 ## Design
 
-- The standard library is written in yar, not C or Go.
+- The standard library is written in Yar, not C or Go.
 - Stdlib packages are embedded into the Go compiler binary using `go:embed` via
   the `internal/stdlib` package.
 - Stdlib packages are imported with bare paths like any user package:
@@ -11,7 +11,7 @@
   directory with the same name shadows the stdlib package.
 - Stdlib packages are parsed, type-checked, and compiled through the same
   pipeline as user code.
-- Most stdlib functions are ordinary yar code. A small set of embedded `fs`,
+- Most stdlib functions are ordinary Yar code. A small set of embedded `fs`,
   `process`, `env`, and `stdio` declarations are tagged as host intrinsics
   during checking and code generation and lower to runtime shims while keeping
   the user-facing API package-shaped.
@@ -94,7 +94,7 @@ Functions:
 - `i32s(values []i32) void` — ascending numeric order
 - `i64s(values []i64) void` — ascending numeric order
 
-All three helpers use simple in-place insertion sort written in yar itself.
+All three helpers use simple in-place insertion sort written in Yar itself.
 
 ### `path`
 

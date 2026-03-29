@@ -42,7 +42,7 @@ A self-hosted `yar` compiler eventually needs to:
 - print diagnostics to stderr without treating them as panics
 
 Today the Go driver owns all of that host process logic. Without a corresponding
-yar surface, a rewritten frontend can at best become a library embedded inside a
+Yar surface, a rewritten frontend can at best become a library embedded inside a
 permanent Go CLI.
 
 ## 3. User-Facing Examples
@@ -208,7 +208,7 @@ Additional implementation constraints from proposal 0009:
   aggregate returns across all targets
 - preserve stable user-visible YAR error names even if the runtime uses
   implementation-specific host status codes internally
-- keep as much deterministic logic as possible in yar source, reserving runtime
+- keep as much deterministic logic as possible in Yar source, reserving runtime
   shims for irreducible host interaction only
 
 ## 8. Interactions
@@ -229,7 +229,7 @@ Additional implementation constraints from proposal 0009:
 ### Keep process execution in an outer Go launcher forever
 
 Rejected because that would make the self-hosted compiler permanently dependent
-on a privileged non-yar shell around it.
+on a privileged non-Yar shell around it.
 
 ### Treat non-zero child exit as `error`
 

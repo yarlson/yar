@@ -93,7 +93,7 @@ exhaustive `match` over enum values.
 Status: accepted
 
 YAR exposes host filesystem access through stdlib packages rather than new
-syntax-level builtins. `path` stays pure yar code, while the small `fs` surface
+syntax-level builtins. `path` stays pure Yar code, while the small `fs` surface
 lowers to runtime shims with stable user-visible error names.
 
 ### Sorting helpers
@@ -166,7 +166,7 @@ slicing returning `str`. Out-of-range operations trap at runtime.
 
 Status: accepted
 
-The compiler embeds a standard library written in yar. Stdlib packages are
+The compiler embeds a standard library written in Yar. Stdlib packages are
 resolved as a fallback when an import path does not match a local directory.
 Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`,
 `sort`, `path`, `fs`, `process`, `env`, `stdio`.

@@ -124,11 +124,11 @@ This proposal is entirely standard-library shaped:
 - checker: ordinary package-qualified calls
 - codegen: ordinary function lowering
 - runtime: no required host boundary if the sort package is implemented in pure
-  yar
+  Yar
 
 This proposal is intentionally library-sized, not syntax-sized.
 
-The likely implementation is a simple in-place comparison sort in yar itself.
+The likely implementation is a simple in-place comparison sort in Yar itself.
 That keeps the language surface small while still standardizing a crucial piece
 of deterministic tooling behavior.
 

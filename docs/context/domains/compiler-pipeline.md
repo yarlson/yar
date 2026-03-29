@@ -59,7 +59,7 @@
   including builtin I/O, panic behavior, string operations, slice bounds
   checks, map operations and key enumeration, host filesystem and process
   shims, and the shared allocation/trap boundary.
-- `internal/stdlib` embeds the standard library written in yar and provides
+- `internal/stdlib` embeds the standard library written in Yar and provides
   lookup functions for the package loader.
 
 ## Stage Contracts

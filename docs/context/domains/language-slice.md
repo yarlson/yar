@@ -201,7 +201,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
   `path`, `fs`, `process`, `env`, and `stdio`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
-- `path` is pure yar code and provides `clean`, `join`, `dir`, `base`, and
+- `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and
   `ext` for host-style path manipulation.
 - `fs` provides explicit-error text file and directory operations: `read_file`,
   `write_file`, `read_dir`, `stat`, `mkdir_all`, `remove_all`, and `temp_dir`.

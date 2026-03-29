@@ -114,7 +114,7 @@ Current generic rules:
 
 - generic declarations are supported on top-level `struct` and `fn`
 - every use site must supply explicit type arguments
-- type arguments are ordinary yar types such as `i32`, `str`, `[]User`, or `Box[i64]`
+- type arguments are ordinary Yar types such as `i32`, `str`, `[]User`, or `Box[i64]`
 - generic structs may be used in fields, parameters, returns, locals, and literals
 - generic functions may be called across packages with explicit type arguments
 - instantiations are monomorphized before semantic checking and code generation
@@ -664,7 +664,7 @@ Out-of-range slice indexing and invalid slice ranges trap with a runtime failure
 
 ## Standard Library
 
-The compiler ships with an embedded standard library written in yar. Stdlib
+The compiler ships with an embedded standard library written in Yar. Stdlib
 packages are imported like regular packages. If a local package with the same
 name exists, it takes priority over the stdlib version.
 

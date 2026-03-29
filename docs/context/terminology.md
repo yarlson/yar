@@ -1,6 +1,6 @@
 # Terminology
 
-yar — The compiler CLI and the source language implemented in this repository.
+Yar — The compiler CLI and the source language implemented in this repository.
 
 file AST — A parsed source file with a package declaration, optional imports,
 and top-level `struct`, `enum`, `fn`, and method declarations.
@@ -60,7 +60,7 @@ builtin — A compiler-owned operation with checker-defined behavior: `print`,
 `print_int`, `panic`, `len`, `append`, `has`, `delete`, or `keys`.
 
 host intrinsic — A stdlib declaration whose checker/codegen wiring calls a
-runtime helper directly instead of emitted yar code.
+runtime helper directly instead of emitted Yar code.
 
 enum — A user-defined closed variant type with named cases, each case
 optionally carrying a payload of named fields.
@@ -71,7 +71,7 @@ binding payload fields when present.
 unhandled error — An errorable `main` result that reaches the generated native
 wrapper, which prints an error message and exits with code `1`.
 
-stdlib — The embedded standard library of yar packages (`strings`, `utf8`,
+stdlib — The embedded standard library of Yar packages (`strings`, `utf8`,
 `conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`) compiled through the
 same pipeline as user code.
 
