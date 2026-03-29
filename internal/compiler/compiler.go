@@ -19,7 +19,7 @@ type Unit struct {
 	Info checker.Info
 }
 
-func Compile(src string) (*Unit, []diag.Diagnostic, error) {
+func Compile(src, targetTriple string) (*Unit, []diag.Diagnostic, error) {
 	program, parseDiags := parser.Parse(src)
 	if len(parseDiags) > 0 {
 		return nil, parseDiags, nil
@@ -35,7 +35,7 @@ func Compile(src string) (*Unit, []diag.Diagnostic, error) {
 		return nil, checkDiags, nil
 	}
 
-	ir, err := codegen.Generate(program, info)
+	ir, err := codegen.Generate(program, info, targetTriple)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -46,8 +46,8 @@ func Compile(src string) (*Unit, []diag.Diagnostic, error) {
 	}, nil, nil
 }
 
-func Build(ctx context.Context, src, outputPath string) error {
-	unit, diags, err := Compile(src)
+func Build(ctx context.Context, src string, target Target, outputPath string) error {
+	unit, diags, err := Compile(src, target.Triple)
 	if err != nil {
 		return err
 	}
@@ -71,11 +71,11 @@ func Build(ctx context.Context, src, outputPath string) error {
 		return err
 	}
 
-	return invokeCC(ctx, irPath, runtimePath, outputPath)
+	return invokeCC(ctx, target, irPath, runtimePath, outputPath)
 }
 
-func BuildPath(ctx context.Context, path, outputPath string) error {
-	unit, diags, err := CompilePath(path)
+func BuildPath(ctx context.Context, path string, target Target, outputPath string) error {
+	unit, diags, err := CompilePath(path, target.Triple)
 	if err != nil {
 		return err
 	}
@@ -98,18 +98,26 @@ func BuildPath(ctx context.Context, path, outputPath string) error {
 		return err
 	}
 
-	return invokeCC(ctx, irPath, runtimePath, outputPath)
+	return invokeCC(ctx, target, irPath, runtimePath, outputPath)
 }
 
 func Run(ctx context.Context, src string) error {
+	target, err := ResolveTarget()
+	if err != nil {
+		return err
+	}
+	if target.IsCross() {
+		return fmt.Errorf("cannot execute cross-compiled binary (target %s/%s)", target.OS, target.Arch)
+	}
+
 	tmpDir, err := os.MkdirTemp("", "yar-run-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	outputPath := filepath.Join(tmpDir, "program"+exeSuffix())
-	if err := Build(ctx, src, outputPath); err != nil {
+	outputPath := filepath.Join(tmpDir, "program"+target.ExeSuffix())
+	if err := Build(ctx, src, target, outputPath); err != nil {
 		return err
 	}
 
@@ -121,14 +129,22 @@ func Run(ctx context.Context, src string) error {
 }
 
 func RunPath(ctx context.Context, path string) error {
+	target, err := ResolveTarget()
+	if err != nil {
+		return err
+	}
+	if target.IsCross() {
+		return fmt.Errorf("cannot execute cross-compiled binary (target %s/%s)", target.OS, target.Arch)
+	}
+
 	tmpDir, err := os.MkdirTemp("", "yar-run-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
 
-	outputPath := filepath.Join(tmpDir, "program"+exeSuffix())
-	if err := BuildPath(ctx, path, outputPath); err != nil {
+	outputPath := filepath.Join(tmpDir, "program"+target.ExeSuffix())
+	if err := BuildPath(ctx, path, target, outputPath); err != nil {
 		return err
 	}
 

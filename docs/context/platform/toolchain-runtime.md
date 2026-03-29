@@ -15,12 +15,29 @@
 - The default output name for `build` is `a.out` on Unix and `a.exe` on
   Windows.
 
+## Cross-Compilation
+
+- `YAR_OS` and `YAR_ARCH` environment variables select the build target. If
+  neither is set, the host platform is used. Both must be set together.
+- The compiler maps the OS/arch pair to an LLVM target triple and passes
+  `--target=<triple>` to `clang`. The generated LLVM IR also includes a
+  `target triple` directive.
+- Supported targets: `darwin/amd64`, `darwin/arm64`, `linux/amd64`,
+  `linux/arm64`, `windows/amd64`.
+- Cross-compilation requires a `clang` installation that can target the
+  requested platform, including the appropriate sysroot and system libraries.
+- `yar run` rejects cross-compilation targets since the built binary cannot
+  execute on the host.
+
 ## Embedded Runtime
 
 - The runtime implementation lives in `internal/runtime/runtime_source.txt` and
   is embedded into the Go binary with `go:embed`.
 - The build step materializes that source into a temporary `runtime.c` file
   rather than requiring cgo or a checked-in compiled artifact.
+- The runtime uses `#ifdef _WIN32` conditionals to support both POSIX and
+  Windows platforms from a single source file. `clang` defines `_WIN32`
+  automatically when targeting a Windows triple.
 
 ## Runtime Surface
 

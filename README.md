@@ -80,6 +80,29 @@ Override the C compiler if needed:
 CC=clang-17 ./bin/yar build main.yar
 ```
 
+## Cross-compilation
+
+Set `YAR_OS` and `YAR_ARCH` to build for a different platform:
+
+```bash
+YAR_OS=linux YAR_ARCH=amd64 ./bin/yar build main.yar
+YAR_OS=windows YAR_ARCH=amd64 ./bin/yar build main.yar -o main.exe
+```
+
+Supported targets:
+
+| `YAR_OS`  | `YAR_ARCH` |
+| --------- | ---------- |
+| `darwin`  | `amd64`    |
+| `darwin`  | `arm64`    |
+| `linux`   | `amd64`    |
+| `linux`   | `arm64`    |
+| `windows` | `amd64`    |
+
+Cross-compilation requires a `clang` that can target the requested platform
+(appropriate sysroot and system libraries). `yar run` only supports the host
+platform.
+
 <details>
 <summary>Installing clang</summary>
 

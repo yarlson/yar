@@ -61,12 +61,13 @@ executable.
 - Reclaim unreachable heap-backed storage without adding user-visible lifetime syntax.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
+- Cross-compile to different OS/architecture targets using `YAR_OS` and `YAR_ARCH` environment variables without requiring knowledge of LLVM triples.
 
 ## Tech Stack
 
 - Go 1.26 module with a single CLI entrypoint
 - Custom lexer, parser, checker, and LLVM IR generator
-- External `clang` invocation for compile and link, overridable via `CC`
-- Embedded C runtime source for builtin functions, host integration, and shared allocation / garbage-collection helpers
+- External `clang` invocation for compile and link, overridable via `CC`; cross-compilation targets specified via `YAR_OS` and `YAR_ARCH` environment variables
+- Embedded C runtime source for builtin functions, host integration, and shared allocation / garbage-collection helpers, with `#ifdef _WIN32` conditionals for Windows platform support
 - Embedded Yar standard library compiled through the same frontend as user code
 - Go tests that validate compilation, executable output, panic behavior, unhandled errors, package imports, strings, maps, slices, pointers, enums, stdlib packages, host filesystem and process behavior, and toolchain/runtime boundaries

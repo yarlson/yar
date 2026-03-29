@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 	"yar/internal/compiler"
 	"yar/internal/diag"
@@ -26,7 +25,7 @@ func run() int {
 	case "check":
 		return runCheck(os.Args[2])
 	case "emit-ir":
-		return runEmitIR(os.Args[2])
+		return runEmitIR(os.Args[2:])
 	case "build":
 		return runBuild(os.Args[2:])
 	case "run":
@@ -38,7 +37,7 @@ func run() int {
 }
 
 func runCheck(path string) int {
-	_, diagnostics, err := compiler.CompilePath(path)
+	_, diagnostics, err := compiler.CompilePath(path, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -50,8 +49,31 @@ func runCheck(path string) int {
 	return 0
 }
 
-func runEmitIR(path string) int {
-	unit, diagnostics, err := compiler.CompilePath(path)
+func runEmitIR(args []string) int {
+	var path string
+	for i := 0; i < len(args); i++ {
+		if args[i] != "" && args[i][0] == '-' {
+			fmt.Fprintf(os.Stderr, "unknown emit-ir flag %q\n", args[i])
+			return 2
+		}
+		if path != "" {
+			fmt.Fprintln(os.Stderr, "usage: yar emit-ir <file>")
+			return 2
+		}
+		path = args[i]
+	}
+	if path == "" {
+		fmt.Fprintln(os.Stderr, "usage: yar emit-ir <file>")
+		return 2
+	}
+
+	target, err := compiler.ResolveTarget()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	unit, diagnostics, err := compiler.CompilePath(path, target.Triple)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -65,7 +87,13 @@ func runEmitIR(path string) int {
 }
 
 func runBuild(args []string) int {
-	output := defaultOutputName()
+	target, err := compiler.ResolveTarget()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	output := defaultOutputName(target)
 	var path string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -92,7 +120,7 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: yar build <file> [-o output]")
 		return 2
 	}
-	_, diagnostics, err := compiler.CompilePath(path)
+	_, diagnostics, err := compiler.CompilePath(path, target.Triple)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -104,7 +132,7 @@ func runBuild(args []string) int {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := compiler.BuildPath(ctx, path, output); err != nil {
+	if err := compiler.BuildPath(ctx, path, target, output); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -112,7 +140,7 @@ func runBuild(args []string) int {
 }
 
 func runRun(path string) int {
-	_, diagnostics, err := compiler.CompilePath(path)
+	_, diagnostics, err := compiler.CompilePath(path, "")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -131,8 +159,8 @@ func runRun(path string) int {
 	return 0
 }
 
-func defaultOutputName() string {
-	if runtime.GOOS == "windows" {
+func defaultOutputName(t compiler.Target) string {
+	if t.OS == "windows" {
 		return "a.exe"
 	}
 	return "a.out"

@@ -1,14 +1,23 @@
 #include <stdint.h>
 #include <errno.h>
-#include <dirent.h>
-#include <fcntl.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  include <io.h>
+#  include <direct.h>
+#  include <process.h>
+#else
+#  include <dirent.h>
+#  include <fcntl.h>
+#  include <sys/stat.h>
+#  include <sys/wait.h>
+#  include <unistd.h>
+#endif
 
 static void yar_runtime_fail(const char *data, long long len) {
     if (len > 0) {
@@ -388,6 +397,22 @@ typedef struct {
     yar_str stderr;
 } yar_process_result;
 
+#ifdef _WIN32
+static int32_t yar_host_status_from_lasterror(DWORD err) {
+    switch (err) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return YAR_HOST_NOT_FOUND;
+    case ERROR_ACCESS_DENIED:
+        return YAR_HOST_PERMISSION_DENIED;
+    case ERROR_BAD_ARGUMENTS:
+    case ERROR_INVALID_PARAMETER:
+        return YAR_HOST_INVALID_ARGUMENT;
+    default:
+        return YAR_HOST_IO;
+    }
+}
+#else
 static int32_t yar_host_status_from_errno(int errnum) {
     switch (errnum) {
     case 0:
@@ -408,6 +433,7 @@ static int32_t yar_host_status_from_errno(int errnum) {
         return YAR_HOST_IO;
     }
 }
+#endif
 
 static void yar_free_str(yar_str value) {
     if (value.ptr == NULL) {
@@ -533,6 +559,229 @@ int32_t yar_env_lookup(yar_str name, yar_str *out) {
     *out = yar_fs_copy_bytes(value, strlen(value));
     return YAR_HOST_OK;
 }
+
+#ifdef _WIN32
+
+/* --- Windows process helpers --- */
+
+static char *yar_process_build_cmdline(char **cargv, int32_t argc) {
+    size_t total = 0;
+    int32_t i;
+    char *cmdline;
+    char *p;
+
+    for (i = 0; i < argc; i++) {
+        total += strlen(cargv[i]) * 2 + 3; /* worst-case backslash doubling + quotes + space */
+    }
+    cmdline = (char *)malloc(total + 1);
+    if (cmdline == NULL) {
+        yar_trap_oom();
+    }
+    p = cmdline;
+    for (i = 0; i < argc; i++) {
+        const char *arg = cargv[i];
+        int need_quote = (strchr(arg, ' ') != NULL || strchr(arg, '\t') != NULL || arg[0] == '\0');
+        if (i > 0) {
+            *p++ = ' ';
+        }
+        if (need_quote) {
+            *p++ = '"';
+        }
+        while (*arg) {
+            int num_backslashes = 0;
+            while (*arg == '\\') {
+                arg++;
+                num_backslashes++;
+            }
+            if (*arg == '\0') {
+                /* backslashes before closing quote: double them */
+                int j;
+                for (j = 0; j < num_backslashes * 2; j++) {
+                    *p++ = '\\';
+                }
+                break;
+            } else if (*arg == '"') {
+                /* backslashes before quote: double them + escape quote */
+                int j;
+                for (j = 0; j < num_backslashes * 2 + 1; j++) {
+                    *p++ = '\\';
+                }
+                *p++ = *arg++;
+            } else {
+                int j;
+                for (j = 0; j < num_backslashes; j++) {
+                    *p++ = '\\';
+                }
+                *p++ = *arg++;
+            }
+        }
+        if (need_quote) {
+            *p++ = '"';
+        }
+    }
+    *p = '\0';
+    return cmdline;
+}
+
+static int32_t yar_process_read_pipe(HANDLE pipe, yar_str *out) {
+    char buf[4096];
+    char *result = NULL;
+    size_t total = 0;
+    DWORD bytes_read;
+
+    *out = yar_empty_str();
+    for (;;) {
+        if (!ReadFile(pipe, buf, sizeof(buf), &bytes_read, NULL) || bytes_read == 0) {
+            break;
+        }
+        result = (char *)realloc(result, total + bytes_read);
+        if (result == NULL) {
+            yar_trap_oom();
+        }
+        memcpy(result + total, buf, bytes_read);
+        total += bytes_read;
+    }
+    if (total > 0 && result != NULL) {
+        char *managed = (char *)yar_alloc((long long)total);
+        memcpy(managed, result, total);
+        free(result);
+        out->ptr = managed;
+        out->len = (long long)total;
+    } else {
+        free(result);
+    }
+    return YAR_HOST_OK;
+}
+
+int32_t yar_process_run(const yar_slice *argv, yar_process_result *out) {
+    char **cargv;
+    int32_t argc;
+    int32_t status;
+    char *cmdline;
+    HANDLE stdout_read = NULL, stdout_write = NULL;
+    HANDLE stderr_read = NULL, stderr_write = NULL;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD exit_code;
+
+    if (out != NULL) {
+        out->exit_code = 0;
+        out->stdout = yar_empty_str();
+        out->stderr = yar_empty_str();
+    }
+    if (argv == NULL) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+    status = yar_process_argv_cstr(*argv, &cargv, &argc);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    if (!CreatePipe(&stdout_read, &stdout_write, &sa, 0) ||
+        !CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+        status = yar_host_status_from_lasterror(GetLastError());
+        if (stdout_read) CloseHandle(stdout_read);
+        if (stdout_write) CloseHandle(stdout_write);
+        if (stderr_read) CloseHandle(stderr_read);
+        if (stderr_write) CloseHandle(stderr_write);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = stdout_write;
+    si.hStdError = stderr_write;
+
+    memset(&pi, 0, sizeof(pi));
+    cmdline = yar_process_build_cmdline(cargv, argc);
+
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        status = yar_host_status_from_lasterror(GetLastError());
+        free(cmdline);
+        CloseHandle(stdout_read);
+        CloseHandle(stdout_write);
+        CloseHandle(stderr_read);
+        CloseHandle(stderr_write);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    free(cmdline);
+    yar_process_free_argv(cargv, argc);
+
+    CloseHandle(stdout_write);
+    CloseHandle(stderr_write);
+
+    if (out != NULL) {
+        yar_process_read_pipe(stdout_read, &out->stdout);
+        yar_process_read_pipe(stderr_read, &out->stderr);
+    }
+    CloseHandle(stdout_read);
+    CloseHandle(stderr_read);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    if (out != NULL) {
+        out->exit_code = (int32_t)exit_code;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return YAR_HOST_OK;
+}
+
+int32_t yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out) {
+    char **cargv;
+    int32_t argc;
+    int32_t status;
+    char *cmdline;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD exit_code;
+
+    if (exit_code_out == NULL) {
+        return YAR_HOST_IO;
+    }
+    *exit_code_out = 0;
+    if (argv == NULL) {
+        return YAR_HOST_INVALID_ARGUMENT;
+    }
+    status = yar_process_argv_cstr(*argv, &cargv, &argc);
+    if (status != YAR_HOST_OK) {
+        return status;
+    }
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    cmdline = yar_process_build_cmdline(cargv, argc);
+
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        status = yar_host_status_from_lasterror(GetLastError());
+        free(cmdline);
+        yar_process_free_argv(cargv, argc);
+        return status;
+    }
+    free(cmdline);
+    yar_process_free_argv(cargv, argc);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    *exit_code_out = (int32_t)exit_code;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return YAR_HOST_OK;
+}
+
+#else /* POSIX */
 
 static int32_t yar_process_create_tempfile(const char *label, int *fd_out) {
     const char *tmpdir = getenv("TMPDIR");
@@ -868,6 +1117,8 @@ int32_t yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out) {
     return status;
 }
 
+#endif /* _WIN32 / POSIX process */
+
 /* --- filesystem runtime --- */
 
 #define YAR_FS_OK                0
@@ -901,6 +1152,40 @@ static yar_slice yar_empty_slice(void) {
     return result;
 }
 
+#ifdef _WIN32
+static int32_t yar_fs_status_from_lasterror(DWORD err) {
+    switch (err) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return YAR_FS_NOT_FOUND;
+    case ERROR_ACCESS_DENIED:
+        return YAR_FS_PERMISSION_DENIED;
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS:
+        return YAR_FS_ALREADY_EXISTS;
+    case ERROR_INVALID_NAME:
+    case ERROR_BAD_PATHNAME:
+        return YAR_FS_INVALID_PATH;
+    default:
+        return YAR_FS_IO;
+    }
+}
+
+static int32_t yar_fs_status_from_errno(int errnum) {
+    switch (errnum) {
+    case 0:
+        return YAR_FS_IO;
+    case ENOENT:
+        return YAR_FS_NOT_FOUND;
+    case EACCES:
+        return YAR_FS_PERMISSION_DENIED;
+    case EEXIST:
+        return YAR_FS_ALREADY_EXISTS;
+    default:
+        return YAR_FS_IO;
+    }
+}
+#else
 static int32_t yar_fs_status_from_errno(int errnum) {
     switch (errnum) {
     case 0:
@@ -921,6 +1206,7 @@ static int32_t yar_fs_status_from_errno(int errnum) {
         return YAR_FS_IO;
     }
 }
+#endif
 
 static char *yar_fs_copy_cstr(const char *src, size_t len) {
     char *dst = (char *)malloc(len + 1);
@@ -970,7 +1256,13 @@ static char *yar_fs_path_cstr(yar_str path, int32_t *status_out) {
 static char *yar_fs_join_path(const char *dir, const char *name) {
     size_t dir_len = strlen(dir);
     size_t name_len = strlen(name);
+#ifdef _WIN32
+    char sep = '\\';
+    int needs_sep = dir_len > 0 && dir[dir_len - 1] != '\\' && dir[dir_len - 1] != '/';
+#else
+    char sep = '/';
     int needs_sep = dir_len > 0 && dir[dir_len - 1] != '/';
+#endif
     char *path = (char *)malloc(dir_len + (size_t)needs_sep + name_len + 1);
 
     if (path == NULL) {
@@ -978,7 +1270,7 @@ static char *yar_fs_join_path(const char *dir, const char *name) {
     }
     memcpy(path, dir, dir_len);
     if (needs_sep) {
-        path[dir_len] = '/';
+        path[dir_len] = sep;
     }
     memcpy(path + dir_len + (size_t)needs_sep, name, name_len);
     path[dir_len + (size_t)needs_sep + name_len] = '\0';
@@ -1089,6 +1381,81 @@ int32_t yar_fs_read_file(yar_str path, yar_str *out) {
     return YAR_FS_OK;
 }
 
+#ifdef _WIN32
+int32_t yar_fs_read_dir(yar_str path, yar_slice *out) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    char *pattern;
+    size_t cpath_len;
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind;
+    yar_fs_dir_entry *entries = NULL;
+    int32_t count = 0;
+    int32_t cap = 0;
+
+    *out = yar_empty_slice();
+    if (cpath == NULL) {
+        return status;
+    }
+
+    cpath_len = strlen(cpath);
+    pattern = (char *)malloc(cpath_len + 3);
+    if (pattern == NULL) {
+        free(cpath);
+        yar_trap_oom();
+    }
+    memcpy(pattern, cpath, cpath_len);
+    pattern[cpath_len] = '\\';
+    pattern[cpath_len + 1] = '*';
+    pattern[cpath_len + 2] = '\0';
+
+    hFind = FindFirstFileA(pattern, &fd);
+    free(pattern);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        status = yar_fs_status_from_lasterror(GetLastError());
+        free(cpath);
+        return status;
+    }
+
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+            continue;
+        }
+        if (count == cap) {
+            int32_t next_cap = cap == 0 ? 8 : cap * 2;
+            yar_fs_dir_entry *next_entries = (yar_fs_dir_entry *)realloc(entries, (size_t)next_cap * sizeof(yar_fs_dir_entry));
+            if (next_entries == NULL) {
+                yar_fs_free_dir_entries(entries, count);
+                FindClose(hFind);
+                free(cpath);
+                yar_trap_oom();
+            }
+            entries = next_entries;
+            cap = next_cap;
+        }
+        entries[count].name = yar_fs_copy_bytes(fd.cFileName, strlen(fd.cFileName));
+        entries[count].is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
+        count++;
+    } while (FindNextFileA(hFind, &fd));
+
+    FindClose(hFind);
+    if (count == 0) {
+        free(entries);
+        entries = NULL;
+    } else {
+        size_t final_size = (size_t)count * sizeof(yar_fs_dir_entry);
+        yar_fs_dir_entry *final_entries = (yar_fs_dir_entry *)yar_alloc((long long)final_size);
+        memcpy(final_entries, entries, final_size);
+        free(entries);
+        entries = final_entries;
+    }
+    out->ptr = entries;
+    out->len = count;
+    out->cap = count;
+    free(cpath);
+    return YAR_FS_OK;
+}
+#else
 int32_t yar_fs_read_dir(yar_str path, yar_slice *out) {
     int32_t status;
     char *cpath = yar_fs_path_cstr(path, &status);
@@ -1168,7 +1535,49 @@ int32_t yar_fs_read_dir(yar_str path, yar_slice *out) {
     free(cpath);
     return YAR_FS_OK;
 }
+#endif
 
+#ifdef _WIN32
+int32_t yar_fs_stat(yar_str path, int32_t *kind_out) {
+    int32_t status;
+    char *cpath = yar_fs_path_cstr(path, &status);
+    DWORD attrs;
+
+    *kind_out = YAR_FS_KIND_OTHER;
+    if (cpath == NULL) {
+        return status;
+    }
+    attrs = GetFileAttributesA(cpath);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        status = yar_fs_status_from_lasterror(GetLastError());
+        free(cpath);
+        return status;
+    }
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+        *kind_out = YAR_FS_KIND_DIRECTORY;
+    } else {
+        *kind_out = YAR_FS_KIND_FILE;
+    }
+    free(cpath);
+    return YAR_FS_OK;
+}
+
+static int32_t yar_fs_mkdir_one(const char *path) {
+    DWORD attrs;
+
+    if (path[0] == '\0') {
+        return YAR_FS_INVALID_PATH;
+    }
+    attrs = GetFileAttributesA(path);
+    if (attrs != INVALID_FILE_ATTRIBUTES) {
+        return (attrs & FILE_ATTRIBUTE_DIRECTORY) ? YAR_FS_OK : YAR_FS_ALREADY_EXISTS;
+    }
+    if (!CreateDirectoryA(path, NULL)) {
+        return yar_fs_status_from_lasterror(GetLastError());
+    }
+    return YAR_FS_OK;
+}
+#else
 int32_t yar_fs_stat(yar_str path, int32_t *kind_out) {
     int32_t status;
     char *cpath = yar_fs_path_cstr(path, &status);
@@ -1212,6 +1621,7 @@ static int32_t yar_fs_mkdir_one(const char *path) {
     }
     return YAR_FS_OK;
 }
+#endif
 
 int32_t yar_fs_mkdir_all(yar_str path) {
     int32_t status;
@@ -1257,6 +1667,59 @@ int32_t yar_fs_mkdir_all(yar_str path) {
     return status;
 }
 
+#ifdef _WIN32
+static int32_t yar_fs_remove_all_c(const char *path) {
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+        DWORD err = GetLastError();
+        return (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+            ? YAR_FS_OK : yar_fs_status_from_lasterror(err);
+    }
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+        char *pattern;
+        size_t path_len = strlen(path);
+        WIN32_FIND_DATAA fd;
+        HANDLE hFind;
+
+        pattern = (char *)malloc(path_len + 3);
+        if (pattern == NULL) {
+            yar_trap_oom();
+        }
+        memcpy(pattern, path, path_len);
+        pattern[path_len] = '\\';
+        pattern[path_len + 1] = '*';
+        pattern[path_len + 2] = '\0';
+
+        hFind = FindFirstFileA(pattern, &fd);
+        free(pattern);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                char *child;
+                int32_t status;
+                if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) {
+                    continue;
+                }
+                child = yar_fs_join_path(path, fd.cFileName);
+                status = yar_fs_remove_all_c(child);
+                free(child);
+                if (status != YAR_FS_OK) {
+                    FindClose(hFind);
+                    return status;
+                }
+            } while (FindNextFileA(hFind, &fd));
+            FindClose(hFind);
+        }
+        if (!RemoveDirectoryA(path)) {
+            return yar_fs_status_from_lasterror(GetLastError());
+        }
+        return YAR_FS_OK;
+    }
+    if (!DeleteFileA(path)) {
+        return yar_fs_status_from_lasterror(GetLastError());
+    }
+    return YAR_FS_OK;
+}
+#else
 static int32_t yar_fs_remove_all_c(const char *path) {
     struct stat st;
 
@@ -1297,6 +1760,7 @@ static int32_t yar_fs_remove_all_c(const char *path) {
     }
     return YAR_FS_OK;
 }
+#endif
 
 int32_t yar_fs_remove_all(yar_str path) {
     int32_t status;
@@ -1310,6 +1774,53 @@ int32_t yar_fs_remove_all(yar_str path) {
     return status;
 }
 
+#ifdef _WIN32
+int32_t yar_fs_temp_dir(yar_str prefix, yar_str *out) {
+    char tmp_path[MAX_PATH];
+    char tmp_file[MAX_PATH];
+    char *dir_path;
+    size_t prefix_len;
+    size_t i;
+    char prefix_buf[64];
+
+    *out = yar_empty_str();
+    if (prefix.len < 0 || (prefix.ptr == NULL && prefix.len != 0)) {
+        return YAR_FS_INVALID_PATH;
+    }
+    for (i = 0; i < (size_t)prefix.len; i++) {
+        if (prefix.ptr[i] == '\0' || prefix.ptr[i] == '/' || prefix.ptr[i] == '\\') {
+            return YAR_FS_INVALID_PATH;
+        }
+    }
+
+    if (GetTempPathA(MAX_PATH, tmp_path) == 0) {
+        return yar_fs_status_from_lasterror(GetLastError());
+    }
+
+    prefix_len = (size_t)prefix.len;
+    if (prefix_len > 3) {
+        prefix_len = 3; /* GetTempFileNameA uses only first 3 chars of prefix */
+    }
+    memset(prefix_buf, 0, sizeof(prefix_buf));
+    if (prefix_len > 0) {
+        memcpy(prefix_buf, prefix.ptr, prefix_len);
+    }
+
+    if (GetTempFileNameA(tmp_path, prefix_buf, 0, tmp_file) == 0) {
+        return yar_fs_status_from_lasterror(GetLastError());
+    }
+    /* GetTempFileNameA creates a file; delete it and create a directory instead */
+    DeleteFileA(tmp_file);
+    if (!CreateDirectoryA(tmp_file, NULL)) {
+        return yar_fs_status_from_lasterror(GetLastError());
+    }
+
+    dir_path = yar_fs_copy_cstr(tmp_file, strlen(tmp_file));
+    out->ptr = dir_path;
+    out->len = (long long)strlen(dir_path);
+    return YAR_FS_OK;
+}
+#else
 int32_t yar_fs_temp_dir(yar_str prefix, yar_str *out) {
     const char *base;
     size_t base_len;
@@ -1377,6 +1888,7 @@ int32_t yar_fs_temp_dir(yar_str prefix, yar_str *out) {
     out->len = (long long)strlen(tmpl);
     return YAR_FS_OK;
 }
+#endif
 
 /* --- map runtime --- */
 

@@ -19,7 +19,7 @@ import (
 
 var errPackageUnavailable = errors.New("package unavailable")
 
-func CompilePath(path string) (*Unit, []diag.Diagnostic, error) {
+func CompilePath(path, targetTriple string) (*Unit, []diag.Diagnostic, error) {
 	graph, diags, err := loadPackageGraph(path)
 	if err != nil {
 		return nil, nil, err
@@ -43,7 +43,7 @@ func CompilePath(path string) (*Unit, []diag.Diagnostic, error) {
 		return nil, checkDiags, nil
 	}
 
-	ir, err := codegen.Generate(program, info)
+	ir, err := codegen.Generate(program, info, targetTriple)
 	if err != nil {
 		return nil, nil, err
 	}

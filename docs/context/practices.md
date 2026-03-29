@@ -82,3 +82,6 @@
   failure is still an unrecoverable runtime failure rather than a YAR `error`.
 - The CLI places a timeout around `build` and `run` operations before invoking
   external processes.
+- Cross-compilation is configured through `YAR_OS` and `YAR_ARCH` environment
+  variables. The compiler maps the pair to an LLVM target triple internally.
+  `yar run` rejects cross-compilation targets.

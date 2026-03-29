@@ -112,6 +112,10 @@
   addresses stay valid without a separate escape-analysis pass.
 - Native linking happens after IR generation by writing `main.ll` and
   `runtime.c` into a temporary directory and invoking `clang`.
+- When a cross-compilation target is specified via `YAR_OS`/`YAR_ARCH`, the
+  generated IR includes a `target triple` directive and `clang` receives a
+  `--target=<triple>` flag. The embedded C runtime uses `#ifdef _WIN32`
+  conditionals to compile for both POSIX and Windows targets.
 
 ## Generated Entry Boundary
 

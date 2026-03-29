@@ -22,7 +22,7 @@ func TestCompile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unit, diags, err := Compile(string(src))
+	unit, diags, err := Compile(string(src), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestBuildAndRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, string(src), outPath); err != nil {
+	if err := Build(ctx, string(src), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func TestUnhandledErrorMain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, string(src), outPath); err != nil {
+	if err := Build(ctx, string(src), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestI64Program(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, string(src), outPath); err != nil {
+	if err := Build(ctx, string(src), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,7 +133,7 @@ func TestPanicProgram(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, string(src), outPath); err != nil {
+	if err := Build(ctx, string(src), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -369,7 +369,7 @@ fn main() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, src, outPath); err != nil {
+	if err := Build(ctx, src, hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -501,7 +501,7 @@ fn main() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, src, outPath); err != nil {
+	if err := Build(ctx, src, hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -529,7 +529,7 @@ fn main() i32 {
 func TestCompilePathMultiFilePackage(t *testing.T) {
 	t.Parallel()
 
-	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "imports_ok", "main.yar"))
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "imports_ok", "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestGarbageCollectionFixtureProgram(t *testing.T) {
 	defer cancel()
 
 	path := filepath.Join("..", "..", "testdata", "garbage_collection", "main.yar")
-	if err := BuildPath(ctx, path, outPath); err != nil {
+	if err := BuildPath(ctx, path, hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -620,7 +620,7 @@ func TestBuildPathAllSamplePrograms(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			if err := BuildPath(ctx, sample, outPath); err != nil {
+			if err := BuildPath(ctx, sample, hostTarget(), outPath); err != nil {
 				t.Fatalf("build sample %q: %v", sample, err)
 			}
 		})
@@ -646,7 +646,7 @@ fn hidden() i32 {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ fn (b Box) secret() i32 {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +727,7 @@ pub fn value() i32 {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -823,7 +823,7 @@ pub fn make() hidden {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,7 +858,7 @@ pub struct Wrapper {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -893,7 +893,7 @@ pub fn make() hidden {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -920,7 +920,7 @@ fn main() i32 {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +945,7 @@ fn main() i32 {
 }
 `)
 
-	_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+	_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 	if err != nil {
 		t.Fatalf("expected diagnostics, got error: %v", err)
 	}
@@ -1001,7 +1001,7 @@ pub fn make() Pair {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1074,7 +1074,7 @@ func TestStdlibSortFixtureProgram(t *testing.T) {
 func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
 	t.Parallel()
 
-	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_fs_path", "main.yar"))
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_fs_path", "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1100,7 @@ func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
 func TestCompilePathLowersHostProcessDecls(t *testing.T) {
 	t.Parallel()
 
-	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"))
+	unit, diags, err := CompilePath(filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1156,7 +1156,7 @@ func TestStdlibProcessEnvFixtureProgram(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join("..", "..", "testdata", "stdlib_process_env", "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1201,7 +1201,7 @@ fn main() !i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1246,7 +1246,7 @@ fn main() !i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1290,7 +1290,7 @@ fn main() !i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1345,7 +1345,7 @@ fn main() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, src, outPath); err != nil {
+	if err := Build(ctx, src, hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1389,7 +1389,7 @@ fn main() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, src, outPath); err != nil {
+	if err := Build(ctx, src, hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1475,7 +1475,7 @@ pub fn hello() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), outPath); err != nil {
+	if err := BuildPath(ctx, filepath.Join(root, "main.yar"), hostTarget(), outPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1499,7 +1499,7 @@ fn main() i32 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	err := Build(ctx, src, outPath)
+	err := Build(ctx, src, hostTarget(), outPath)
 	if err == nil {
 		t.Fatal("expected error when CC is not found")
 	}
@@ -1553,7 +1553,7 @@ func TestInternalBuiltinRejectedInUserCode(t *testing.T) {
 			src := "package main\n\nfn main() i32 {\n\t" + tt.body + "\n\treturn 0\n}\n"
 			writeSourceFile(t, filepath.Join(root, "main.yar"), src)
 
-			_, diags, err := CompilePath(filepath.Join(root, "main.yar"))
+			_, diags, err := CompilePath(filepath.Join(root, "main.yar"), "")
 			if err != nil {
 				t.Fatalf("expected diagnostics, got error: %v", err)
 			}
@@ -1631,7 +1631,7 @@ fn main() i32 {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, diags, err := Compile(tc.src)
+			_, diags, err := Compile(tc.src, "")
 			if err != nil {
 				t.Fatalf("expected diagnostics, got error: %v", err)
 			}
@@ -1653,7 +1653,7 @@ func buildAndRun(t *testing.T, src string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := Build(ctx, src, outPath); err != nil {
+	if err := Build(ctx, src, hostTarget(), outPath); err != nil {
 		return "", err
 	}
 
@@ -1675,7 +1675,7 @@ func buildAndRunPath(t *testing.T, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := BuildPath(ctx, path, outPath); err != nil {
+	if err := BuildPath(ctx, path, hostTarget(), outPath); err != nil {
 		return "", err
 	}
 

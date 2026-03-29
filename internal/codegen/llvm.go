@@ -27,7 +27,7 @@ type Generator struct {
 	interfaceImpls    map[string]string
 }
 
-func Generate(program *ast.Program, info checker.Info) (string, error) {
+func Generate(program *ast.Program, info checker.Info, targetTriple string) (string, error) {
 	g := &Generator{
 		program:        program,
 		info:           info,
@@ -66,7 +66,11 @@ func Generate(program *ast.Program, info checker.Info) (string, error) {
 
 	var b strings.Builder
 	b.WriteString("; yar v0.2\n")
-	b.WriteString("source_filename = \"yar\"\n\n")
+	b.WriteString("source_filename = \"yar\"\n")
+	if targetTriple != "" {
+		fmt.Fprintf(&b, "target triple = %q\n", targetTriple)
+	}
+	b.WriteByte('\n')
 	b.WriteString("%yar.str = type { ptr, i64 }\n")
 	b.WriteString("%yar.slice = type { ptr, i32, i32 }\n")
 	b.WriteString("%yar.closure = type { ptr, ptr }\n")

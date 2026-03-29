@@ -332,7 +332,7 @@ func compileIR(t *testing.T, src string) string {
 		t.Fatalf("unexpected checker diagnostics: %+v", checkDiags)
 	}
 
-	ir, err := Generate(program, info)
+	ir, err := Generate(program, info, "")
 	if err != nil {
 		t.Fatalf("generate IR: %v", err)
 	}

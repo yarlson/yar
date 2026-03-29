@@ -6,17 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 )
-
-// exeSuffix returns ".exe" on Windows, "" elsewhere.
-func exeSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
 
 // findCC returns the C compiler command to use.
 // It checks the CC environment variable first, then falls back to "clang".
@@ -28,9 +19,14 @@ func findCC() string {
 }
 
 // invokeCC compiles LLVM IR and the C runtime into a native executable.
-func invokeCC(ctx context.Context, irPath, runtimePath, outputPath string) error {
+func invokeCC(ctx context.Context, target Target, irPath, runtimePath, outputPath string) error {
 	cc := findCC()
-	cmd := exec.CommandContext(ctx, cc, "-Wno-override-module", irPath, runtimePath, "-o", outputPath)
+	args := []string{"-Wno-override-module"}
+	if target.Triple != "" {
+		args = append(args, "--target="+target.Triple)
+	}
+	args = append(args, irPath, runtimePath, "-o", outputPath)
+	cmd := exec.CommandContext(ctx, cc, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {

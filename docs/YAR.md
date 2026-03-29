@@ -14,6 +14,7 @@ updated.
 - Explicit generic structs and functions
 - Function types and anonymous function literals
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
+- Cross-compilation via `YAR_OS` and `YAR_ARCH` environment variables
 
 ## File Shape
 
@@ -840,8 +841,9 @@ Filesystem errors surface through ordinary YAR errors using the names:
 - `error.InvalidPath`
 - `error.IO`
 
-Current implementation note: the host filesystem runtime is POSIX-oriented and
-uses `TMPDIR` or `/tmp` for `fs.temp_dir`.
+Current implementation note: the host filesystem runtime uses POSIX APIs on
+Unix-like systems and Win32 APIs on Windows. `fs.temp_dir` uses `TMPDIR` or
+`/tmp` on Unix and `GetTempPath` on Windows.
 
 ### `process`
 
