@@ -431,7 +431,7 @@ func (c *Checker) checkProgram(program *ast.Program) {
 
 			fieldType := c.resolveTypeRef(field.Type)
 			if fieldType == TypeVoid || fieldType == TypeNoReturn {
-				c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.Name)
+				c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.String())
 				continue
 			}
 			info.Fields = append(info.Fields, StructField{
@@ -472,7 +472,7 @@ func (c *Checker) checkProgram(program *ast.Program) {
 
 					fieldType := c.resolveTypeRef(field.Type)
 					if fieldType == TypeVoid || fieldType == TypeNoReturn {
-						c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.Name)
+						c.diag.Add(field.Type.Pos, "field %q cannot use type %q", field.Name, field.Type.String())
 						continue
 					}
 					payloadInfo.Fields = append(payloadInfo.Fields, StructField{
@@ -658,7 +658,7 @@ func (c *Checker) checkFunction(fn *ast.FunctionDecl, sig Signature) {
 	for i, param := range fn.Params {
 		paramType := sig.Params[i+paramIndex]
 		if paramType == TypeVoid || paramType == TypeNoReturn || paramType == TypeInvalid {
-			c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.Name)
+			c.diag.Add(param.Type.Pos, "parameter %q cannot use type %q", param.Name, param.Type.String())
 			continue
 		}
 		if _, exists := ctx.scopes[0][param.Name]; exists {
@@ -729,7 +729,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 	case *ast.VarStmt:
 		declaredType := c.resolveTypeRef(s.Type)
 		if declaredType == TypeVoid || declaredType == TypeNoReturn || declaredType == TypeInvalid {
-			c.diag.Add(s.Type.Pos, "local %q cannot use type %q", s.Name, s.Type.Name)
+			c.diag.Add(s.Type.Pos, "local %q cannot use type %q", s.Name, s.Type.String())
 			return
 		}
 		if c.scopeOwns(s.Name) {
@@ -1028,6 +1028,9 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		et := c.checkExpression(e.Inner)
 		c.info.ExprTypes[expr] = et
 		return et
+	case *ast.TypeApplicationExpr:
+		c.diag.Add(e.LBracketPos, "type arguments are not valid in expression position")
+		return ExprType{Base: TypeInvalid}
 	case *ast.UnaryExpr:
 		return c.checkUnary(expr, e)
 	case *ast.PropagateExpr:
@@ -1271,7 +1274,7 @@ func (c *Checker) checkSlice(expr ast.Expression, slice *ast.SliceExpr) ExprType
 }
 
 func (c *Checker) checkStructLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) ExprType {
-	if enumInfo, enumCase, ok := c.lookupEnumCaseType(lit.Type.Name); ok {
+	if enumInfo, enumCase, ok := c.lookupEnumCaseType(lit.Type.String()); ok {
 		if len(enumCase.Fields) == 0 {
 			c.diag.Add(lit.Type.Pos, "plain enum case %q cannot use a constructor body", enumCase.Name)
 			return ExprType{Base: TypeInvalid}
@@ -1763,56 +1766,71 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 }
 
 func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
+	switch ref.Kind {
+	case ast.PointerTypeRef:
+		if ref.Elem == nil {
+			c.diag.Add(ref.Pos, "pointer type is missing an element type")
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(*ref.Elem)
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "pointer target type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		return MakePointerType(elemType)
+	case ast.SliceTypeRef:
+		if ref.Elem == nil {
+			c.diag.Add(ref.Pos, "slice type is missing an element type")
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(*ref.Elem)
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "slice element type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		return MakeSliceType(elemType)
+	case ast.MapTypeRef:
+		if ref.Key == nil || ref.Value == nil {
+			c.diag.Add(ref.Pos, "map type is incomplete")
+			return TypeInvalid
+		}
+		keyType := c.resolveTypeRef(*ref.Key)
+		if !isMapKeyType(keyType) {
+			c.diag.Add(ref.Pos, "map key type %q is not supported; must be bool, i32, i64, or str", ref.Key.String())
+			return TypeInvalid
+		}
+		valueType := c.resolveTypeRef(*ref.Value)
+		if valueType == TypeVoid || valueType == TypeNoReturn || valueType == TypeInvalid {
+			c.diag.Add(ref.Pos, "map value type %q is not allowed", ref.Value.String())
+			return TypeInvalid
+		}
+		return MakeMapType(keyType, valueType)
+	case ast.ArrayTypeRef:
+		if ref.ArrayLen < 0 || ref.ArrayLen > 2147483647 {
+			c.diag.Add(ref.Pos, "array length %d is out of range", ref.ArrayLen)
+			return TypeInvalid
+		}
+		if ref.Elem == nil {
+			c.diag.Add(ref.Pos, "array type is missing an element type")
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(*ref.Elem)
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "array element type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		return MakeArrayType(ref.ArrayLen, elemType)
+	}
+
+	if len(ref.TypeArgs) > 0 {
+		c.diag.Add(ref.Pos, "generic type %q must be monomorphized before checking", ref.String())
+		return TypeInvalid
+	}
+
 	switch Type(ref.Name) {
 	case TypeVoid, TypeNoReturn, TypeBool, TypeI32, TypeI64, TypeStr, TypeError:
 		return Type(ref.Name)
 	}
-
-	if pointer, ok := ParsePointerType(Type(ref.Name)); ok {
-		elemType := c.resolveTypeRef(ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos})
-		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
-			c.diag.Add(ref.Pos, "pointer target type %q is not allowed", pointer.Elem)
-			return TypeInvalid
-		}
-		return MakePointerType(elemType)
-	}
-
-	if text, ok := parseSliceTypeName(ref.Name); ok {
-		elemType := c.resolveTypeRef(ast.TypeRef{Name: text.Elem, Pos: ref.Pos})
-		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
-			c.diag.Add(ref.Pos, "slice element type %q is not allowed", text.Elem)
-			return TypeInvalid
-		}
-		return MakeSliceType(elemType)
-	}
-
-	if text, ok := parseMapTypeName(ref.Name); ok {
-		keyType := c.resolveTypeRef(ast.TypeRef{Name: text.Key, Pos: ref.Pos})
-		if !isMapKeyType(keyType) {
-			c.diag.Add(ref.Pos, "map key type %q is not supported; must be bool, i32, i64, or str", text.Key)
-			return TypeInvalid
-		}
-		valueType := c.resolveTypeRef(ast.TypeRef{Name: text.Value, Pos: ref.Pos})
-		if valueType == TypeVoid || valueType == TypeNoReturn || valueType == TypeInvalid {
-			c.diag.Add(ref.Pos, "map value type %q is not allowed", text.Value)
-			return TypeInvalid
-		}
-		return MakeMapType(keyType, valueType)
-	}
-
-	if text, ok := parseArrayTypeName(ref.Name); ok {
-		if text.Len < 0 || text.Len > 2147483647 {
-			c.diag.Add(ref.Pos, "array length %d is out of range", text.Len)
-			return TypeInvalid
-		}
-		elemType := c.resolveTypeRef(ast.TypeRef{Name: text.Elem, Pos: ref.Pos})
-		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
-			c.diag.Add(ref.Pos, "array element type %q is not allowed", text.Elem)
-			return TypeInvalid
-		}
-		return MakeArrayType(text.Len, elemType)
-	}
-
 	if _, ok := c.structs[ref.Name]; ok {
 		return Type(ref.Name)
 	}
@@ -1820,7 +1838,7 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 		return Type(ref.Name)
 	}
 
-	c.diag.Add(ref.Pos, "unknown type %q", ref.Name)
+	c.diag.Add(ref.Pos, "unknown type %q", ref.String())
 	return TypeInvalid
 }
 
@@ -1841,7 +1859,7 @@ func packageForFunction(fullName string) string {
 	if fullName == "main" {
 		return "main"
 	}
-	idx := strings.LastIndex(fullName, ".")
+	idx := lastTopLevelDot(fullName)
 	if idx <= 0 {
 		return ""
 	}
@@ -1866,11 +1884,30 @@ func packageForMethodReceiver(receiver Type) string {
 
 func packageForType(typ Type) string {
 	text := string(typ)
-	idx := strings.LastIndex(text, ".")
+	idx := lastTopLevelDot(text)
 	if idx <= 0 {
 		return ""
 	}
 	return text[:idx]
+}
+
+func lastTopLevelDot(text string) int {
+	depth := 0
+	for i := len(text) - 1; i >= 0; i-- {
+		switch text[i] {
+		case ']':
+			depth++
+		case '[':
+			if depth > 0 {
+				depth--
+			}
+		case '.':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func packageDisplayName(pkg string) string {
@@ -2379,72 +2416,4 @@ func (c *Checker) lookupEnumCaseType(name string) (EnumInfo, EnumCaseInfo, bool)
 		return EnumInfo{}, EnumCaseInfo{}, false
 	}
 	return enumInfo, enumCase, true
-}
-
-type parsedArrayType struct {
-	Len  int
-	Elem string
-}
-
-type parsedSliceType struct {
-	Elem string
-}
-
-func parseArrayTypeName(name string) (parsedArrayType, bool) {
-	if !strings.HasPrefix(name, "[") {
-		return parsedArrayType{}, false
-	}
-	end := strings.IndexByte(name, ']')
-	if end < 0 {
-		return parsedArrayType{}, false
-	}
-	length, err := strconv.Atoi(name[1:end])
-	if err != nil {
-		return parsedArrayType{}, false
-	}
-	elem := name[end+1:]
-	if elem == "" {
-		return parsedArrayType{}, false
-	}
-	return parsedArrayType{Len: length, Elem: elem}, true
-}
-
-func parseSliceTypeName(name string) (parsedSliceType, bool) {
-	if !strings.HasPrefix(name, "[]") {
-		return parsedSliceType{}, false
-	}
-	elem := name[2:]
-	if elem == "" {
-		return parsedSliceType{}, false
-	}
-	return parsedSliceType{Elem: elem}, true
-}
-
-type parsedMapType struct {
-	Key   string
-	Value string
-}
-
-func parseMapTypeName(name string) (parsedMapType, bool) {
-	if !strings.HasPrefix(name, "map[") {
-		return parsedMapType{}, false
-	}
-	depth := 0
-	for i := 3; i < len(name); i++ {
-		switch name[i] {
-		case '[':
-			depth++
-		case ']':
-			depth--
-			if depth == 0 {
-				key := name[4:i]
-				value := name[i+1:]
-				if key == "" || value == "" {
-					return parsedMapType{}, false
-				}
-				return parsedMapType{Key: key, Value: value}, true
-			}
-		}
-	}
-	return parsedMapType{}, false
 }

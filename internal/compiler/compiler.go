@@ -25,6 +25,11 @@ func Compile(src string) (*Unit, []diag.Diagnostic, error) {
 		return nil, parseDiags, nil
 	}
 
+	program, genericDiags := monomorphizeProgram(program)
+	if len(genericDiags) > 0 {
+		return nil, genericDiags, nil
+	}
+
 	info, checkDiags := checker.Check(program)
 	if len(checkDiags) > 0 {
 		return nil, checkDiags, nil

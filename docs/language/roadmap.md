@@ -28,6 +28,7 @@ Current baseline already includes:
 - slices
 - typed pointers and recursive data
 - enums with exhaustive `match`
+- explicit generic structs and functions
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
@@ -136,7 +137,6 @@ compiler and tooling programs become practical end to end.
 
 ### v0.5 likely non-goals
 
-- generics
 - a full stream or descriptor API
 - shell syntax or pipelines
 - full map iterator protocols
@@ -154,8 +154,6 @@ These are interesting but not currently committed:
 - pattern matching
 - interfaces / traits
 - `0016-interfaces.md`
-- generics
-- `0014-generics.md`
 - closures
 - `0015-closures.md`
 - garbage collection

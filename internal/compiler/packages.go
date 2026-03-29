@@ -33,6 +33,11 @@ func CompilePath(path string) (*Unit, []diag.Diagnostic, error) {
 		return nil, lowerDiags, nil
 	}
 
+	program, genericDiags := monomorphizeProgram(program)
+	if len(genericDiags) > 0 {
+		return nil, genericDiags, nil
+	}
+
 	info, checkDiags := checker.Check(program)
 	if len(checkDiags) > 0 {
 		return nil, checkDiags, nil
@@ -402,6 +407,48 @@ func filterNonEmpty(paths []string) []string {
 	return out
 }
 
+func typeParamSet(params []ast.TypeParam) map[string]struct{} {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(params))
+	for _, param := range params {
+		out[param.Name] = struct{}{}
+	}
+	return out
+}
+
+func typeRefBaseName(ref ast.TypeRef) string {
+	switch ref.Kind {
+	case ast.PointerTypeRef:
+		if ref.Elem == nil {
+			return ""
+		}
+		if ref.Elem.Kind != ast.NamedTypeRef {
+			return ""
+		}
+		return ref.Elem.Name
+	case ast.NamedTypeRef:
+		return ref.Name
+	default:
+		return ""
+	}
+}
+
+func typeRefHasTypeArgs(ref ast.TypeRef) bool {
+	if len(ref.TypeArgs) > 0 {
+		return true
+	}
+	switch ref.Kind {
+	case ast.PointerTypeRef, ast.ArrayTypeRef, ast.SliceTypeRef:
+		return ref.Elem != nil && typeRefHasTypeArgs(*ref.Elem)
+	case ast.MapTypeRef:
+		return (ref.Key != nil && typeRefHasTypeArgs(*ref.Key)) || (ref.Value != nil && typeRefHasTypeArgs(*ref.Value))
+	default:
+		return false
+	}
+}
+
 func (l *packageLowerer) indexPackages() {
 	for path, pkg := range l.graph.Packages {
 		if pkg == nil {
@@ -472,8 +519,9 @@ func (l *packageLowerer) validateExportedDeclarations() {
 			if !decl.Exported {
 				continue
 			}
+			params := typeParamSet(decl.TypeParams)
 			for _, field := range decl.Fields {
-				l.validateExportedLocalTypeRef(path, field.Type, "struct", decl.Name)
+				l.validateExportedLocalTypeRef(path, field.Type, params, "struct", decl.Name)
 			}
 		}
 		for _, decl := range pkg.Enums {
@@ -482,7 +530,7 @@ func (l *packageLowerer) validateExportedDeclarations() {
 			}
 			for _, enumCase := range decl.Cases {
 				for _, field := range enumCase.Fields {
-					l.validateExportedLocalTypeRef(path, field.Type, "enum", decl.Name)
+					l.validateExportedLocalTypeRef(path, field.Type, nil, "enum", decl.Name)
 				}
 			}
 		}
@@ -490,13 +538,14 @@ func (l *packageLowerer) validateExportedDeclarations() {
 			if !decl.Exported {
 				continue
 			}
+			params := typeParamSet(decl.TypeParams)
 			if decl.Receiver != nil {
-				l.validateExportedLocalTypeRef(path, decl.Receiver.Type, "method", decl.Name)
+				l.validateExportedLocalTypeRef(path, decl.Receiver.Type, params, "method", decl.Name)
 			}
 			for _, param := range decl.Params {
-				l.validateExportedLocalTypeRef(path, param.Type, "function", decl.Name)
+				l.validateExportedLocalTypeRef(path, param.Type, params, "function", decl.Name)
 			}
-			l.validateExportedLocalTypeRef(path, decl.Return, "function", decl.Name)
+			l.validateExportedLocalTypeRef(path, decl.Return, params, "function", decl.Name)
 		}
 	}
 }
@@ -505,10 +554,15 @@ func (l *packageLowerer) validateMethodReceiver(packagePath string, decl *ast.Fu
 	if decl.Receiver == nil {
 		return
 	}
-	base := decl.Receiver.Type.Name
-	if pointer, ok := checker.ParsePointerType(checker.Type(base)); ok {
-		base = string(pointer.Elem)
+	if len(decl.TypeParams) > 0 {
+		l.diag.Add(decl.NamePos, "methods cannot declare type parameters in v0.6")
+		return
 	}
+	if typeRefHasTypeArgs(decl.Receiver.Type) {
+		l.diag.Add(decl.Receiver.Type.Pos, "methods on instantiated generic types are not supported in v0.6")
+		return
+	}
+	base := typeRefBaseName(decl.Receiver.Type)
 	if strings.Contains(base, ".") {
 		l.diag.Add(decl.Receiver.Type.Pos, "method receiver must be a named local struct type or pointer to one")
 		return
@@ -519,20 +573,29 @@ func (l *packageLowerer) validateMethodReceiver(packagePath string, decl *ast.Fu
 	l.diag.Add(decl.Receiver.Type.Pos, "method receiver must be a named local struct type or pointer to one")
 }
 
-func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref ast.TypeRef, ownerKind, ownerName string) {
-	if pointer, ok := checker.ParsePointerType(checker.Type(ref.Name)); ok {
-		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos}, ownerKind, ownerName)
-		return
+func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref ast.TypeRef, allowed map[string]struct{}, ownerKind, ownerName string) {
+	for _, arg := range ref.TypeArgs {
+		l.validateExportedLocalTypeRef(packagePath, arg, allowed, ownerKind, ownerName)
 	}
-	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
-		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos}, ownerKind, ownerName)
+	switch ref.Kind {
+	case ast.PointerTypeRef, ast.ArrayTypeRef, ast.SliceTypeRef:
+		if ref.Elem != nil {
+			l.validateExportedLocalTypeRef(packagePath, *ref.Elem, allowed, ownerKind, ownerName)
+		}
 		return
-	}
-	if slice, ok := checker.ParseSliceType(checker.Type(ref.Name)); ok {
-		l.validateExportedLocalTypeRef(packagePath, ast.TypeRef{Name: string(slice.Elem), Pos: ref.Pos}, ownerKind, ownerName)
+	case ast.MapTypeRef:
+		if ref.Key != nil {
+			l.validateExportedLocalTypeRef(packagePath, *ref.Key, allowed, ownerKind, ownerName)
+		}
+		if ref.Value != nil {
+			l.validateExportedLocalTypeRef(packagePath, *ref.Value, allowed, ownerKind, ownerName)
+		}
 		return
 	}
 	if isBuiltinType(ref.Name) || strings.Contains(ref.Name, ".") {
+		return
+	}
+	if _, ok := allowed[ref.Name]; ok {
 		return
 	}
 	if decl, ok := l.structs[packagePath][ref.Name]; ok {
@@ -553,12 +616,13 @@ func (l *packageLowerer) validateExportedLocalTypeRef(packagePath string, ref as
 func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
 	decls := make([]*ast.StructDecl, 0, len(pkg.Structs))
 	for _, decl := range pkg.Structs {
+		typeParams := typeParamSet(decl.TypeParams)
 		fields := make([]ast.StructField, 0, len(decl.Fields))
 		for _, field := range decl.Fields {
 			fields = append(fields, ast.StructField{
 				Name:    field.Name,
 				NamePos: field.NamePos,
-				Type:    l.rewriteTypeRef(pkg, field.Type),
+				Type:    l.rewriteTypeRef(pkg, field.Type, typeParams),
 			})
 		}
 		decls = append(decls, &ast.StructDecl{
@@ -566,6 +630,7 @@ func (l *packageLowerer) lowerStructs(pkg *ast.Package) []*ast.StructDecl {
 			Exported:  decl.Exported,
 			Name:      canonicalDeclName(pkg, decl.Name),
 			NamePos:   decl.NamePos,
+			TypeParams: decl.TypeParams,
 			Fields:    fields,
 		})
 	}
@@ -582,7 +647,7 @@ func (l *packageLowerer) lowerEnums(pkg *ast.Package) []*ast.EnumDecl {
 				fields = append(fields, ast.StructField{
 					Name:    field.Name,
 					NamePos: field.NamePos,
-					Type:    l.rewriteTypeRef(pkg, field.Type),
+					Type:    l.rewriteTypeRef(pkg, field.Type, nil),
 				})
 			}
 			cases = append(cases, ast.EnumCaseDecl{
@@ -605,12 +670,13 @@ func (l *packageLowerer) lowerEnums(pkg *ast.Package) []*ast.EnumDecl {
 func (l *packageLowerer) lowerFunctions(pkg *ast.Package) []*ast.FunctionDecl {
 	decls := make([]*ast.FunctionDecl, 0, len(pkg.Functions))
 	for _, decl := range pkg.Functions {
+		typeParams := typeParamSet(decl.TypeParams)
 		var receiver *ast.ReceiverDecl
 		if decl.Receiver != nil {
 			receiver = &ast.ReceiverDecl{
 				Name:    decl.Receiver.Name,
 				NamePos: decl.Receiver.NamePos,
-				Type:    l.rewriteTypeRef(pkg, decl.Receiver.Type),
+				Type:    l.rewriteTypeRef(pkg, decl.Receiver.Type, typeParams),
 			}
 		}
 		params := make([]ast.Param, 0, len(decl.Params))
@@ -618,7 +684,7 @@ func (l *packageLowerer) lowerFunctions(pkg *ast.Package) []*ast.FunctionDecl {
 			params = append(params, ast.Param{
 				Name:    param.Name,
 				NamePos: param.NamePos,
-				Type:    l.rewriteTypeRef(pkg, param.Type),
+				Type:    l.rewriteTypeRef(pkg, param.Type, typeParams),
 			})
 		}
 		name := canonicalFunctionName(l.graph.Entry, pkg, decl.Name)
@@ -629,11 +695,12 @@ func (l *packageLowerer) lowerFunctions(pkg *ast.Package) []*ast.FunctionDecl {
 			Exported:     decl.Exported,
 			Name:         name,
 			NamePos:      decl.NamePos,
+			TypeParams:   decl.TypeParams,
 			Receiver:     receiver,
 			Params:       params,
-			Return:       l.rewriteTypeRef(pkg, decl.Return),
+			Return:       l.rewriteTypeRef(pkg, decl.Return, typeParams),
 			ReturnIsBang: decl.ReturnIsBang,
-			Body:         l.rewriteBlock(pkg, decl.Body),
+			Body:         l.rewriteBlock(pkg, decl.Body, typeParams),
 		})
 	}
 	return decls
@@ -654,53 +721,73 @@ func canonicalDeclName(pkg *ast.Package, name string) string {
 	return prefix + "." + name
 }
 
-func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef) ast.TypeRef {
-	if pointer, ok := checker.ParsePointerType(checker.Type(ref.Name)); ok {
-		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(pointer.Elem), Pos: ref.Pos})
-		return ast.TypeRef{Name: string(checker.MakePointerType(checker.Type(inner.Name))), Pos: ref.Pos}
+func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef, typeParams map[string]struct{}) ast.TypeRef {
+	switch ref.Kind {
+	case ast.PointerTypeRef, ast.ArrayTypeRef, ast.SliceTypeRef:
+		out := ref
+		if ref.Elem != nil {
+			elem := l.rewriteTypeRef(pkg, *ref.Elem, typeParams)
+			out.Elem = &elem
+		}
+		return out
+	case ast.MapTypeRef:
+		out := ref
+		if ref.Key != nil {
+			key := l.rewriteTypeRef(pkg, *ref.Key, typeParams)
+			out.Key = &key
+		}
+		if ref.Value != nil {
+			value := l.rewriteTypeRef(pkg, *ref.Value, typeParams)
+			out.Value = &value
+		}
+		return out
 	}
-	if array, ok := checker.ParseArrayType(checker.Type(ref.Name)); ok {
-		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(array.Elem), Pos: ref.Pos})
-		return ast.TypeRef{Name: string(checker.MakeArrayType(array.Len, checker.Type(inner.Name))), Pos: ref.Pos}
+	out := ref
+	if len(out.TypeArgs) > 0 {
+		args := make([]ast.TypeRef, 0, len(out.TypeArgs))
+		for _, arg := range out.TypeArgs {
+			args = append(args, l.rewriteTypeRef(pkg, arg, typeParams))
+		}
+		out.TypeArgs = args
 	}
-	if slice, ok := checker.ParseSliceType(checker.Type(ref.Name)); ok {
-		inner := l.rewriteTypeRef(pkg, ast.TypeRef{Name: string(slice.Elem), Pos: ref.Pos})
-		return ast.TypeRef{Name: string(checker.MakeSliceType(checker.Type(inner.Name))), Pos: ref.Pos}
-	}
-	if isBuiltinType(ref.Name) {
-		return ref
+	if _, ok := typeParams[ref.Name]; ok || isBuiltinType(ref.Name) {
+		return out
 	}
 	parts := strings.SplitN(ref.Name, ".", 2)
 	if len(parts) == 2 {
 		target := l.imports[pkg.Path][parts[0]]
 		if target == nil {
 			l.diag.Add(ref.Pos, "unknown import %q", parts[0])
-			return ref
+			return out
 		}
 		if decl := l.structs[target.Path][parts[1]]; decl != nil {
 			if !decl.Exported {
 				l.diag.Add(ref.Pos, "package %q does not export type %q", target.Name, parts[1])
-				return ref
+				return out
 			}
-			return ast.TypeRef{Name: canonicalDeclName(target, parts[1]), Pos: ref.Pos}
+			out.Name = canonicalDeclName(target, parts[1])
+			return out
 		}
 		if decl := l.enums[target.Path][parts[1]]; decl != nil {
 			if !decl.Exported {
 				l.diag.Add(ref.Pos, "package %q does not export enum %q", target.Name, parts[1])
-				return ref
+				return out
 			}
-			return ast.TypeRef{Name: canonicalDeclName(target, parts[1]), Pos: ref.Pos}
+			out.Name = canonicalDeclName(target, parts[1])
+			return out
 		}
 		l.diag.Add(ref.Pos, "package %q has no type %q", target.Name, parts[1])
-		return ref
+		return out
 	}
 	if _, ok := l.structs[pkg.Path][ref.Name]; ok {
-		return ast.TypeRef{Name: canonicalDeclName(pkg, ref.Name), Pos: ref.Pos}
+		out.Name = canonicalDeclName(pkg, ref.Name)
+		return out
 	}
 	if _, ok := l.enums[pkg.Path][ref.Name]; ok {
-		return ast.TypeRef{Name: canonicalDeclName(pkg, ref.Name), Pos: ref.Pos}
+		out.Name = canonicalDeclName(pkg, ref.Name)
+		return out
 	}
-	return ref
+	return out
 }
 
 func isBuiltinType(name string) bool {
@@ -712,60 +799,60 @@ func isBuiltinType(name string) bool {
 	}
 }
 
-func (l *packageLowerer) rewriteBlock(pkg *ast.Package, block *ast.BlockStmt) *ast.BlockStmt {
+func (l *packageLowerer) rewriteBlock(pkg *ast.Package, block *ast.BlockStmt, typeParams map[string]struct{}) *ast.BlockStmt {
 	if block == nil {
 		return nil
 	}
 	stmts := make([]ast.Statement, 0, len(block.Stmts))
 	for _, stmt := range block.Stmts {
-		stmts = append(stmts, l.rewriteStatement(pkg, stmt))
+		stmts = append(stmts, l.rewriteStatement(pkg, stmt, typeParams))
 	}
 	return &ast.BlockStmt{LBrace: block.LBrace, Stmts: stmts}
 }
 
-func (l *packageLowerer) rewriteStatement(pkg *ast.Package, stmt ast.Statement) ast.Statement {
+func (l *packageLowerer) rewriteStatement(pkg *ast.Package, stmt ast.Statement, typeParams map[string]struct{}) ast.Statement {
 	switch s := stmt.(type) {
 	case *ast.BlockStmt:
-		return l.rewriteBlock(pkg, s)
+		return l.rewriteBlock(pkg, s, typeParams)
 	case *ast.LetStmt:
-		return &ast.LetStmt{LetPos: s.LetPos, Name: s.Name, NamePos: s.NamePos, Value: l.rewriteExpr(pkg, s.Value)}
+		return &ast.LetStmt{LetPos: s.LetPos, Name: s.Name, NamePos: s.NamePos, Value: l.rewriteExpr(pkg, s.Value, typeParams)}
 	case *ast.VarStmt:
-		return &ast.VarStmt{VarPos: s.VarPos, Name: s.Name, NamePos: s.NamePos, Type: l.rewriteTypeRef(pkg, s.Type), Value: l.rewriteExpr(pkg, s.Value)}
+		return &ast.VarStmt{VarPos: s.VarPos, Name: s.Name, NamePos: s.NamePos, Type: l.rewriteTypeRef(pkg, s.Type, typeParams), Value: l.rewriteExpr(pkg, s.Value, typeParams)}
 	case *ast.AssignStmt:
-		return &ast.AssignStmt{Target: l.rewriteExpr(pkg, s.Target), Value: l.rewriteExpr(pkg, s.Value)}
+		return &ast.AssignStmt{Target: l.rewriteExpr(pkg, s.Target, typeParams), Value: l.rewriteExpr(pkg, s.Value, typeParams)}
 	case *ast.IfStmt:
-		return &ast.IfStmt{IfPos: s.IfPos, Cond: l.rewriteExpr(pkg, s.Cond), Then: l.rewriteBlock(pkg, s.Then), Else: l.rewriteStatement(pkg, s.Else)}
+		return &ast.IfStmt{IfPos: s.IfPos, Cond: l.rewriteExpr(pkg, s.Cond, typeParams), Then: l.rewriteBlock(pkg, s.Then, typeParams), Else: l.rewriteStatement(pkg, s.Else, typeParams)}
 	case *ast.ForStmt:
-		return &ast.ForStmt{ForPos: s.ForPos, Init: l.rewriteStatement(pkg, s.Init), Cond: l.rewriteExpr(pkg, s.Cond), Post: l.rewriteStatement(pkg, s.Post), Body: l.rewriteBlock(pkg, s.Body)}
+		return &ast.ForStmt{ForPos: s.ForPos, Init: l.rewriteStatement(pkg, s.Init, typeParams), Cond: l.rewriteExpr(pkg, s.Cond, typeParams), Post: l.rewriteStatement(pkg, s.Post, typeParams), Body: l.rewriteBlock(pkg, s.Body, typeParams)}
 	case *ast.MatchStmt:
 		arms := make([]ast.MatchArm, 0, len(s.Arms))
 		for _, arm := range s.Arms {
 			arms = append(arms, ast.MatchArm{
 				CasePos:     arm.CasePos,
-				EnumType:    l.rewriteTypeRef(pkg, arm.EnumType),
+				EnumType:    l.rewriteTypeRef(pkg, arm.EnumType, typeParams),
 				CaseName:    arm.CaseName,
 				CaseNamePos: arm.CaseNamePos,
 				BindName:    arm.BindName,
 				BindNamePos: arm.BindNamePos,
 				BindIgnore:  arm.BindIgnore,
-				Body:        l.rewriteBlock(pkg, arm.Body),
+				Body:        l.rewriteBlock(pkg, arm.Body, typeParams),
 			})
 		}
-		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: l.rewriteExpr(pkg, s.Value), Arms: arms}
+		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: l.rewriteExpr(pkg, s.Value, typeParams), Arms: arms}
 	case *ast.BreakStmt:
 		return &ast.BreakStmt{BreakPos: s.BreakPos}
 	case *ast.ContinueStmt:
 		return &ast.ContinueStmt{ContinuePos: s.ContinuePos}
 	case *ast.ReturnStmt:
-		return &ast.ReturnStmt{ReturnPos: s.ReturnPos, Value: l.rewriteExpr(pkg, s.Value)}
+		return &ast.ReturnStmt{ReturnPos: s.ReturnPos, Value: l.rewriteExpr(pkg, s.Value, typeParams)}
 	case *ast.ExprStmt:
-		return &ast.ExprStmt{Expr: l.rewriteExpr(pkg, s.Expr)}
+		return &ast.ExprStmt{Expr: l.rewriteExpr(pkg, s.Expr, typeParams)}
 	default:
 		return stmt
 	}
 }
 
-func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.Expression {
+func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression, typeParams map[string]struct{}) ast.Expression {
 	if expr == nil {
 		return nil
 	}
@@ -783,52 +870,69 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression) ast.
 	case *ast.ErrorLiteral:
 		return &ast.ErrorLiteral{Name: e.Name, ErrPos: e.ErrPos}
 	case *ast.GroupExpr:
-		return &ast.GroupExpr{Inner: l.rewriteExpr(pkg, e.Inner)}
+		return &ast.GroupExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams)}
+	case *ast.TypeApplicationExpr:
+		args := make([]ast.TypeRef, 0, len(e.TypeArgs))
+		for _, arg := range e.TypeArgs {
+			args = append(args, l.rewriteTypeRef(pkg, arg, typeParams))
+		}
+		return &ast.TypeApplicationExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), LBracketPos: e.LBracketPos, TypeArgs: args}
 	case *ast.CallExpr:
 		args := make([]ast.Expression, 0, len(e.Args))
 		for _, arg := range e.Args {
-			args = append(args, l.rewriteExpr(pkg, arg))
+			args = append(args, l.rewriteExpr(pkg, arg, typeParams))
 		}
-		return &ast.CallExpr{Callee: l.rewriteCallee(pkg, e.Callee), Args: args}
+		return &ast.CallExpr{Callee: l.rewriteCallee(pkg, e.Callee, typeParams), Args: args}
 	case *ast.UnaryExpr:
-		return &ast.UnaryExpr{Operator: e.Operator, OpPos: e.OpPos, Inner: l.rewriteExpr(pkg, e.Inner)}
+		return &ast.UnaryExpr{Operator: e.Operator, OpPos: e.OpPos, Inner: l.rewriteExpr(pkg, e.Inner, typeParams)}
 	case *ast.BinaryExpr:
-		return &ast.BinaryExpr{Left: l.rewriteExpr(pkg, e.Left), Operator: e.Operator, OpPos: e.OpPos, Right: l.rewriteExpr(pkg, e.Right)}
+		return &ast.BinaryExpr{Left: l.rewriteExpr(pkg, e.Left, typeParams), Operator: e.Operator, OpPos: e.OpPos, Right: l.rewriteExpr(pkg, e.Right, typeParams)}
 	case *ast.SelectorExpr:
 		if rewritten, ok := l.rewriteEnumCaseSelector(pkg, e); ok {
 			return rewritten
 		}
-		return &ast.SelectorExpr{Inner: l.rewriteExpr(pkg, e.Inner), DotPos: e.DotPos, Name: e.Name, NamePos: e.NamePos}
+		return &ast.SelectorExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), DotPos: e.DotPos, Name: e.Name, NamePos: e.NamePos}
 	case *ast.IndexExpr:
-		return &ast.IndexExpr{Inner: l.rewriteExpr(pkg, e.Inner), LBracketPos: e.LBracketPos, Index: l.rewriteExpr(pkg, e.Index)}
+		return &ast.IndexExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), LBracketPos: e.LBracketPos, Index: l.rewriteExpr(pkg, e.Index, typeParams)}
 	case *ast.SliceExpr:
-		return &ast.SliceExpr{Inner: l.rewriteExpr(pkg, e.Inner), LBracketPos: e.LBracketPos, Start: l.rewriteExpr(pkg, e.Start), ColonPos: e.ColonPos, End: l.rewriteExpr(pkg, e.End)}
+		return &ast.SliceExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), LBracketPos: e.LBracketPos, Start: l.rewriteExpr(pkg, e.Start, typeParams), ColonPos: e.ColonPos, End: l.rewriteExpr(pkg, e.End, typeParams)}
 	case *ast.StructLiteralExpr:
 		fields := make([]ast.StructLiteralField, 0, len(e.Fields))
 		for _, field := range e.Fields {
-			fields = append(fields, ast.StructLiteralField{Name: field.Name, NamePos: field.NamePos, Value: l.rewriteExpr(pkg, field.Value)})
+			fields = append(fields, ast.StructLiteralField{Name: field.Name, NamePos: field.NamePos, Value: l.rewriteExpr(pkg, field.Value, typeParams)})
 		}
 		litType := l.rewriteEnumCaseTypeRef(pkg, e.Type)
-		if litType.Name == "" {
-			litType = l.rewriteTypeRef(pkg, e.Type)
+		if litType.String() == "" {
+			litType = l.rewriteTypeRef(pkg, e.Type, typeParams)
 		}
 		return &ast.StructLiteralExpr{Type: litType, LBrace: e.LBrace, Fields: fields}
 	case *ast.ArrayLiteralExpr:
 		elements := make([]ast.Expression, 0, len(e.Elements))
 		for _, element := range e.Elements {
-			elements = append(elements, l.rewriteExpr(pkg, element))
+			elements = append(elements, l.rewriteExpr(pkg, element, typeParams))
 		}
-		return &ast.ArrayLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type), LBrace: e.LBrace, Elements: elements}
+		return &ast.ArrayLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type, typeParams), LBrace: e.LBrace, Elements: elements}
 	case *ast.SliceLiteralExpr:
 		elements := make([]ast.Expression, 0, len(e.Elements))
 		for _, element := range e.Elements {
-			elements = append(elements, l.rewriteExpr(pkg, element))
+			elements = append(elements, l.rewriteExpr(pkg, element, typeParams))
 		}
-		return &ast.SliceLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type), LBrace: e.LBrace, Elements: elements}
+		return &ast.SliceLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type, typeParams), LBrace: e.LBrace, Elements: elements}
+	case *ast.MapLiteralExpr:
+		pairs := make([]ast.MapLiteralPair, 0, len(e.Pairs))
+		for _, pair := range e.Pairs {
+			pairs = append(pairs, ast.MapLiteralPair{
+				Key:      l.rewriteExpr(pkg, pair.Key, typeParams),
+				KeyPos:   pair.KeyPos,
+				Value:    l.rewriteExpr(pkg, pair.Value, typeParams),
+				ValuePos: pair.ValuePos,
+			})
+		}
+		return &ast.MapLiteralExpr{Type: l.rewriteTypeRef(pkg, e.Type, typeParams), LBrace: e.LBrace, Pairs: pairs}
 	case *ast.PropagateExpr:
-		return &ast.PropagateExpr{Inner: l.rewriteExpr(pkg, e.Inner), QuestionPos: e.QuestionPos}
+		return &ast.PropagateExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), QuestionPos: e.QuestionPos}
 	case *ast.HandleExpr:
-		return &ast.HandleExpr{Inner: l.rewriteExpr(pkg, e.Inner), OrPos: e.OrPos, ErrName: e.ErrName, ErrPos: e.ErrPos, Handler: l.rewriteBlock(pkg, e.Handler)}
+		return &ast.HandleExpr{Inner: l.rewriteExpr(pkg, e.Inner, typeParams), OrPos: e.OrPos, ErrName: e.ErrName, ErrPos: e.ErrPos, Handler: l.rewriteBlock(pkg, e.Handler, typeParams)}
 	default:
 		return expr
 	}
@@ -931,7 +1035,18 @@ func selectorPath(expr ast.Expression) ([]string, []token.Position, bool) {
 	}
 }
 
-func (l *packageLowerer) rewriteCallee(pkg *ast.Package, callee ast.Expression) ast.Expression {
+func (l *packageLowerer) rewriteCallee(pkg *ast.Package, callee ast.Expression, typeParams map[string]struct{}) ast.Expression {
+	if applied, ok := callee.(*ast.TypeApplicationExpr); ok {
+		args := make([]ast.TypeRef, 0, len(applied.TypeArgs))
+		for _, arg := range applied.TypeArgs {
+			args = append(args, l.rewriteTypeRef(pkg, arg, typeParams))
+		}
+		return &ast.TypeApplicationExpr{
+			Inner:       l.rewriteCallee(pkg, applied.Inner, typeParams),
+			LBracketPos: applied.LBracketPos,
+			TypeArgs:    args,
+		}
+	}
 	if ident, ok := callee.(*ast.IdentExpr); ok {
 		if ident.Name == "main" && pkg == l.graph.Entry {
 			return &ast.IdentExpr{Name: "main", NamePos: ident.NamePos}
@@ -946,15 +1061,15 @@ func (l *packageLowerer) rewriteCallee(pkg *ast.Package, callee ast.Expression) 
 	}
 	selector, ok := callee.(*ast.SelectorExpr)
 	if !ok {
-		return l.rewriteExpr(pkg, callee)
+		return l.rewriteExpr(pkg, callee, typeParams)
 	}
 	inner, ok := selector.Inner.(*ast.IdentExpr)
 	if !ok {
-		return l.rewriteExpr(pkg, callee)
+		return l.rewriteExpr(pkg, callee, typeParams)
 	}
 	target := l.imports[pkg.Path][inner.Name]
 	if target == nil {
-		return l.rewriteExpr(pkg, callee)
+		return l.rewriteExpr(pkg, callee, typeParams)
 	}
 	decl := l.functions[target.Path][selector.Name]
 	if decl == nil {

@@ -1,6 +1,10 @@
 package ast
 
-import "yar/internal/token"
+import (
+	"fmt"
+	"strings"
+	"yar/internal/token"
+)
 
 type Node interface {
 	Pos() token.Position
@@ -34,9 +38,63 @@ func (p *Program) Pos() token.Position {
 	return p.PackagePos
 }
 
+type TypeRefKind int
+
+const (
+	NamedTypeRef TypeRefKind = iota
+	PointerTypeRef
+	ArrayTypeRef
+	SliceTypeRef
+	MapTypeRef
+)
+
 type TypeRef struct {
-	Name string
-	Pos  token.Position
+	Kind     TypeRefKind
+	Name     string
+	TypeArgs []TypeRef
+	ArrayLen int
+	Elem     *TypeRef
+	Key      *TypeRef
+	Value    *TypeRef
+	Pos      token.Position
+}
+
+func (r TypeRef) String() string {
+	switch r.Kind {
+	case PointerTypeRef:
+		if r.Elem == nil {
+			return "*"
+		}
+		return "*" + r.Elem.String()
+	case ArrayTypeRef:
+		if r.Elem == nil {
+			return fmt.Sprintf("[%d]", r.ArrayLen)
+		}
+		return fmt.Sprintf("[%d]%s", r.ArrayLen, r.Elem.String())
+	case SliceTypeRef:
+		if r.Elem == nil {
+			return "[]"
+		}
+		return "[]" + r.Elem.String()
+	case MapTypeRef:
+		var key, value string
+		if r.Key != nil {
+			key = r.Key.String()
+		}
+		if r.Value != nil {
+			value = r.Value.String()
+		}
+		return "map[" + key + "]" + value
+	default:
+		if len(r.TypeArgs) == 0 {
+			return r.Name
+		}
+		parts := make([]string, 0, len(r.TypeArgs))
+		for _, arg := range r.TypeArgs {
+			parts = append(parts, arg.String())
+		}
+		return r.Name + "[" + strings.Join(parts, ", ") + "]"
+	}
 }
 
 type ImportDecl struct {
@@ -45,11 +103,17 @@ type ImportDecl struct {
 	PathPos   token.Position
 }
 
+type TypeParam struct {
+	Name string
+	Pos  token.Position
+}
+
 type StructDecl struct {
 	StructPos token.Position
 	Exported  bool
 	Name      string
 	NamePos   token.Position
+	TypeParams []TypeParam
 	Fields    []StructField
 }
 
@@ -89,6 +153,7 @@ type FunctionDecl struct {
 	Exported     bool
 	Name         string
 	NamePos      token.Position
+	TypeParams   []TypeParam
 	Receiver     *ReceiverDecl
 	Params       []Param
 	Return       TypeRef
@@ -318,6 +383,18 @@ func (e *ErrorLiteral) Pos() token.Position {
 }
 
 func (*ErrorLiteral) exprNode() {}
+
+type TypeApplicationExpr struct {
+	Inner       Expression
+	LBracketPos token.Position
+	TypeArgs    []TypeRef
+}
+
+func (e *TypeApplicationExpr) Pos() token.Position {
+	return e.Inner.Pos()
+}
+
+func (*TypeApplicationExpr) exprNode() {}
 
 type CallExpr struct {
 	Callee Expression

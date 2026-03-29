@@ -48,6 +48,7 @@ hello, world
 Yar currently supports:
 
 - Top-level `struct`, `enum`, `fn`, and method declarations
+- Explicit generic `struct` and `fn` declarations with explicit type arguments
 - `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`
 - Typed pointers, fixed arrays, slices, and maps
 - Multi-file packages rooted at an entry `package main`
@@ -61,6 +62,13 @@ Current method support is intentionally small and explicit:
 - Methods are declared as `fn (u User) label() str { ... }`
 - Calls use `value.method(...)`
 - Receiver matching is exact; yar does not insert implicit `&` or `*`
+
+Current generics support is intentionally small and explicit:
+
+- Generic declarations look like `struct Box[T] { ... }` and `fn first[T](...) T`
+- Use sites must supply type arguments such as `Box[i32]` and `first[i32](values)`
+- Instantiated generic code is monomorphized before type-checking and code generation
+- There is no type-argument inference, no constraints, and no generic methods
 
 The embedded standard library currently includes:
 
@@ -78,7 +86,7 @@ The embedded standard library currently includes:
 
 Yar does not currently have:
 
-- Generics
+- Type-argument inference or generic constraints
 - Closures
 - Interfaces
 - Garbage collection

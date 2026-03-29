@@ -332,7 +332,27 @@ func (g *Generator) resultStructLiteral(typ checker.Type) string {
 }
 
 func (g *Generator) functionName(name string) string {
-	return "@yar." + name
+	full := "yar." + name
+	if isPlainLLVMName(full) {
+		return "@" + full
+	}
+	return "@\"" + full + "\""
+}
+
+func isPlainLLVMName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		switch c {
+		case '.', '_':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (g *Generator) lookupEnumCaseType(name string) (checker.EnumInfo, checker.EnumCaseInfo, bool) {
@@ -1031,7 +1051,7 @@ func (f *functionEmitter) genEnumCaseSelector(expr *ast.SelectorExpr) (exprValue
 }
 
 func (f *functionEmitter) genEnumCaseLiteral(expr ast.Expression, lit *ast.StructLiteralExpr) (exprValue, bool) {
-	enumInfo, enumCase, ok := f.g.lookupEnumCaseType(lit.Type.Name)
+	enumInfo, enumCase, ok := f.g.lookupEnumCaseType(lit.Type.String())
 	if !ok {
 		return exprValue{}, false
 	}

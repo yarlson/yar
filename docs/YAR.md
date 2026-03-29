@@ -11,6 +11,7 @@ updated.
 - Multi-file packages
 - Entry `package main` plus imported packages
 - Top-level `struct`, `enum`, and `fn` declarations, with optional `pub`
+- Explicit generic structs and functions
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
 
 ## File Shape
@@ -58,6 +59,7 @@ Implemented types:
 - `error`
 - typed pointer types such as `*Node` and `*[4]i32`
 - user-defined `struct` types
+- instantiated generic struct types such as `Box[i32]`
 - user-defined `enum` types
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
@@ -86,6 +88,45 @@ Current restrictions:
 - pointer targets cannot use `void`
 - pointer targets cannot use `noreturn`
 - direct recursive struct or enum containment is rejected, but recursive shapes through pointers are valid
+
+## Generics
+
+The current implementation supports a narrow explicit generic system:
+
+```yar
+struct Box[T] {
+    value T
+}
+
+fn first[T](values []T) T {
+    return values[0]
+}
+
+fn main() i32 {
+    box := Box[i32]{value: first[i32]([]i32{7, 9})}
+    return box.value
+}
+```
+
+Current generic rules:
+
+- generic declarations are supported on top-level `struct` and `fn`
+- every use site must supply explicit type arguments
+- type arguments are ordinary yar types such as `i32`, `str`, `[]User`, or `Box[i64]`
+- generic structs may be used in fields, parameters, returns, locals, and literals
+- generic functions may be called across packages with explicit type arguments
+- instantiations are monomorphized before semantic checking and code generation
+- generic code is type-checked after substitution at each instantiated use site
+
+Current generic restrictions:
+
+- there is no type-argument inference
+- there are no constraints
+- enums cannot declare type parameters
+- methods cannot declare type parameters
+- methods on instantiated generic types are not supported
+- generic declarations cannot be referenced without instantiation
+- generic declarations that are never instantiated are not fully type-checked
 
 ## Declarations
 
@@ -325,7 +366,6 @@ Current method rules:
 
 There are no:
 
-- generics
 - variadics
 
 Cross-package function calls stay qualified:
@@ -778,7 +818,6 @@ Available functions:
 The compiler does not currently implement:
 
 - import aliases
-- generics
 - closures or lambdas
 - exceptions
 - automatic recovery

@@ -21,16 +21,18 @@
   and produces lexical diagnostics.
 - `internal/parser` builds file ASTs, including top-level `struct`, `enum`,
   `fn`, and receiver-style method declarations, optional `pub` export markers,
-  `import` declarations, loops, exhaustive enum `match` statements, array and
-  slice literals, enum constructors, pointer types, `nil`, index and slice
-  postfix forms, generalized lvalue forms such as `(*ptr).field`, method-call
-  selector syntax, qualified call syntax, and sugar nodes for `?` and
-  `or |err| { ... }`.
+  explicit generic type parameter and type argument syntax, `import`
+  declarations, loops, exhaustive enum `match` statements, array and slice
+  literals, enum constructors, pointer types, `nil`, index and slice postfix
+  forms, generalized lvalue forms such as `(*ptr).field`, method-call selector
+  syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
 - `internal/compiler/packages.go` resolves the package graph. It loads local
   `.yar` files from disk, falls back to embedded stdlib packages only when a
   local import path is missing, validates package names and import cycles, and
   lowers the graph into one combined `ast.Program` by rewriting package-local
   and imported symbols to canonical names.
+- `internal/compiler/generics.go` monomorphizes explicit generic struct and
+  function instantiations into ordinary declarations before checking.
 - `internal/checker` validates struct, enum, function, and method shape, tracks
   scopes, resolves builtin and rewritten user function signatures, resolves
   user-defined, enum, array, slice, map, and pointer types, assigns expression
@@ -75,12 +77,17 @@
 - Code generation depends on `checker.Info` for expression types, function
   signatures, struct metadata, local types, and the program-wide error-code
   table.
+- The checker and code generator operate on a monomorphized non-generic
+  program; generic declarations do not reach those stages directly.
 - Front-end sugar is preserved through parsing and semantic analysis, then
   lowered during code generation rather than being represented as a runtime
   feature.
 - Methods follow the same pattern: receiver-aware syntax survives parsing and
   checking, then code generation emits ordinary function symbols and receiver
   arguments.
+- Generic instantiations follow a different pattern: generic syntax survives
+  parsing and package lowering, then the compiler clones concrete declarations
+  before semantic analysis.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
 - Pointer-taking of locals and parameters is implemented conservatively by

@@ -19,6 +19,16 @@ canonical name — A lowered declaration name derived from the package path or
 package name, used to merge multiple packages into one checked AST without
 symbol collisions.
 
+type parameter — A declaration-scoped generic type name such as `T` in
+`fn first[T](values []T) T`.
+
+type argument — A concrete type supplied at a generic use site such as `i32`
+in `first[i32](values)`.
+
+monomorphization — The compiler pass that substitutes explicit type arguments
+into generic structs and functions and emits ordinary non-generic declarations
+before checking and code generation.
+
 unit — The result of successful compilation before linking; it contains
 generated LLVM IR and checker metadata.
 

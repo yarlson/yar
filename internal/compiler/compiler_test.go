@@ -226,6 +226,30 @@ func TestPointerFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestGenericFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "generics", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "7\nok\n2\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestCompilePathSupportsImportedGenerics(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "generics_imports", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "hello\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestEnumFixtureProgram(t *testing.T) {
 	t.Parallel()
 
@@ -1487,6 +1511,84 @@ func TestInternalBuiltinRejectedInUserCode(t *testing.T) {
 				t.Fatal("expected diagnostics for internal builtin usage")
 			}
 			if got := joinDiagnosticMessages(diags); !strings.Contains(got, "internal to the standard library") {
+				t.Fatalf("unexpected diagnostics: %s", got)
+			}
+		})
+	}
+}
+
+func TestCompileGenericDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "missing type args on generic function",
+			src: `
+package main
+
+fn id[T](value T) T {
+	return value
+}
+
+fn main() i32 {
+	x := id(1)
+	return x
+}
+`,
+			substr: "generic function \"id\" requires explicit type arguments",
+		},
+		{
+			name: "wrong type args on generic function",
+			src: `
+package main
+
+fn id[T](value T) T {
+	return value
+}
+
+fn main() i32 {
+	x := id[i32, i64](1)
+	return x
+}
+`,
+			substr: "generic function \"id\" expects 1 type arguments, got 2",
+		},
+		{
+			name: "instantiation type checks substituted body",
+			src: `
+package main
+
+fn zero[T]() T {
+	return 0
+}
+
+fn main() i32 {
+	msg := zero[str]()
+	print(msg)
+	return 0
+}
+`,
+			substr: "cannot return untyped-int from function returning str",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, diags, err := Compile(tc.src)
+			if err != nil {
+				t.Fatalf("expected diagnostics, got error: %v", err)
+			}
+			if len(diags) == 0 {
+				t.Fatal("expected diagnostics")
+			}
+			if got := joinDiagnosticMessages(diags); !strings.Contains(got, tc.substr) {
 				t.Fatalf("unexpected diagnostics: %s", got)
 			}
 		})

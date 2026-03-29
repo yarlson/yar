@@ -25,6 +25,11 @@
 - Import cycles are rejected.
 - Package lowering rewrites package-local and imported declarations to
   canonical package-qualified names before checking and code generation.
+- Explicit generic struct and function instantiations are monomorphized before
+  semantic checking and code generation.
+- Generic uses must supply explicit type arguments; the compiler does not infer
+  them.
+- The current generic system has no constraints.
 - Local variables are introduced with `:=` or `var`, scoped by blocks, and may
   be reassigned only after declaration.
 - Raw errorable values cannot be bound, assigned, passed as arguments, used in
@@ -48,6 +53,8 @@
   parameter.
 - Methods are allowed only on named local struct types, with either value
   receivers or pointer receivers.
+- Methods cannot declare type parameters, and methods on instantiated generic
+  types are not supported.
 - Method calls require an exact receiver type match; the language does not add
   implicit `&` or `*` conversions.
 - Method values are not first-class; `value.method` must be called immediately

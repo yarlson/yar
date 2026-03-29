@@ -14,6 +14,8 @@
   rejected.
 - Top-level declarations may be `struct`, `enum`, `fn`, or receiver-style
   method declarations, optionally prefixed with `pub`.
+- Top-level `struct` and `fn` declarations may declare explicit type
+  parameters.
 - Functions and methods have positional parameters and an explicit return type.
 - Return types may be prefixed with `!` to mark the function as errorable.
 - `let` is not supported; local declarations use `:=` or `var`.
@@ -68,6 +70,7 @@
 - Slice literals
 - Map literals
 - Function calls
+- Explicit generic function calls such as `first[i32](values)`
 - Grouping with parentheses
 - Field access
 - Indexing
@@ -85,6 +88,13 @@
 
 - Entry `main` must exist and return `i32` or `!i32`.
 - Imported package references must stay qualified.
+- Generic uses must supply explicit type arguments; the language does not infer
+  them.
+- The current generic system has no constraints.
+- Generic structs and generic functions are supported, but enums are not
+  generic.
+- Methods cannot declare type parameters, and methods on instantiated generic
+  types are not supported.
 - Methods are allowed only on named local struct types or pointers to named
   local struct types.
 - Value receiver methods and pointer receiver methods are distinct; method
@@ -182,8 +192,8 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
   `path`, `fs`, `process`, `env`, and `stdio`.
-- `sort` provides in-place ascending helpers: `strings([]str)`, `i32s([]i32)`,
-  and `i64s([]i64)`.
+- `sort` currently still provides in-place ascending helpers:
+  `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure yar code and provides `clean`, `join`, `dir`, `base`, and
   `ext` for host-style path manipulation.
 - `fs` provides explicit-error text file and directory operations: `read_file`,

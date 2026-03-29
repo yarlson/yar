@@ -87,13 +87,15 @@ func (p *Parser) parseImport() ast.ImportDecl {
 func (p *Parser) parseStruct(exported bool) *ast.StructDecl {
 	structTok := p.expect(token.Struct, "expected struct")
 	nameTok := p.expect(token.Ident, "expected struct name")
+	typeParams := p.parseOptionalTypeParamList()
 	p.expect(token.LBrace, "expected '{' after struct name")
 
 	decl := &ast.StructDecl{
-		StructPos: structTok.Pos,
-		Exported:  exported,
-		Name:      nameTok.Text,
-		NamePos:   nameTok.Pos,
+		StructPos:  structTok.Pos,
+		Exported:   exported,
+		Name:       nameTok.Text,
+		NamePos:    nameTok.Pos,
+		TypeParams: typeParams,
 	}
 	for !p.at(token.RBrace) && !p.at(token.EOF) {
 		fieldName := p.expect(token.Ident, "expected field name")
@@ -159,6 +161,7 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 		}
 	}
 	nameTok := p.expect(token.Ident, "expected function name")
+	typeParams := p.parseOptionalTypeParamList()
 	p.expect(token.LParen, "expected '(' after function name")
 
 	var params []ast.Param
@@ -189,6 +192,7 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 		Exported:     exported,
 		Name:         nameTok.Text,
 		NamePos:      nameTok.Pos,
+		TypeParams:   typeParams,
 		Receiver:     receiver,
 		Params:       params,
 		Return:       returnType,
@@ -201,10 +205,7 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 	if p.at(token.Star) {
 		star := p.expect(token.Star, "expected '*'")
 		inner := p.parseTypeRef()
-		return ast.TypeRef{
-			Name: "*" + inner.Name,
-			Pos:  star.Pos,
-		}
+		return ast.TypeRef{Kind: ast.PointerTypeRef, Elem: &inner, Pos: star.Pos}
 	}
 
 	if p.at(token.LBracket) {
@@ -212,18 +213,17 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		if p.at(token.RBracket) {
 			p.advance()
 			elem := p.parseTypeRef()
-			return ast.TypeRef{
-				Name: "[]" + elem.Name,
-				Pos:  lbracket.Pos,
-			}
+			return ast.TypeRef{Kind: ast.SliceTypeRef, Elem: &elem, Pos: lbracket.Pos}
 		}
 		lengthTok := p.expect(token.Int, "expected array length")
 		p.expect(token.RBracket, "expected ']' after array length")
 		elem := p.parseTypeRef()
-		return ast.TypeRef{
-			Name: fmt.Sprintf("[%s]%s", lengthTok.Text, elem.Name),
-			Pos:  lbracket.Pos,
+		length, err := lexer.ParseIntLiteral(lengthTok)
+		if err != nil {
+			p.diag.Add(lengthTok.Pos, "invalid integer literal %q", lengthTok.Text)
+			length = 0
 		}
+		return ast.TypeRef{Kind: ast.ArrayTypeRef, ArrayLen: int(length), Elem: &elem, Pos: lbracket.Pos}
 	}
 
 	if p.at(token.Map) {
@@ -232,10 +232,7 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		keyType := p.parseTypeRef()
 		p.expect(token.RBracket, "expected ']' after map key type")
 		valueType := p.parseTypeRef()
-		return ast.TypeRef{
-			Name: "map[" + keyType.Name + "]" + valueType.Name,
-			Pos:  mapTok.Pos,
-		}
+		return ast.TypeRef{Kind: ast.MapTypeRef, Key: &keyType, Value: &valueType, Pos: mapTok.Pos}
 	}
 
 	tok := p.current()
@@ -252,7 +249,7 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 			name += "." + partTok.Text
 		}
 	}
-	return ast.TypeRef{Name: name, Pos: tok.Pos}
+	return ast.TypeRef{Name: name, TypeArgs: p.parseOptionalTypeArgList(), Pos: tok.Pos}
 }
 
 func (p *Parser) parseBlock() *ast.BlockStmt {
@@ -699,6 +696,15 @@ func (p *Parser) parsePostfix() ast.Expression {
 				NamePos: fieldTok.Pos,
 			}
 		case p.at(token.LBracket):
+			lbracketPos := p.current().Pos
+			if typeArgs, ok := p.tryParseTypeApplication(); ok {
+				expr = &ast.TypeApplicationExpr{
+					Inner:       expr,
+					LBracketPos: lbracketPos,
+					TypeArgs:    typeArgs,
+				}
+				continue
+			}
 			expr = p.finishIndexOrSlice(expr)
 		case p.at(token.Question):
 			questionTok := p.expect(token.Question, "expected '?'")
@@ -794,7 +800,7 @@ func (p *Parser) parseSequenceLiteral() ast.Expression {
 	typeRef := p.parseTypeRef()
 	lbrace := p.expect(token.LBrace, "expected '{' after array type")
 	var expr ast.Expression
-	if strings.HasPrefix(typeRef.Name, "[]") {
+	if typeRef.Kind == ast.SliceTypeRef {
 		expr = &ast.SliceLiteralExpr{Type: typeRef, LBrace: lbrace.Pos}
 	} else {
 		expr = &ast.ArrayLiteralExpr{Type: typeRef, LBrace: lbrace.Pos}
@@ -899,9 +905,80 @@ func typeRefFromExpression(expr ast.Expression) (ast.TypeRef, bool) {
 			return ast.TypeRef{}, false
 		}
 		return ast.TypeRef{Name: inner.Name + "." + e.Name, Pos: inner.Pos}, true
+	case *ast.TypeApplicationExpr:
+		inner, ok := typeRefFromExpression(e.Inner)
+		if !ok {
+			return ast.TypeRef{}, false
+		}
+		inner.TypeArgs = e.TypeArgs
+		return inner, true
 	default:
 		return ast.TypeRef{}, false
 	}
+}
+
+func (p *Parser) parseOptionalTypeParamList() []ast.TypeParam {
+	if !p.at(token.LBracket) {
+		return nil
+	}
+	lbracket := p.expect(token.LBracket, "expected '['")
+	params := make([]ast.TypeParam, 0, 1)
+	for !p.at(token.RBracket) && !p.at(token.EOF) {
+		nameTok := p.expect(token.Ident, "expected type parameter name")
+		params = append(params, ast.TypeParam{Name: nameTok.Text, Pos: nameTok.Pos})
+		if !p.at(token.Comma) {
+			break
+		}
+		p.advance()
+	}
+	p.expect(token.RBracket, "expected ']' after type parameter list")
+	if len(params) == 0 {
+		p.diag.Add(lbracket.Pos, "type parameter list cannot be empty")
+	}
+	return params
+}
+
+func (p *Parser) parseOptionalTypeArgList() []ast.TypeRef {
+	if !p.at(token.LBracket) {
+		return nil
+	}
+	p.expect(token.LBracket, "expected '['")
+	args := make([]ast.TypeRef, 0, 1)
+	for !p.at(token.RBracket) && !p.at(token.EOF) {
+		args = append(args, p.parseTypeRef())
+		if !p.at(token.Comma) {
+			break
+		}
+		p.advance()
+	}
+	p.expect(token.RBracket, "expected ']' after type argument list")
+	return args
+}
+
+func (p *Parser) tryParseTypeApplication() ([]ast.TypeRef, bool) {
+	if !p.at(token.LBracket) {
+		return nil, false
+	}
+	temp := *p
+	temp.diag = diag.List{}
+	temp.expect(token.LBracket, "expected '['")
+	args := make([]ast.TypeRef, 0, 1)
+	for !temp.at(token.RBracket) && !temp.at(token.EOF) {
+		args = append(args, temp.parseTypeRef())
+		if !temp.at(token.Comma) {
+			break
+		}
+		temp.advance()
+	}
+	temp.expect(token.RBracket, "expected ']' after type argument list")
+	if !temp.diag.Empty() {
+		return nil, false
+	}
+	if !temp.at(token.LParen) && (!temp.at(token.LBrace) || !temp.looksLikeStructLiteral()) {
+		return nil, false
+	}
+	p.index = temp.index
+	return args, true
 }
 
 func (p *Parser) looksLikeStructLiteral() bool {

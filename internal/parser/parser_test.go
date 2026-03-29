@@ -17,7 +17,7 @@ package main
 fn divide(a i32, b i32) !i32 {
 	return error.DivideByZero
 }
- 
+
 fn main() !i32 {
 	x := divide(10, 2)?
 	return x
@@ -36,6 +36,76 @@ fn main() !i32 {
 	}
 	if _, ok := stmt.Value.(*ast.PropagateExpr); !ok {
 		t.Fatalf("expected propagate expression, got %T", stmt.Value)
+	}
+}
+
+func TestParseGenerics(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+struct Box[T] {
+	value T
+}
+
+fn first[T](value T) T {
+	return value
+}
+
+fn main() i32 {
+	box := Box[i32]{value: first[i32](1)}
+	return box.value
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := len(program.Structs[0].TypeParams), 1; got != want {
+		t.Fatalf("unexpected struct type parameter count: got %d want %d", got, want)
+	}
+	if got, want := program.Structs[0].TypeParams[0].Name, "T"; got != want {
+		t.Fatalf("unexpected struct type parameter name: got %q want %q", got, want)
+	}
+	if got, want := len(program.Functions[0].TypeParams), 1; got != want {
+		t.Fatalf("unexpected function type parameter count: got %d want %d", got, want)
+	}
+	if got, want := program.Functions[0].TypeParams[0].Name, "T"; got != want {
+		t.Fatalf("unexpected function type parameter name: got %q want %q", got, want)
+	}
+
+	stmt, ok := program.Functions[1].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[1].Body.Stmts[0])
+	}
+	lit, ok := stmt.Value.(*ast.StructLiteralExpr)
+	if !ok {
+		t.Fatalf("expected struct literal, got %T", stmt.Value)
+	}
+	if got, want := lit.Type.Name, "Box"; got != want {
+		t.Fatalf("unexpected struct literal type name: got %q want %q", got, want)
+	}
+	if got, want := len(lit.Type.TypeArgs), 1; got != want {
+		t.Fatalf("unexpected struct literal type argument count: got %d want %d", got, want)
+	}
+	if got, want := lit.Type.TypeArgs[0].String(), "i32"; got != want {
+		t.Fatalf("unexpected struct literal type argument: got %q want %q", got, want)
+	}
+
+	call, ok := lit.Fields[0].Value.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected call expression, got %T", lit.Fields[0].Value)
+	}
+	typeApp, ok := call.Callee.(*ast.TypeApplicationExpr)
+	if !ok {
+		t.Fatalf("expected type application callee, got %T", call.Callee)
+	}
+	if got, want := len(typeApp.TypeArgs), 1; got != want {
+		t.Fatalf("unexpected call type argument count: got %d want %d", got, want)
+	}
+	if got, want := typeApp.TypeArgs[0].String(), "i32"; got != want {
+		t.Fatalf("unexpected call type argument: got %q want %q", got, want)
 	}
 }
 
@@ -78,7 +148,7 @@ fn main() i32 {
 	if got, want := program.Enums[0].Cases[1].Name, "Int"; got != want {
 		t.Fatalf("unexpected enum case name: got %q want %q", got, want)
 	}
-	if got, want := program.Enums[1].Cases[0].Fields[0].Type.Name, "i64"; got != want {
+	if got, want := program.Enums[1].Cases[0].Fields[0].Type.String(), "i64"; got != want {
 		t.Fatalf("unexpected payload field type: got %q want %q", got, want)
 	}
 
@@ -86,7 +156,7 @@ fn main() i32 {
 	if !ok {
 		t.Fatalf("expected match statement, got %T", program.Functions[0].Body.Stmts[1])
 	}
-	if got, want := stmt.Arms[0].EnumType.Name, "Expr"; got != want {
+	if got, want := stmt.Arms[0].EnumType.String(), "Expr"; got != want {
 		t.Fatalf("unexpected arm enum type: got %q want %q", got, want)
 	}
 	if got, want := stmt.Arms[0].CaseName, "Int"; got != want {
@@ -166,7 +236,7 @@ fn main() i32 {
 	if !ok {
 		t.Fatalf("expected slice literal expression, got %T", litStmt.Value)
 	}
-	if got, want := litExpr.Type.Name, "[]i32"; got != want {
+	if got, want := litExpr.Type.String(), "[]i32"; got != want {
 		t.Fatalf("unexpected slice literal type: got %q want %q", got, want)
 	}
 
@@ -210,10 +280,10 @@ fn main() i32 {
 		t.Fatalf("unexpected diagnostics: %+v", diags)
 	}
 
-	if got, want := program.Structs[0].Fields[1].Type.Name, "*Node"; got != want {
+	if got, want := program.Structs[0].Fields[1].Type.String(), "*Node"; got != want {
 		t.Fatalf("unexpected pointer field type: got %q want %q", got, want)
 	}
-	if got, want := program.Functions[0].Params[0].Type.Name, "*Node"; got != want {
+	if got, want := program.Functions[0].Params[0].Type.String(), "*Node"; got != want {
 		t.Fatalf("unexpected pointer param type: got %q want %q", got, want)
 	}
 
@@ -297,7 +367,7 @@ fn main() i32 {
 	if got, want := valueMethod.Receiver.Name, "u"; got != want {
 		t.Fatalf("unexpected receiver name: got %q want %q", got, want)
 	}
-	if got, want := valueMethod.Receiver.Type.Name, "User"; got != want {
+	if got, want := valueMethod.Receiver.Type.String(), "User"; got != want {
 		t.Fatalf("unexpected receiver type: got %q want %q", got, want)
 	}
 	if got, want := valueMethod.Params[0].Name, "prefix"; got != want {
@@ -308,7 +378,7 @@ fn main() i32 {
 	if pointerMethod.Receiver == nil {
 		t.Fatal("expected pointer receiver")
 	}
-	if got, want := pointerMethod.Receiver.Type.Name, "*User"; got != want {
+	if got, want := pointerMethod.Receiver.Type.String(), "*User"; got != want {
 		t.Fatalf("unexpected receiver type: got %q want %q", got, want)
 	}
 
@@ -542,7 +612,7 @@ fn main() i32 {
 	if !program.Functions[0].Exported {
 		t.Fatal("expected use_kind to be exported")
 	}
-	if got, want := program.Functions[0].Params[0].Type.Name, "token.Kind"; got != want {
+	if got, want := program.Functions[0].Params[0].Type.String(), "token.Kind"; got != want {
 		t.Fatalf("unexpected qualified param type: got %q want %q", got, want)
 	}
 
@@ -601,7 +671,7 @@ fn main() i32 {
 	if !ok {
 		t.Fatalf("expected map literal, got %T", letStmt.Value)
 	}
-	if got, want := mapLit.Type.Name, "map[str]i32"; got != want {
+	if got, want := mapLit.Type.String(), "map[str]i32"; got != want {
 		t.Fatalf("unexpected map type: got %q want %q", got, want)
 	}
 	if got, want := len(mapLit.Pairs), 2; got != want {
@@ -635,7 +705,7 @@ fn main() i32 {
 	if len(fn.Params) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(fn.Params))
 	}
-	if got, want := fn.Params[0].Type.Name, "map[str]i32"; got != want {
+	if got, want := fn.Params[0].Type.String(), "map[str]i32"; got != want {
 		t.Fatalf("unexpected param type: got %q want %q", got, want)
 	}
 }
