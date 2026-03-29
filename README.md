@@ -44,6 +44,9 @@ hello, world
 - Interfaces are named and implicit. Concrete values satisfy them by matching
   the required methods exactly.
 - Closures capture by value at creation time. No surprises.
+- The runtime manages memory automatically. There is no manual `free` and no
+  visible garbage collector — the runtime reclaims unreachable heap storage on
+  its own.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
 - The standard library is written in Yar and compiled through the same pipeline
