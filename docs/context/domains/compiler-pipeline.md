@@ -56,12 +56,13 @@
   pointers to LLVM `ptr` values, lowering slices to runtime descriptors plus
   allocation/copy helpers, lowering maps to opaque runtime-managed hash tables
   with typed key/value access and key-snapshot extraction, generating the
-  native `main` wrapper around `yar.main`, and declaring the shared runtime
-  allocation helpers used by heap-backed features.
+  native `main` wrapper around `yar.main`, initializing the runtime GC stack
+  boundary there, and declaring the shared runtime allocation helpers used by
+  heap-backed features.
 - `internal/runtime` exposes embedded runtime C source to the build step,
   including builtin I/O, panic behavior, string operations, slice bounds
   checks, map operations and key enumeration, host filesystem and process
-  shims, and the shared allocation/trap boundary.
+  shims, and the shared allocation / conservative-GC boundary.
 - `internal/stdlib` embeds the standard library written in Yar and provides
   lookup functions for the package loader.
 
@@ -103,6 +104,9 @@
   before semantic analysis.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
+- The generated native `main` wrapper records a stack-top pointer for the
+  runtime before user `yar.main()` executes so the collector can conservatively
+  scan live stack roots.
 - Pointer-taking of locals and parameters is implemented conservatively by
   storing local slots in runtime-managed storage so returned or retained
   addresses stay valid without a separate escape-analysis pass.

@@ -122,11 +122,11 @@ This proposal deliberately does not promise:
 
 Current implementation note:
 
-- the compiler/runtime now has an internal shared allocation boundary through
-  runtime helper functions
-- that groundwork does not yet add user-visible heap syntax by itself
-- the first heap-backed language features should reuse that boundary rather than
-  introduce their own
+- the compiler/runtime now has a shared allocation boundary through runtime
+  helper functions
+- the current runtime implementation uses conservative garbage collection behind
+  that boundary
+- this still adds no user-visible heap-management syntax by itself
 
 Allocation failure is not modeled as `error` or `!T`.
 

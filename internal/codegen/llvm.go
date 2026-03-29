@@ -191,6 +191,7 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare void @yar_eprint(ptr, i64)\n")
 	b.WriteString("declare ptr @yar_alloc(i64)\n")
 	b.WriteString("declare ptr @yar_alloc_zeroed(i64)\n")
+	b.WriteString("declare void @yar_gc_init_stack_top(ptr)\n")
 	b.WriteString("declare void @yar_trap_oom()\n")
 	b.WriteString("declare void @yar_set_args(i32, ptr)\n")
 	b.WriteString("declare void @yar_slice_index_check(i64, i64)\n")
@@ -276,6 +277,8 @@ func (g *Generator) emitMainWrapper() (string, error) {
 	var b strings.Builder
 	b.WriteString("define i32 @main(i32 %argc, ptr %argv) {\n")
 	b.WriteString("entry:\n")
+	b.WriteString("  %gc.stack.slot = alloca i8\n")
+	b.WriteString("  call void @yar_gc_init_stack_top(ptr %gc.stack.slot)\n")
 	b.WriteString("  call void @yar_set_args(i32 %argc, ptr %argv)\n")
 	if !mainSig.Errorable {
 		fmt.Fprintf(&b, "  %%main_value = call i32 @yar.main()\n")

@@ -116,10 +116,33 @@ fn main() i32 {
 	for _, want := range []string{
 		"declare ptr @yar_alloc(i64)",
 		"declare ptr @yar_alloc_zeroed(i64)",
+		"declare void @yar_gc_init_stack_top(ptr)",
 		"declare void @yar_trap_oom()",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("expected runtime helper declaration %q in IR:\n%s", want, ir)
+		}
+	}
+}
+
+func TestGenerateInitializesGCStackTopInMainWrapper(t *testing.T) {
+	t.Parallel()
+
+	ir := compileIR(t, `
+package main
+
+fn main() i32 {
+	return 0
+}
+`)
+
+	for _, want := range []string{
+		"%gc.stack.slot = alloca i8",
+		"call void @yar_gc_init_stack_top(ptr %gc.stack.slot)",
+		"call void @yar_set_args(i32 %argc, ptr %argv)",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected %q in IR:\n%s", want, ir)
 		}
 	}
 }

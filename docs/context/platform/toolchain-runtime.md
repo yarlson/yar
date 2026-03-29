@@ -33,19 +33,29 @@
   flushes stderr, and exits with status `1`.
 - `yar_eprint(const char *data, long long len)` writes string data to stderr
   when the length is positive and flushes stderr.
-- The generated native `main` wrapper accepts `argc` / `argv`, forwards them to
-  `yar_set_args(int32_t argc, char **argv)`, and then calls user `yar.main()`.
+- The generated native `main` wrapper accepts `argc` / `argv`, records a
+  stack-top pointer through `yar_gc_init_stack_top(void *stack_top)`, forwards
+  arguments to `yar_set_args(int32_t argc, char **argv)`, and then calls user
+  `yar.main()`.
 - The generated unhandled-error path uses `yar_print`, so unhandled `main`
   errors currently surface on stdout rather than stderr.
 
 ### Allocation
 
+- `yar_gc_init_stack_top(void *stack_top)` captures the outer stack boundary
+  used by the conservative collector.
+- `yar_gc_collect(void)` runs a conservative mark-and-sweep collection over the
+  runtime-managed heap.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
   stderr and exit status `1`.
-- `yar_alloc(long long size)` allocates runtime-managed storage and traps on
-  invalid size or allocation failure.
+- `yar_alloc(long long size)` allocates collector-managed storage, may trigger
+  collection when the managed heap target is exceeded, and traps on invalid
+  size or allocation failure.
 - `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage
   and traps on invalid size or allocation failure.
+- `YAR_GC_HEAP_TARGET_BYTES` optionally overrides the initial managed-heap
+  target used to decide when automatic collection should run; this is mainly a
+  runtime/testing knob, not a language feature.
 
 ### Slice Runtime
 
@@ -136,10 +146,14 @@ long long b_len)` allocates and returns a new string containing the
 - Slice literals, `append`, pointer composite literals, map allocations, and
   local or parameter storage used by address-taking all reuse that same
   allocation boundary.
+- The current runtime implementation uses a non-moving conservative
+  mark-and-sweep collector that scans spilled registers, the stack range rooted
+  at the generated native `main` wrapper, and the contents of live heap blocks.
 - Pointer composite literals lower by allocating storage for the pointed-to
   value and storing the literal into that storage.
-- Map creation and growth allocate through `malloc` or `calloc` with OOM
-  trapping.
+- Map creation, growth, string concatenation results, host-returned strings,
+  process argv snapshots, and filesystem directory-entry snapshots all allocate
+  through the same collector-aware helpers.
 - Allocation failure is treated as an unrecoverable runtime failure, not a YAR
   `error` value.
 
@@ -153,5 +167,6 @@ long long b_len)` allocates and returns a new string containing the
   imports, string operations (including indexing, slicing, and concatenation
   edge cases), stdlib imports, host filesystem/path behavior, host
   process/environment behavior, CC override behavior, internal builtin
-  rejection, and the embedded allocation/helper surface through the same
-  `clang` boundary used by the CLI.
+  rejection, the embedded allocation/helper surface, and a tight-heap
+  garbage-collection churn fixture through the same `clang` boundary used by
+  the CLI.

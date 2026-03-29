@@ -52,6 +52,15 @@ Heap-backed features must use one runtime-managed memory model: user code does
 not manually free storage, and allocation failure is an unrecoverable runtime
 failure rather than part of the ordinary `error` model.
 
+### Garbage collection stays runtime-only
+
+Status: accepted
+
+YAR may reclaim unreachable heap-backed storage, but collection remains a
+runtime concern rather than a user-visible language feature. There is no
+`gc()` builtin, no manual `free`, and no source-level promise about exact
+collection timing.
+
 ### Boolean operators are short-circuiting
 
 Status: accepted

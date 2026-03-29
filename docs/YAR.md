@@ -93,6 +93,16 @@ Current restrictions:
 - pointer targets cannot use `noreturn`
 - direct recursive struct or enum containment is rejected, but recursive shapes through pointers are valid
 
+## Memory Management
+
+Heap-backed values use runtime-managed storage.
+
+- user code does not manually free memory
+- there is no `gc()` builtin or `free(...)` operation
+- allocation failure is an unrecoverable runtime failure, not a YAR `error`
+- the runtime may reclaim unreachable heap-backed storage during allocation
+- programs must not depend on exactly when reclamation happens
+
 ## Generics
 
 The current implementation supports a narrow explicit generic system:
@@ -327,7 +337,8 @@ Supported slice operations:
 - `append(slice, value)` returning an updated slice
 
 Slices are views over runtime-managed backing storage. Slicing shares storage,
-and `append` may reuse that storage or allocate a new backing buffer.
+and `append` may reuse that storage or allocate a new backing buffer. Unused
+backing storage may be reclaimed later by the runtime.
 
 Slice indexing and slicing are bounds-checked at runtime and trap on invalid ranges.
 
@@ -358,6 +369,9 @@ Supported map operations:
 - `delete(m, key)` returns `void`
 - `keys(m)` returns `[]K`
 - `len(m)` returns `i32`
+
+Map storage is runtime-managed. The runtime may reclaim unreachable maps and
+their internal storage without any user-visible deallocation step.
 
 Supported key types: `bool`, `i32`, `i64`, `str`.
 

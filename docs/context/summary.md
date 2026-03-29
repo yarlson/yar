@@ -18,8 +18,8 @@ executable.
 - `internal/lexer` tokenizes source text into a token stream with lexical diagnostics.
 - `internal/parser` builds file ASTs, including imports, generic type parameters and explicit type arguments, structs, interfaces, enums, methods, function literals and function types, loops, `match`, aggregate literals, pointers, and error-handling sugar.
 - `internal/checker` owns semantic validation, scope tracking, struct, interface, and enum metadata, function, method, interface-method, and closure signatures, lexical capture analysis, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
-- `internal/codegen` lowers the checked AST into textual LLVM IR, expanding concrete method calls into ordinary function calls with an explicit receiver argument, lowering interface values to boxed-data-plus-method-table pairs with dynamic dispatch, lowering function values to code-pointer-plus-environment closures, expanding error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation helpers.
-- `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, host filesystem and process calls, environment lookup, stderr output, argv capture, and the shared allocation/trap boundary used during linking.
+- `internal/codegen` lowers the checked AST into textual LLVM IR, expanding concrete method calls into ordinary function calls with an explicit receiver argument, lowering interface values to boxed-data-plus-method-table pairs with dynamic dispatch, lowering function values to code-pointer-plus-environment closures, expanding error sugar, enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation and GC helpers.
+- `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, host filesystem and process calls, environment lookup, stderr output, argv capture, and the runtime-managed allocation plus conservative garbage-collection boundary used during linking.
 - `internal/stdlib` embeds the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `process`, `env`, and `stdio`) and provides lookup functions for the package loader.
 
 ## Core Flow
@@ -57,7 +57,8 @@ executable.
 - Enumerate map keys through snapshot slices with `keys(map[K]V) []K`.
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
-- Expose a runtime-managed allocation boundary for slices, maps, pointers, and other heap-backed features.
+- Expose a runtime-managed allocation boundary with conservative garbage collection for slices, maps, pointers, and other heap-backed features.
+- Reclaim unreachable heap-backed storage without adding user-visible lifetime syntax.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
 
@@ -66,6 +67,6 @@ executable.
 - Go 1.26 module with a single CLI entrypoint
 - Custom lexer, parser, checker, and LLVM IR generator
 - External `clang` invocation for compile and link, overridable via `CC`
-- Embedded C runtime source for builtin functions, host integration, and shared allocation helpers
+- Embedded C runtime source for builtin functions, host integration, and shared allocation / garbage-collection helpers
 - Embedded Yar standard library compiled through the same frontend as user code
 - Go tests that validate compilation, executable output, panic behavior, unhandled errors, package imports, strings, maps, slices, pointers, enums, stdlib packages, host filesystem and process behavior, and toolchain/runtime boundaries

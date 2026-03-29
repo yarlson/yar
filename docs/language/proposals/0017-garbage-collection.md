@@ -1,36 +1,36 @@
 # Proposal: Garbage Collection
 
-Status: exploring
+Status: accepted
 
 ## 1. Summary
 
-Consider replacing or extending the current minimal runtime-managed allocation
-model with explicit garbage collection.
+Add runtime-only garbage collection for heap-managed values without changing
+the source language.
 
-Possible directions include:
+The implemented version is:
 
-- tracing collection for heap-managed objects
-- a conservative or precise collector
-- collection that remains invisible to user code
+- conservative
+- non-moving
+- mark-and-sweep
+- invisible to user code
 
 ## 2. Motivation
 
-Current YAR already has runtime-managed allocation for:
+YAR already has runtime-managed allocation for:
 
 - pointers
 - slices
 - maps
 - string concatenation and other heap-backed helpers
 
-But it does not currently define reclamation beyond process lifetime.
+Closures, interfaces, maps, slices, pointer-backed recursive structures, string
+concatenation, and host-backed runtime helpers all increase pressure on that
+heap.
 
-That is acceptable for the current stage, especially for compiler and tooling
-programs, but longer-lived programs or more allocation-heavy patterns may
-eventually create pressure for reclamation.
-
-Garbage collection could improve long-running program behavior, but it would
-also turn a deliberately minimal memory story into a much larger runtime
-commitment.
+Leaving every allocation live until process exit remained semantically valid,
+but it made longer-running compiler-style and tooling-style programs more
+fragile than necessary. A small runtime-only collector improves that behavior
+without widening the language surface.
 
 ## 3. User-Facing Examples
 
@@ -65,95 +65,111 @@ Invalid because a GC design would not imply manual deallocation.
 
 ## 4. Semantics
 
-The user-facing semantics could remain largely unchanged:
+The user-facing semantics stay largely unchanged:
 
 - allocation remains runtime-managed
 - user code still does not free memory directly
 - pointer, slice, map, and string behavior stay source-compatible
-
-The major semantic questions are runtime-facing:
-
-- when collection may happen
-- whether finalizers or weak references exist
-- whether collection pauses are observable
-- whether current pointer and environment representations remain valid
+- collection may happen during allocation when the runtime-managed heap target
+  is exceeded
+- user code must not depend on exactly when collection happens
+- there are no finalizers, weak references, or user-visible collector hooks
+- reachable heap-backed values remain valid across collection
+- allocation failure remains an unrecoverable runtime failure outside the
+  ordinary `error` model
 
 ## 5. Type Rules
 
-Garbage collection does not necessarily require new source-level type rules.
+Garbage collection adds no new source-level type rules.
 
-Possible exceptions:
-
-- if non-collected regions or pinning are ever exposed
-- if future unsafe features appear
-
-The smallest version should avoid adding new type-system surface.
+- all existing heap-backed values keep their current static types
+- there is still no well-typed `gc()` builtin
+- there is still no well-typed `free(...)` operation
+- the implementation does not expose pinning, regions, or unsafe lifetime
+  controls
 
 ## 6. Grammar / Parsing Shape
 
-No new syntax is required for the smallest version.
+No new syntax is required.
 
-If any syntax exists, the design is no longer a minimal GC proposal.
+The implemented collector is intentionally runtime-only. Any user-visible GC or
+lifetime syntax would be a separate proposal.
 
 ## 7. Lowering / Implementation Model
 
-- parser impact may be none
-- AST / IR impact may be none or minimal
-- checker impact may be none in the smallest version
-- codegen may need to emit metadata or use a collector-aware allocation path
-- runtime impact is high and is the core of the feature
+- parser impact: none
+- AST / IR impact: none
+- checker impact: none
+- codegen impact: the generated native `main` wrapper records a stack-top
+  pointer for the runtime before calling user `yar.main()`, and existing heap
+  operations keep lowering through the shared allocation helpers
+- runtime impact: high; the runtime now owns a conservative mark-and-sweep
+  collector that scans spilled registers, the stack, and the contents of live
+  heap blocks
 
 ## 8. Interactions
 
-- errors: allocation failure and GC failure must remain outside the ordinary
-  `error` model unless the language changes significantly
-- structs: heap-embedded references would need scanning support
-- arrays: arrays containing references would need scanning support
+- errors: allocation failure remains outside the ordinary `error` model
+- structs: struct fields stored in heap blocks are scanned conservatively
+- arrays: arrays stored in heap-managed memory are scanned conservatively
 - control flow: no direct source-level interaction
 - returns: escaping values remain valid under the runtime model
-- builtins: existing allocation-backed builtins would route through collector-aware paths
+- builtins: existing allocation-backed builtins route through collector-aware
+  paths without changing their syntax
 - future modules/imports: no direct interaction
-- future richer type features: closures and interfaces would likely increase GC pressure
+- future richer type features: closures and interfaces now rely on the collector
+  for better long-running heap behavior
 
 ## 9. Alternatives Considered
 
 - keep the current minimal runtime-managed model
-  - cheapest and most coherent with the current language stage
+  - simpler runtime
+  - worse long-running behavior for allocation-heavy programs
 - add region or arena-style manual lifetime tools
   - more explicit
-  - likely too heavy and user-visible for current YAR
-- add tracing garbage collection
-  - stronger long-running runtime story
-  - much higher runtime complexity
+  - too user-visible and interaction-heavy for current YAR
+- add a precise or moving collector
+  - potentially stronger long-term runtime story
+  - needs richer metadata and more implementation complexity than the current
+    compiler/runtime design warrants
 
 ## 10. Complexity Cost
 
-- language surface: low in the smallest version
+- language surface: low
 - parser complexity: none
-- checker complexity: none to low
-- lowering/codegen complexity: moderate
-- runtime complexity: very high
-- diagnostics complexity: low to moderate
+- checker complexity: none
+- lowering/codegen complexity: low to moderate
+- runtime complexity: high
+- diagnostics complexity: low
 - test burden: high
 - documentation burden: moderate
 
 ## 11. Why Now?
 
-Garbage collection should not land by accident as a runtime-only implementation
-detail. Writing the proposal now makes the tradeoff explicit: better reclamation
-versus a much larger runtime commitment.
+Heap-backed features are already central to the implemented language, and
+closures plus interfaces have increased the practical value of reclamation.
+Landing GC now keeps the memory story coherent while the runtime is still
+small enough to evolve deliberately.
 
 ## 12. Open Questions
 
-- is collection necessary before long-running programs are a real target?
-- can the current runtime representations be scanned precisely?
-- should GC wait until closures or interfaces exist?
-- does GC fit YAR’s current identity, or is the minimal model enough?
+- should the collector stay conservative, or should future runtime work move
+  toward precise metadata?
+- does the runtime eventually need generational heuristics or other tuning?
+- should any diagnostic or profiling hooks around GC ever become visible?
 
 ## 13. Decision
 
-Exploring. Garbage collection is a major runtime choice and is not currently
-justified by the implemented language scope alone.
+Accepted and implemented as a runtime-only conservative collector.
+
+The language surface stays unchanged:
+
+- no `gc()` builtin
+- no manual deallocation
+- no finalizers
+
+The runtime now reclaims unreachable heap-backed storage behind the existing
+allocation boundary.
 
 ## 14. Implementation Checklist
 
@@ -163,5 +179,6 @@ justified by the implemented language scope alone.
 - codegen
 - diagnostics
 - tests
-- `current-state.md` update
-- `decisions.md` update
+- `docs/context` update
+- `docs/YAR.md` update
+- `docs/language` update

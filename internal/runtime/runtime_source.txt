@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,39 +46,6 @@ void yar_trap_oom(void) {
     yar_runtime_fail(message, sizeof(message) - 1);
 }
 
-void yar_slice_index_check(long long index, long long len) {
-    if (index < 0 || index >= len) {
-        static const char message[] = "runtime failure: slice index out of range\n";
-        yar_runtime_fail(message, sizeof(message) - 1);
-    }
-}
-
-void yar_slice_range_check(long long start, long long end, long long len) {
-    if (start < 0 || end < start || end > len) {
-        static const char message[] = "runtime failure: slice range out of bounds\n";
-        yar_runtime_fail(message, sizeof(message) - 1);
-    }
-}
-
-void *yar_alloc(long long size) {
-    void *ptr;
-
-    if (size < 0) {
-        static const char message[] = "runtime failure: invalid allocation size\n";
-        yar_runtime_fail(message, sizeof(message) - 1);
-    }
-
-    if (size == 0) {
-        size = 1;
-    }
-
-    ptr = malloc((size_t)size);
-    if (ptr == NULL) {
-        yar_trap_oom();
-    }
-    return ptr;
-}
-
 /* --- string runtime --- */
 
 typedef struct {
@@ -95,6 +63,263 @@ static yar_str yar_empty_str(void);
 static yar_slice yar_empty_slice(void);
 static char *yar_fs_copy_cstr(const char *src, size_t len);
 static yar_str yar_fs_copy_bytes(const char *src, size_t len);
+void *yar_alloc(long long size);
+void *yar_alloc_zeroed(long long size);
+
+typedef struct yar_gc_block {
+    struct yar_gc_block *next;
+    size_t size;
+    int marked;
+} yar_gc_block;
+
+static yar_gc_block *yar_gc_blocks = NULL;
+static size_t yar_gc_bytes = 0;
+static size_t yar_gc_heap_target = 1024 * 1024;
+static int yar_gc_configured = 0;
+static int yar_gc_collecting = 0;
+static void *yar_gc_stack_top = NULL;
+
+static void yar_gc_mark_range(const void *start, const void *end);
+static void yar_gc_mark_pointer(const void *candidate);
+static void yar_gc_mark_block(yar_gc_block *block);
+static void yar_gc_grow_target(size_t min_live_bytes);
+
+static void yar_gc_configure(void) {
+    const char *value;
+    char *end;
+    unsigned long long parsed;
+
+    if (yar_gc_configured) {
+        return;
+    }
+    yar_gc_configured = 1;
+
+    value = getenv("YAR_GC_HEAP_TARGET_BYTES");
+    if (value == NULL || value[0] == '\0') {
+        return;
+    }
+
+    errno = 0;
+    parsed = strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed == 0) {
+        return;
+    }
+    yar_gc_heap_target = (size_t)parsed;
+}
+
+static void *yar_gc_data(yar_gc_block *block) {
+    return (void *)(block + 1);
+}
+
+static const void *yar_gc_const_data(const yar_gc_block *block) {
+    return (const void *)(block + 1);
+}
+
+static yar_gc_block *yar_gc_find_block(const void *candidate) {
+    yar_gc_block *block;
+
+    if (candidate == NULL) {
+        return NULL;
+    }
+
+    for (block = yar_gc_blocks; block != NULL; block = block->next) {
+        const unsigned char *start = (const unsigned char *)yar_gc_const_data(block);
+        const unsigned char *end = start + block->size;
+        const unsigned char *ptr = (const unsigned char *)candidate;
+        if (ptr >= start && ptr < end) {
+            return block;
+        }
+    }
+    return NULL;
+}
+
+static int yar_gc_owns_pointer(const void *candidate) {
+    return yar_gc_find_block(candidate) != NULL;
+}
+
+static void yar_gc_mark_block(yar_gc_block *block) {
+    if (block == NULL || block->marked) {
+        return;
+    }
+    block->marked = 1;
+    yar_gc_mark_range(yar_gc_const_data(block), ((const unsigned char *)yar_gc_const_data(block)) + block->size);
+}
+
+static void yar_gc_mark_pointer(const void *candidate) {
+    yar_gc_mark_block(yar_gc_find_block(candidate));
+}
+
+static void yar_gc_mark_range(const void *start, const void *end) {
+    uintptr_t lo;
+    uintptr_t hi;
+    uintptr_t cursor;
+
+    if (start == NULL || end == NULL) {
+        return;
+    }
+
+    lo = (uintptr_t)start;
+    hi = (uintptr_t)end;
+    if (lo > hi) {
+        uintptr_t tmp = lo;
+        lo = hi;
+        hi = tmp;
+    }
+    if (hi - lo < sizeof(uintptr_t)) {
+        return;
+    }
+
+    /*
+     * Conservative scanning must stay within the actual byte range.
+     * Short strings and small structs may not be pointer-aligned, so scan each
+     * byte offset rather than rounding the range outward and risking OOB reads.
+     */
+    for (cursor = lo; cursor + sizeof(uintptr_t) <= hi; cursor++) {
+        uintptr_t candidate = 0;
+        memcpy(&candidate, (const void *)cursor, sizeof(candidate));
+        if (candidate == 0) {
+            continue;
+        }
+        yar_gc_mark_pointer((const void *)candidate);
+    }
+}
+
+void yar_gc_init_stack_top(void *stack_top) {
+    yar_gc_configure();
+    yar_gc_stack_top = stack_top;
+}
+
+void yar_gc_collect(void) {
+    jmp_buf regs;
+    volatile int stack_marker = 0;
+    yar_gc_block **link;
+
+    yar_gc_configure();
+    if (yar_gc_collecting) {
+        return;
+    }
+
+    yar_gc_collecting = 1;
+    if (setjmp(regs) == 0) {
+        yar_gc_mark_range(&regs, ((const unsigned char *)&regs) + sizeof(regs));
+        if (yar_gc_stack_top != NULL) {
+            yar_gc_mark_range((const void *)&stack_marker, yar_gc_stack_top);
+        }
+    }
+
+    link = &yar_gc_blocks;
+    while (*link != NULL) {
+        yar_gc_block *block = *link;
+        if (!block->marked) {
+            *link = block->next;
+            yar_gc_bytes -= block->size;
+            free(block);
+            continue;
+        }
+        block->marked = 0;
+        link = &block->next;
+    }
+
+    yar_gc_grow_target(yar_gc_bytes);
+    yar_gc_collecting = 0;
+}
+
+static void yar_gc_grow_target(size_t min_live_bytes) {
+    size_t next;
+
+    if (yar_gc_heap_target == 0) {
+        yar_gc_heap_target = 1024;
+    }
+    next = yar_gc_heap_target;
+    if (min_live_bytes <= next) {
+        return;
+    }
+    while (next < min_live_bytes) {
+        if (next > ((size_t)-1) / 2) {
+            next = min_live_bytes;
+            break;
+        }
+        next *= 2;
+    }
+    yar_gc_heap_target = next;
+}
+
+static void yar_gc_maybe_collect(size_t incoming_size) {
+    volatile int stack_marker = 0;
+    size_t required = yar_gc_bytes + incoming_size;
+
+    yar_gc_configure();
+    if (yar_gc_stack_top == NULL) {
+        yar_gc_stack_top = (void *)&stack_marker;
+    }
+    if (required <= yar_gc_heap_target || yar_gc_collecting) {
+        return;
+    }
+
+    yar_gc_collect();
+    required = yar_gc_bytes + incoming_size;
+    if (required > yar_gc_heap_target) {
+        size_t grow_to = required;
+        if (yar_gc_bytes > 0 && grow_to < yar_gc_bytes * 2) {
+            grow_to = yar_gc_bytes * 2;
+        }
+        yar_gc_grow_target(grow_to);
+    }
+}
+
+static void *yar_gc_alloc_bytes(size_t size, int zeroed) {
+    yar_gc_block *block;
+    size_t total_size;
+
+    if (size == 0) {
+        size = 1;
+    }
+
+    yar_gc_maybe_collect(size);
+
+    total_size = sizeof(yar_gc_block) + size;
+    block = (yar_gc_block *)malloc(total_size);
+    if (block == NULL) {
+        yar_gc_collect();
+        block = (yar_gc_block *)malloc(total_size);
+        if (block == NULL) {
+            yar_trap_oom();
+        }
+    }
+
+    block->size = size;
+    block->marked = 0;
+    block->next = yar_gc_blocks;
+    yar_gc_blocks = block;
+    yar_gc_bytes += size;
+
+    if (zeroed) {
+        memset(yar_gc_data(block), 0, size);
+    }
+    return yar_gc_data(block);
+}
+
+void yar_slice_index_check(long long index, long long len) {
+    if (index < 0 || index >= len) {
+        static const char message[] = "runtime failure: slice index out of range\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+}
+
+void yar_slice_range_check(long long start, long long end, long long len) {
+    if (start < 0 || end < start || end > len) {
+        static const char message[] = "runtime failure: slice range out of bounds\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+}
+
+void *yar_alloc(long long size) {
+    if (size < 0) {
+        static const char message[] = "runtime failure: invalid allocation size\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    return yar_gc_alloc_bytes((size_t)size, 0);
+}
 
 static int32_t yar_host_argc = 0;
 static char **yar_host_argv = NULL;
@@ -121,8 +346,7 @@ yar_str yar_str_concat(const char *a_ptr, long long a_len, const char *b_ptr, lo
         result.len = 0;
         return result;
     }
-    char *buf = (char *)malloc((size_t)total);
-    if (!buf) { yar_trap_oom(); }
+    char *buf = (char *)yar_alloc(total);
     if (a_len > 0) memcpy(buf, a_ptr, (size_t)a_len);
     if (b_len > 0) memcpy(buf + a_len, b_ptr, (size_t)b_len);
     result.ptr = buf;
@@ -143,8 +367,7 @@ yar_str yar_str_from_byte(int32_t value) {
         static const char message[] = "runtime failure: chr value out of byte range\n";
         yar_runtime_fail(message, sizeof(message) - 1);
     }
-    char *buf = (char *)malloc(1);
-    if (!buf) { yar_trap_oom(); }
+    char *buf = (char *)yar_alloc(1);
     buf[0] = (char)(unsigned char)value;
     result.ptr = buf;
     result.len = 1;
@@ -187,6 +410,12 @@ static int32_t yar_host_status_from_errno(int errnum) {
 }
 
 static void yar_free_str(yar_str value) {
+    if (value.ptr == NULL) {
+        return;
+    }
+    if (yar_gc_owns_pointer(value.ptr)) {
+        return;
+    }
     free((void *)value.ptr);
 }
 
@@ -270,10 +499,7 @@ void yar_process_args(yar_slice *out) {
         return;
     }
 
-    values = (yar_str *)calloc((size_t)yar_host_argc, sizeof(yar_str));
-    if (values == NULL) {
-        yar_trap_oom();
-    }
+    values = (yar_str *)yar_alloc_zeroed((long long)((size_t)yar_host_argc * sizeof(yar_str)));
     for (i = 0; i < yar_host_argc; i++) {
         const char *arg = yar_host_argv[i] != NULL ? yar_host_argv[i] : "";
         values[i] = yar_fs_copy_bytes(arg, strlen(arg));
@@ -413,10 +639,7 @@ static int32_t yar_process_read_file_fd(int fd, yar_str *out) {
     }
 
     total = (size_t)st.st_size;
-    buf = (char *)malloc(total);
-    if (buf == NULL) {
-        yar_trap_oom();
-    }
+    buf = (char *)yar_alloc((long long)total);
 
     off = 0;
     while (off < total) {
@@ -425,7 +648,6 @@ static int32_t yar_process_read_file_fd(int fd, yar_str *out) {
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
             return yar_host_status_from_errno(errno);
         }
         if (n == 0) {
@@ -717,7 +939,8 @@ static yar_str yar_fs_copy_bytes(const char *src, size_t len) {
     if (len == 0) {
         return yar_empty_str();
     }
-    result.ptr = yar_fs_copy_cstr(src, len);
+    result.ptr = (const char *)yar_alloc((long long)len);
+    memcpy((void *)result.ptr, src, len);
     result.len = (long long)len;
     return result;
 }
@@ -763,13 +986,9 @@ static char *yar_fs_join_path(const char *dir, const char *name) {
 }
 
 static void yar_fs_free_dir_entries(yar_fs_dir_entry *entries, int32_t count) {
-    int32_t i;
-
+    (void)count;
     if (entries == NULL) {
         return;
-    }
-    for (i = 0; i < count; i++) {
-        free((void *)entries[i].name.ptr);
     }
     free(entries);
 }
@@ -851,19 +1070,14 @@ int32_t yar_fs_read_file(yar_str path, yar_str *out) {
         return status;
     }
 
-    buf = (char *)malloc((size_t)length);
-    if (buf == NULL) {
-        yar_trap_oom();
-    }
+    buf = (char *)yar_alloc(length);
     if (fread(buf, 1, (size_t)length, file) != (size_t)length) {
-        free(buf);
         status = ferror(file) ? yar_fs_status_from_errno(errno) : YAR_FS_IO;
         (void)fclose(file);
         free(cpath);
         return status;
     }
     if (fclose(file) != 0) {
-        free(buf);
         status = yar_fs_status_from_errno(errno);
         free(cpath);
         return status;
@@ -935,6 +1149,17 @@ int32_t yar_fs_read_dir(yar_str path, yar_slice *out) {
         yar_fs_free_dir_entries(entries, count);
         free(cpath);
         return yar_fs_status_from_errno(errno);
+    }
+
+    if (count == 0) {
+        free(entries);
+        entries = NULL;
+    } else {
+        size_t final_size = (size_t)count * sizeof(yar_fs_dir_entry);
+        yar_fs_dir_entry *final_entries = (yar_fs_dir_entry *)yar_alloc((long long)final_size);
+        memcpy(final_entries, entries, final_size);
+        free(entries);
+        entries = final_entries;
     }
 
     out->ptr = entries;
@@ -1215,16 +1440,14 @@ static int yar_map_keys_equal(const void *a, const void *b, int32_t key_kind, in
 }
 
 void *yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size) {
-    yar_map *m = (yar_map *)malloc(sizeof(yar_map));
-    if (!m) { yar_trap_oom(); }
+    yar_map *m = (yar_map *)yar_alloc_zeroed((long long)sizeof(yar_map));
     m->count = 0;
     m->cap = YAR_MAP_INIT_CAP;
     m->key_size = key_size;
     m->value_size = value_size;
     m->bucket_size = 1 + key_size + value_size;
     m->key_kind = key_kind;
-    m->entries = (unsigned char *)calloc((size_t)m->cap, (size_t)m->bucket_size);
-    if (!m->entries) { yar_trap_oom(); }
+    m->entries = (unsigned char *)yar_alloc_zeroed((long long)((size_t)m->cap * (size_t)m->bucket_size));
     return m;
 }
 
@@ -1333,10 +1556,7 @@ yar_slice yar_map_keys(void *map_ptr) {
         return yar_empty_slice();
     }
 
-    dst = (unsigned char *)malloc((size_t)m->count * (size_t)m->key_size);
-    if (dst == NULL) {
-        yar_trap_oom();
-    }
+    dst = (unsigned char *)yar_alloc((long long)((size_t)m->count * (size_t)m->key_size));
 
     copied = 0;
     for (i = 0; i < m->cap; i++) {
@@ -1359,32 +1579,19 @@ static void yar_map_grow(yar_map *m) {
     unsigned char *old_entries = m->entries;
     int32_t new_cap = old_cap * 2;
     m->cap = new_cap;
-    m->entries = (unsigned char *)calloc((size_t)new_cap, (size_t)m->bucket_size);
-    if (!m->entries) { yar_trap_oom(); }
+    m->entries = (unsigned char *)yar_alloc_zeroed((long long)((size_t)new_cap * (size_t)m->bucket_size));
     m->count = 0;
     for (int32_t i = 0; i < old_cap; i++) {
         unsigned char *bucket = old_entries + (int64_t)i * m->bucket_size;
         if (bucket[0] == 0) continue;
         yar_map_set(m, bucket + 1, bucket + 1 + m->key_size);
     }
-    free(old_entries);
 }
 
 void *yar_alloc_zeroed(long long size) {
-    void *ptr;
-
     if (size < 0) {
         static const char message[] = "runtime failure: invalid allocation size\n";
         yar_runtime_fail(message, sizeof(message) - 1);
     }
-
-    if (size == 0) {
-        size = 1;
-    }
-
-    ptr = calloc(1, (size_t)size);
-    if (ptr == NULL) {
-        yar_trap_oom();
-    }
-    return ptr;
+    return yar_gc_alloc_bytes((size_t)size, 1);
 }

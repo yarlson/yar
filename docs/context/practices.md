@@ -77,7 +77,8 @@
 - The runtime C source is embedded in the Go binary and materialized into a
   temporary file during native builds.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
-  storage, and other heap-backed features. Allocation failure is an
-  unrecoverable runtime failure rather than a YAR `error`.
+  storage, and other heap-backed features. The current runtime reclaims
+  unreachable heap-backed objects with a conservative collector. Allocation
+  failure is still an unrecoverable runtime failure rather than a YAR `error`.
 - The CLI places a timeout around `build` and `run` operations before invoking
   external processes.

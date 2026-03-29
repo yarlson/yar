@@ -580,6 +580,32 @@ func TestBuildAndRunInterfaceProgram(t *testing.T) {
 	}
 }
 
+func TestGarbageCollectionFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "program")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	path := filepath.Join("..", "..", "testdata", "garbage_collection", "main.yar")
+	if err := BuildPath(ctx, path, outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	cmd.Env = append(os.Environ(), "YAR_GC_HEAP_TARGET_BYTES=65536")
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "142000\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestBuildPathAllSamplePrograms(t *testing.T) {
 	samples, err := sampleProgramPaths()
 	if err != nil {

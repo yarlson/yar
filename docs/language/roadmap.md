@@ -91,8 +91,10 @@ The minimal runtime-managed memory model is now an accepted design foundation.
 
 - future heap-backed features should reuse the shared allocation boundary
 - allocation failure is outside the ordinary `error` model
-- this is already used by slices and pointers, and remains groundwork for maps,
-  richer string operations, and later heap-backed features
+- the current runtime now uses conservative garbage collection for existing
+  heap-backed features without adding new source syntax
+- this is already used by slices, pointers, maps, richer string operations, and
+  other heap-backed runtime values
 
 ---
 
@@ -155,8 +157,6 @@ These are interesting but not currently committed:
 - pattern matching
 - closures
 - `0015-closures.md`
-- garbage collection
-- `0017-garbage-collection.md`
 - concurrency primitives
 
 ---
