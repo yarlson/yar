@@ -29,10 +29,15 @@
   generalized lvalue forms such as `(*ptr).field`, method-call selector
   syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
 - `internal/compiler/packages.go` resolves the package graph. It loads local
-  `.yar` files from disk, falls back to embedded stdlib packages only when a
-  local import path is missing, validates package names and import cycles, and
-  lowers the graph into one combined `ast.Program` by rewriting package-local
-  and imported symbols to canonical names.
+  `.yar` files from disk, consults the dependency index built from `yar.toml`
+  and `yar.lock` for external packages, falls back to embedded stdlib packages
+  when both local and dependency paths are missing, validates package names and
+  import cycles, and lowers the graph into one combined `ast.Program` by
+  rewriting package-local and imported symbols to canonical names.
+- `internal/deps` provides dependency management infrastructure including
+  `yar.toml` and `yar.lock` parsing, git-based fetching, content-addressed
+  caching, transitive resolution with conflict detection, and the alias-to-path
+  `Index` consumed by the package loader.
 - `internal/compiler/generics.go` monomorphizes explicit generic struct and
   function instantiations into ordinary declarations before checking.
 - `internal/checker` validates struct, interface, enum, function, method, and

@@ -89,3 +89,15 @@ method declarations, making them visible to importing packages.
 
 method — A top-level function declaration with an explicit receiver such as
 `fn (u User) label() str`, callable with `value.label()`.
+
+manifest — The `yar.toml` file declaring the project name and its external
+dependencies with alias names and git URLs or local paths.
+
+lock file — The `yar.lock` file pinning each git dependency to an exact commit
+SHA and content hash for reproducible builds.
+
+dependency alias — The short name used in `yar.toml` to refer to an external
+dependency, which becomes the top-level import path segment in source code.
+
+dependency index — A lookup table mapping dependency aliases to their cached
+directory paths, built from `yar.toml` and `yar.lock` during package loading.

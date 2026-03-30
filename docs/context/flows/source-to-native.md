@@ -3,6 +3,8 @@
 ## `check`
 
 - Resolves the named entry file or package directory on disk.
+- If `yar.toml` exists in the root directory, builds a dependency index from
+  the manifest and lock file for import resolution.
 - Runs package loading, lowering, checking, and IR generation through
   `compiler.CompilePath`.
 - Prints formatted diagnostics to stderr and exits non-zero when parsing or

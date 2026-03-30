@@ -6,6 +6,8 @@ YAR is a small, compiled language with Go-like syntax, explicit types, errors as
 
 ```
 myproject/
+  yar.toml          # optional manifest for external dependencies
+  yar.lock          # auto-generated lock file (commit to VCS)
   main.yar          # entry package, must have `package main` and `fn main() i32`
   main_test.yar     # test file (excluded from normal builds)
   helpers.yar       # additional file in same package
@@ -35,7 +37,8 @@ fn main() i32 {
 
 - Entry package: `package main` with `fn main() i32` or `fn main() !i32`
 - Imports: `import "path"` (slash-separated, qualified usage: `path.func()`)
-- Local packages shadow stdlib packages of the same name
+- Resolution order: local packages → dependencies (from `yar.toml`) → stdlib
+- Local packages shadow dependencies; dependencies shadow stdlib
 - Visibility: `pub` on struct/fn/enum/interface to export; private by default
 - Comments: `// line comments` only
 
@@ -626,6 +629,40 @@ fn test_fizzbuzz_fizzbuzz(t *testing.T) void {
     testing.equal[str](t, fizzbuzz(30), "FizzBuzz")
 }
 ```
+
+## Dependencies
+
+Git-based, no central registry. Declared in `yar.toml`, pinned in `yar.lock`.
+
+**yar.toml:**
+```toml
+[package]
+name = "myapp"
+
+[dependencies]
+http = { git = "https://github.com/user/yar-http.git", tag = "v0.3.1" }
+json = { git = "https://github.com/user/yar-json.git", rev = "a1b2c3d" }
+local_lib = { path = "../my-local-lib" }
+```
+
+- Alias becomes the import path: `import "http"`, `import "http/router"`
+- Version: exactly one of `tag`, `rev`, or `branch` per git dependency
+- `path` dependencies are local-only (not written to `yar.lock`)
+- Transitive dependencies supported (each dep may have its own `yar.toml`)
+- Conflicts (same alias, different version) are errors unless root overrides
+
+**Commands:**
+```bash
+yar init                                          # create yar.toml
+yar add http https://github.com/u/repo.git --tag=v1.0.0
+yar add lib --path=../local-lib                   # local path dep
+yar remove http
+yar lock                                          # regenerate yar.lock
+yar fetch                                         # download to cache
+yar update                                        # re-resolve all deps
+```
+
+Cache: `~/.cache/yar/deps/` (override with `YAR_CACHE`).
 
 ## Memory Management
 

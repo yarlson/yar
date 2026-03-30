@@ -10,11 +10,12 @@ executable.
 
 ## Architecture
 
-- `cmd/yar` exposes the `check`, `emit-ir`, `build`, `run`, and `test` commands.
+- `cmd/yar` exposes the `check`, `emit-ir`, `build`, `run`, `test`, `init`, `add`, `remove`, `fetch`, `lock`, and `update` commands.
 - `internal/token` defines the token set and source positions shared across stages.
 - `internal/diag` defines source-positioned diagnostics.
 - `internal/ast` defines the file AST plus the `Package` and `PackageGraph` structures used during package loading and lowering.
-- `internal/compiler` resolves entry paths, loads local packages, falls back to embedded stdlib packages when local imports are missing, validates the import graph, rewrites package-local and imported symbols to canonical names, monomorphizes explicit generic instantiations, and orchestrates checking, IR generation, native linking, and execution.
+- `internal/compiler` resolves entry paths, loads local packages, consults the dependency index for external packages declared in `yar.toml`, falls back to embedded stdlib packages when local and dependency imports are missing, validates the import graph, rewrites package-local and imported symbols to canonical names, monomorphizes explicit generic instantiations, and orchestrates checking, IR generation, native linking, and execution.
+- `internal/deps` provides git-based dependency management: `yar.toml` manifest parsing, `yar.lock` lock file generation, git clone-based fetching to a global cache, SHA-256 content hashing, transitive dependency resolution with conflict detection, and an alias-to-path index consumed by the package loader.
 - `internal/lexer` tokenizes source text into a token stream with lexical diagnostics.
 - `internal/parser` builds file ASTs, including imports, generic type parameters and explicit type arguments, structs, interfaces, enums, methods, function literals and function types, loops, `match`, aggregate literals, pointers, and error-handling sugar.
 - `internal/checker` owns semantic validation, scope tracking, struct, interface, and enum metadata, function, method, interface-method, and closure signatures, lexical capture analysis, builtin and host-intrinsic signatures, integer literal coercion, and program-wide error-code assignment.
@@ -29,12 +30,18 @@ executable.
 - `build` compiles the entry package graph, writes IR and runtime C source into a temporary directory, and invokes `clang` to produce a native binary.
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
 - `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
+- `init` creates a `yar.toml` manifest in the current directory.
+- `add` adds a dependency to `yar.toml` and updates `yar.lock`.
+- `remove` removes a dependency from `yar.toml` and updates `yar.lock`.
+- `fetch` downloads all dependencies in `yar.lock` to the global cache.
+- `lock` regenerates `yar.lock` from `yar.toml` by resolving all git dependencies.
+- `update` re-resolves one or all dependencies and updates `yar.lock`.
 
 ## System State
 
 - The repository contains one deployable unit: the `yar` CLI compiler.
 - Programs are package graphs rooted at an entry `package main`, with one or more `.yar` files per package, explicit `import` declarations, package-qualified cross-package references, top-level `struct`, `interface`, `enum`, `fn`, and method declarations, and optional `pub` on exported structs, interfaces, enums, functions, and methods.
-- Local imports resolve under the entry root directory. When a local import path is absent, the loader falls back to the embedded stdlib package of the same name. A local package shadows a stdlib package with the same import path.
+- Local imports resolve under the entry root directory. When a local import path is absent, the loader checks the dependency index built from `yar.toml` and `yar.lock`, then falls back to the embedded stdlib package of the same name. A local package shadows a dependency, and a dependency shadows a stdlib package with the same import path.
 - The implemented type system includes `bool`, `i32`, `i64`, `str`, `void`, `noreturn`, `error`, typed pointers, user-defined structs, user-defined interfaces, instantiated generic struct types, user-defined enums with optional payload cases, fixed arrays, slices, maps, and first-class function types.
 - The language supports `:=`, `var`, assignment to locals, fields, array indices, slice indices, dereferences, and map elements, `if` / `else`, `for`, `break`, `continue`, exhaustive `match` over enum values, generic functions, generic structs with explicit type arguments, function literals with lexical capture-by-value, struct literals, enum constructors, array literals, slice literals, map literals, pointer address-of and dereference, `nil`, field access, concrete and interface method calls, function-value calls, indexing, slicing, unary `-`, unary `!`, short-circuit boolean `&&` / `||`, integer arithmetic including `%`, integer, boolean, string, pointer, and error comparisons, string literals, `error.Name` expressions and returns, `?` propagation sugar, `or |err| { ... }` local handling sugar, and direct propagation of matching errorable calls with `return`.
 - String operations include `len(str)`, `str == str`, `str != str`, `str + str`, `s[i]`, and `s[i:j]`.
@@ -66,6 +73,7 @@ executable.
 - Discover and run test functions from `_test.yar` files using `yar test`, with generic assertion helpers from the `testing` stdlib package.
 - Convert primitive values to their string representation with `to_str`.
 - Compare error values with `==` and `!=`, and use `error.Name` as a general expression.
+- Manage external dependencies through `yar.toml` manifests and `yar.lock` lock files, with git-based fetching, content-addressed caching, and transitive dependency resolution.
 
 ## Tech Stack
 

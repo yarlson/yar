@@ -65,6 +65,7 @@ hello, world
 | `process` | Argv access and child-process execution |
 | `env`     | Environment variable lookup             |
 | `stdio`   | Stderr output                           |
+| `testing` | Test assertions and framework           |
 
 ## Install
 
@@ -115,10 +116,37 @@ platform.
 
 </details>
 
+## Dependencies
+
+Yar uses git-based dependency management with no central registry.
+
+```bash
+yar init                                        # create yar.toml
+yar add http https://github.com/user/http.git --tag=v1.0.0
+yar build .
+```
+
+Dependencies are declared as aliases in `yar.toml`:
+
+```toml
+[package]
+name = "myapp"
+
+[dependencies]
+http = { git = "https://github.com/user/yar-http.git", tag = "v0.3.1" }
+local_lib = { path = "../my-local-lib" }
+```
+
+The alias becomes the import path: `import "http"`. Resolution order: local →
+dependency → stdlib.
+
+`yar.lock` pins exact commit SHAs and content hashes. Commit it to version
+control for reproducible builds.
+
 ## Commands
 
 ```text
-yar <command> <path> [-o output]
+yar <command> [arguments]
 ```
 
 | Command   | What it does                                      |
@@ -127,6 +155,13 @@ yar <command> <path> [-o output]
 | `emit-ir` | Print LLVM IR to stdout                           |
 | `build`   | Compile to a native executable                    |
 | `run`     | Compile and execute a temporary native executable |
+| `test`    | Discover and run test functions from `_test.yar`  |
+| `init`    | Create a `yar.toml` manifest                      |
+| `add`     | Add a dependency to `yar.toml`                    |
+| `remove`  | Remove a dependency from `yar.toml`               |
+| `fetch`   | Download dependencies from `yar.lock` to cache    |
+| `lock`    | Regenerate `yar.lock` from `yar.toml`             |
+| `update`  | Re-resolve dependencies and update `yar.lock`     |
 
 ## Documentation
 
@@ -151,6 +186,7 @@ internal/
   checker/        Type checking and semantic analysis
   codegen/        LLVM IR generation
   compiler/       Pipeline orchestration and package loading
+  deps/           Dependency management (yar.toml, yar.lock, fetching)
   runtime/        Embedded C runtime
   stdlib/         Embedded standard library (Yar source)
 testdata/         Representative sample programs

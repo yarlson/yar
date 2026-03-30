@@ -19,6 +19,9 @@
   sugar, host-backed error names, and unhandled-error behavior.
 - [domains/stdlib.md](domains/stdlib.md) — Embedded standard library design,
   package surfaces, and host-intrinsic boundary.
+- [domains/dependency-management.md](domains/dependency-management.md) —
+  Git-based dependency management via `yar.toml` and `yar.lock`, resolution
+  order, fetching, caching, and CLI commands.
 
 ## Flows
 

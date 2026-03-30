@@ -171,6 +171,16 @@ valid outside return statements, enabling patterns like
 `testing.equal[error](t, err, error.NotFound)`. Errors are `i32` codes
 internally, so comparison uses integer `icmp`.
 
+### Dependency management
+
+Status: accepted
+
+Yar supports external dependencies through `yar.toml` manifests and `yar.lock`
+lock files. Dependencies are git repositories identified by short alias names.
+There is no central registry, no semver range resolution, and no parser changes.
+The dependency index is consulted between local and stdlib resolution during
+package loading. Transitive dependencies are supported with conflict detection.
+
 ---
 
 ## Rejected

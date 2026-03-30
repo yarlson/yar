@@ -72,15 +72,21 @@ The goal is not lots of new features, but a cleaner and more uniform language.
 
 ---
 
-## v0.3 candidate capability: richer package ergonomics
+## v0.3 capability: dependency management (implemented)
 
-Core code organization is now implemented. The next package-related work should
-be smaller follow-on improvements rather than the initial package model.
+Git-based dependency management is now implemented:
 
-### Candidate focus
+- `yar.toml` manifest with alias-based dependency declarations
+- `yar.lock` lock file with exact commit SHAs and content hashes
+- git-based fetching to a global cache with integrity verification
+- transitive dependency resolution with conflict detection
+- CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
+- compiler integration: dependency index consulted between local and stdlib
+  resolution
+
+### Remaining package ergonomics candidates
 
 - import aliases if they become necessary
-- clearer package-root and module conventions
 - richer diagnostics around package loading
 
 ---

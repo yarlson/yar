@@ -11,6 +11,7 @@ import (
 	"yar/internal/ast"
 	"yar/internal/checker"
 	"yar/internal/codegen"
+	"yar/internal/deps"
 	"yar/internal/diag"
 	"yar/internal/parser"
 	"yar/internal/stdlib"
@@ -56,6 +57,7 @@ type packageLoader struct {
 	packages     map[string]*ast.Package
 	diag         diag.List
 	includeTests bool
+	depIndex     *deps.Index
 }
 
 func loadPackageGraph(path string, includeTests bool) (*ast.PackageGraph, []diag.Diagnostic, error) {
@@ -64,10 +66,16 @@ func loadPackageGraph(path string, includeTests bool) (*ast.PackageGraph, []diag
 		return nil, nil, err
 	}
 
+	depIdx, err := loadDepIndex(rootDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	loader := &packageLoader{
 		rootDir:      rootDir,
 		packages:     make(map[string]*ast.Package),
 		includeTests: includeTests,
+		depIndex:     depIdx,
 	}
 
 	entry, err := loader.loadPackage("", entryDir)
@@ -118,6 +126,10 @@ func (l *packageLoader) loadPackage(importPath, dir string) (*ast.Package, error
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if importPath != "" && errors.Is(err, os.ErrNotExist) {
+			// Try dependency index before stdlib fallback.
+			if depDir, ok := l.depIndex.Resolve(importPath); ok && depDir != dir {
+				return l.loadPackage(importPath, depDir)
+			}
 			if pkg, stdErr := l.loadStdlibPackage(importPath); stdErr == nil {
 				return pkg, nil
 			}
@@ -1212,4 +1224,96 @@ func (l *packageLowerer) rewriteCallee(pkg *ast.Package, callee ast.Expression, 
 		return &ast.IdentExpr{Name: selector.Name, NamePos: selector.NamePos}
 	}
 	return &ast.IdentExpr{Name: canonicalDeclName(target, selector.Name), NamePos: selector.NamePos}
+}
+
+// loadDepIndex reads yar.toml and yar.lock from rootDir and builds a
+// dependency index for the package loader. Returns an empty index if no
+// yar.toml exists or it has no dependencies.
+func loadDepIndex(rootDir string) (*deps.Index, error) {
+	manifestPath := filepath.Join(rootDir, deps.ManifestFile)
+	if _, err := os.Stat(manifestPath); errors.Is(err, os.ErrNotExist) {
+		return deps.EmptyIndex(), nil
+	}
+
+	manifest, err := deps.ReadManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(manifest.Dependencies) == 0 {
+		return deps.EmptyIndex(), nil
+	}
+
+	// Check for path-only dependencies (no lock file needed).
+	hasGitDeps := false
+	for _, dep := range manifest.Dependencies {
+		if !dep.IsLocal() {
+			hasGitDeps = true
+			break
+		}
+	}
+
+	if !hasGitDeps {
+		// All dependencies are local paths — build index directly.
+		resolved := make([]deps.ResolvedDep, 0, len(manifest.Dependencies))
+		for alias, dep := range manifest.Dependencies {
+			dir := dep.Path
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(rootDir, dep.Path)
+			}
+			resolved = append(resolved, deps.ResolvedDep{
+				Name: alias,
+				Dep:  dep,
+				Dir:  filepath.Clean(dir),
+			})
+		}
+		return deps.NewIndex(resolved), nil
+	}
+
+	lockPath := filepath.Join(rootDir, deps.LockFile)
+	entries, err := deps.ReadLockFile(lockPath)
+	if err != nil {
+		return nil, fmt.Errorf("yar.toml exists but yar.lock is missing or invalid (run 'yar lock'): %w", err)
+	}
+
+	cacheDir, err := deps.CacheDir()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build index from lock entries for git deps plus local path deps.
+	resolved := lockToResolved(entries, cacheDir)
+	for alias, dep := range manifest.Dependencies {
+		if dep.IsLocal() {
+			dir := dep.Path
+			if !filepath.IsAbs(dir) {
+				dir = filepath.Join(rootDir, dep.Path)
+			}
+			resolved = append(resolved, deps.ResolvedDep{
+				Name: alias,
+				Dep:  dep,
+				Dir:  filepath.Clean(dir),
+			})
+		}
+	}
+	return deps.NewIndex(resolved), nil
+}
+
+func lockToResolved(entries []deps.LockEntry, cacheDir string) []deps.ResolvedDep {
+	resolved := make([]deps.ResolvedDep, len(entries))
+	for i, e := range entries {
+		resolved[i] = deps.ResolvedDep{
+			Name:   e.Name,
+			Commit: e.Commit,
+			Hash:   e.Hash,
+			Dir:    deps.CachePath(cacheDir, e.Git, e.Commit),
+			Dep: deps.Dependency{
+				Git:    e.Git,
+				Tag:    e.Tag,
+				Rev:    e.Rev,
+				Branch: e.Branch,
+			},
+		}
+	}
+	return resolved
 }

@@ -11,8 +11,9 @@
   `!i32`.
 - Packages may span multiple `.yar` files in one directory.
 - Imports are explicit `import "path"` declarations after the package clause.
-- Imports resolve from local packages under the entry root first and fall back
-  to the embedded stdlib only when the local package path is absent.
+- Imports resolve from local packages under the entry root first, then check
+  the dependency index built from `yar.toml` and `yar.lock`, and fall back to
+  the embedded stdlib only when both local and dependency paths are absent.
 - Imported names stay package-qualified; imports do not inject unqualified
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary
