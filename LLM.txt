@@ -483,6 +483,30 @@ env.lookup(name) !str    // error.NotFound if missing
 stdio.eprint(msg) void  // write to stderr
 ```
 
+### net
+
+Type: `net.Addr { host str, port i32 }`
+
+Listeners and connections are opaque `i64` handles. All calls are blocking.
+
+```
+net.listen(host str, port i32) !i64          // bind + listen; "" = all interfaces
+net.accept(listener i64) !i64                // block until connection arrives
+net.listener_addr(listener i64) !net.Addr    // bound address (port 0 discovery)
+net.close_listener(listener i64) !void       // close listener
+net.connect(host str, port i32) !i64         // TCP connect with DNS resolution
+net.read(conn i64, max_bytes i32) !str       // read up to N bytes; "" on EOF
+net.write(conn i64, data str) !i32           // write all data; returns bytes written
+net.close(conn i64) !void                    // close connection
+net.local_addr(conn i64) !net.Addr           // local endpoint
+net.remote_addr(conn i64) !net.Addr          // remote endpoint
+net.set_read_deadline(conn i64, millis i32) !void   // 0 = no timeout
+net.set_write_deadline(conn i64, millis i32) !void  // 0 = no timeout
+net.resolve(host str, port i32) !net.Addr    // DNS resolution
+```
+
+Errors: `error.ConnectionRefused`, `error.Timeout`, `error.AddrInUse`, `error.ConnectionReset`, `error.NotFound` (DNS), `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`, `error.Closed`
+
 ### testing
 
 Type: `testing.T { name str, failed bool, messages []str }`

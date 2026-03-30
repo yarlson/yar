@@ -142,6 +142,45 @@ long long b_len)` allocates and returns a new string containing the
   `GetEnvironmentVariableA`, and Win32 pipe/file handles. Both paths capture
   child stdout/stderr through temporary files.
 
+### Networking Runtime
+
+- `yar_net_listen(yar_str host, int32_t port, int64_t *out)` binds and listens
+  on a TCP address. Empty host means all interfaces. Returns an opaque listener
+  handle via the out-pointer.
+- `yar_net_accept(int64_t listener, int64_t *out)` blocks until a connection
+  arrives and returns an opaque connection handle.
+- `yar_net_listener_addr(int64_t listener, yar_net_addr *out)` returns the
+  bound address of a listener socket.
+- `yar_net_close_listener(int64_t listener)` closes a listener socket.
+- `yar_net_connect(yar_str host, int32_t port, int64_t *out)` performs TCP
+  connect with DNS resolution and returns a connection handle.
+- `yar_net_read(int64_t conn, int32_t max_bytes, yar_str *out)` reads up to
+  `max_bytes` from a connection. Returns empty string on EOF.
+- `yar_net_write(int64_t conn, yar_str data, int32_t *out)` writes all data
+  to a connection. Returns bytes written.
+- `yar_net_close(int64_t conn)` closes a connection socket.
+- `yar_net_local_addr(int64_t conn, yar_net_addr *out)` returns the local
+  address of a connection via `getsockname`.
+- `yar_net_remote_addr(int64_t conn, yar_net_addr *out)` returns the remote
+  address of a connection via `getpeername`.
+- `yar_net_set_read_deadline(int64_t conn, int32_t millis)` sets a read
+  timeout via `SO_RCVTIMEO`. Zero disables the timeout.
+- `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets a write
+  timeout via `SO_SNDTIMEO`. Zero disables the timeout.
+- `yar_net_resolve(yar_str host, int32_t port, yar_net_addr *out)` performs
+  DNS resolution and returns the first resolved address.
+- All networking functions return `i32` status codes that map in code generation
+  to stable YAR error names: `ConnectionRefused`, `Timeout`, `AddrInUse`,
+  `ConnectionReset`, `NotFound`, `PermissionDenied`, `InvalidArgument`, `IO`,
+  and `Closed`.
+- On POSIX, the implementation uses BSD sockets (`socket`, `bind`, `listen`,
+  `accept`, `connect`, `recv`, `send`, `getaddrinfo`, `getsockname`,
+  `getpeername`). SIGPIPE is suppressed via `signal(SIGPIPE, SIG_IGN)` and
+  `SO_NOSIGPIPE` on macOS. On Windows, the implementation uses Winsock2
+  (`WSAStartup`, `socket`, `bind`, `listen`, `accept`, `connect`, `recv`,
+  `send`, `getaddrinfo`, `closesocket`).
+- Windows builds link `-lws2_32` for Winsock2 support.
+
 ### Map Runtime
 
 - `yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size)`

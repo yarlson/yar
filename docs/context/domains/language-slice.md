@@ -222,7 +222,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `process`, `env`, `stdio`, and `testing`.
+  `path`, `fs`, `process`, `env`, `stdio`, `net`, and `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and

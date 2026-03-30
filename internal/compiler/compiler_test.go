@@ -1083,6 +1083,18 @@ func TestStdlibSortFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestStdlibNetFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_net", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "net ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
 	t.Parallel()
 

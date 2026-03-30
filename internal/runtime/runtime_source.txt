@@ -2199,3 +2199,523 @@ yar_str yar_sb_string(void *handle) {
     sb->len = 0;
     return result;
 }
+
+/* --- networking runtime --- */
+
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <netdb.h>
+#  include <arpa/inet.h>
+#  include <signal.h>
+#endif
+
+#define YAR_NET_OK               0
+#define YAR_NET_REFUSED          1
+#define YAR_NET_TIMEOUT          2
+#define YAR_NET_ADDR_IN_USE      3
+#define YAR_NET_CONN_RESET       4
+#define YAR_NET_NOT_FOUND        5
+#define YAR_NET_PERMISSION       6
+#define YAR_NET_INVALID_ARG      7
+#define YAR_NET_IO               8
+#define YAR_NET_CLOSED           9
+
+typedef struct {
+    yar_str  host;
+    int32_t  port;
+} yar_net_addr;
+
+#ifdef _WIN32
+typedef SOCKET yar_sock_t;
+#define YAR_INVALID_SOCK INVALID_SOCKET
+#else
+typedef int yar_sock_t;
+#define YAR_INVALID_SOCK (-1)
+#endif
+
+static void yar_net_ensure_init(void) {
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+#ifdef _WIN32
+    {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+    }
+#else
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
+
+#ifdef _WIN32
+static int32_t yar_net_status_from_error(int err) {
+    switch (err) {
+    case WSAECONNREFUSED:  return YAR_NET_REFUSED;
+    case WSAETIMEDOUT:     return YAR_NET_TIMEOUT;
+    case WSAEADDRINUSE:    return YAR_NET_ADDR_IN_USE;
+    case WSAECONNRESET:
+    case WSAECONNABORTED:  return YAR_NET_CONN_RESET;
+    case WSAEACCES:        return YAR_NET_PERMISSION;
+    case WSAEINVAL:
+    case WSAENOTSOCK:
+    case WSAEBADF:         return YAR_NET_INVALID_ARG;
+    default:               return YAR_NET_IO;
+    }
+}
+static int yar_net_last_error(void) { return WSAGetLastError(); }
+#else
+static int32_t yar_net_status_from_error(int err) {
+    switch (err) {
+    case ECONNREFUSED:     return YAR_NET_REFUSED;
+    case ETIMEDOUT:        return YAR_NET_TIMEOUT;
+    case EADDRINUSE:       return YAR_NET_ADDR_IN_USE;
+    case ECONNRESET:
+    case EPIPE:            return YAR_NET_CONN_RESET;
+    case EACCES:           return YAR_NET_PERMISSION;
+    case EINVAL:
+    case EBADF:
+    case ENOTSOCK:         return YAR_NET_INVALID_ARG;
+    default:               return YAR_NET_IO;
+    }
+}
+static int yar_net_last_error(void) { return errno; }
+#endif
+
+static void yar_net_close_socket(yar_sock_t sock) {
+#ifdef _WIN32
+    closesocket(sock);
+#else
+    close(sock);
+#endif
+}
+
+static void yar_net_fill_addr(yar_net_addr *out, struct sockaddr_storage *sa) {
+    char buf[INET6_ADDRSTRLEN];
+    const char *host = NULL;
+    int port = 0;
+
+    if (sa->ss_family == AF_INET) {
+        struct sockaddr_in *v4 = (struct sockaddr_in *)sa;
+        host = inet_ntop(AF_INET, &v4->sin_addr, buf, sizeof(buf));
+        port = ntohs(v4->sin_port);
+    } else if (sa->ss_family == AF_INET6) {
+        struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)sa;
+        host = inet_ntop(AF_INET6, &v6->sin6_addr, buf, sizeof(buf));
+        port = ntohs(v6->sin6_port);
+    }
+
+    if (host != NULL) {
+        out->host = yar_fs_copy_bytes(host, strlen(host));
+    } else {
+        out->host = yar_empty_str();
+    }
+    out->port = (int32_t)port;
+}
+
+static char *yar_net_port_str(int32_t port, char *buf, size_t bufsize) {
+    snprintf(buf, bufsize, "%d", (int)port);
+    return buf;
+}
+
+int32_t yar_net_listen(yar_str host, int32_t port, int64_t *out) {
+    struct addrinfo hints, *res, *rp;
+    yar_sock_t sock;
+    int opt = 1;
+    char portbuf[16];
+    char *chost = NULL;
+    int rc;
+
+    *out = 0;
+    yar_net_ensure_init();
+
+    if (port < 0 || port > 65535) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+    /* Convert host to C string; empty host means all interfaces (NULL for getaddrinfo). */
+    if (host.len > 0) {
+        if (host.ptr == NULL) return YAR_NET_INVALID_ARG;
+        chost = yar_fs_copy_cstr(host.ptr, (size_t)host.len);
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    yar_net_port_str(port, portbuf, sizeof(portbuf));
+    rc = getaddrinfo(chost, portbuf, &hints, &res);
+    if (chost) free(chost);
+    if (rc != 0) {
+        return YAR_NET_NOT_FOUND;
+    }
+
+    sock = YAR_INVALID_SOCK;
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock == YAR_INVALID_SOCK) continue;
+
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#if defined(__APPLE__)
+        {
+            int nosig = 1;
+            setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+        }
+#endif
+
+        if (bind(sock, rp->ai_addr, (int)rp->ai_addrlen) == 0) {
+            break;
+        }
+
+        {
+            int32_t status = yar_net_status_from_error(yar_net_last_error());
+            yar_net_close_socket(sock);
+            sock = YAR_INVALID_SOCK;
+            if (rp->ai_next == NULL) {
+                freeaddrinfo(res);
+                return status;
+            }
+        }
+    }
+    freeaddrinfo(res);
+
+    if (sock == YAR_INVALID_SOCK) {
+        return YAR_NET_IO;
+    }
+
+    if (listen(sock, 128) != 0) {
+        int32_t status = yar_net_status_from_error(yar_net_last_error());
+        yar_net_close_socket(sock);
+        return status;
+    }
+
+    *out = (int64_t)sock;
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_accept(int64_t listener, int64_t *out) {
+    yar_sock_t lsock = (yar_sock_t)listener;
+    yar_sock_t conn;
+    struct sockaddr_storage addr;
+    socklen_t addrlen = sizeof(addr);
+
+    *out = 0;
+
+    conn = accept(lsock, (struct sockaddr *)&addr, &addrlen);
+    if (conn == YAR_INVALID_SOCK) {
+        return yar_net_status_from_error(yar_net_last_error());
+    }
+
+#if defined(__APPLE__)
+    {
+        int nosig = 1;
+        setsockopt(conn, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+    }
+#endif
+
+    *out = (int64_t)conn;
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_listener_addr(int64_t listener, yar_net_addr *out) {
+    yar_sock_t sock = (yar_sock_t)listener;
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    out->host = yar_empty_str();
+    out->port = 0;
+
+    if (getsockname(sock, (struct sockaddr *)&sa, &salen) != 0) {
+        return yar_net_status_from_error(yar_net_last_error());
+    }
+
+    yar_net_fill_addr(out, &sa);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_close_listener(int64_t listener) {
+    yar_sock_t sock = (yar_sock_t)listener;
+    yar_net_close_socket(sock);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_connect(yar_str host, int32_t port, int64_t *out) {
+    struct addrinfo hints, *res, *rp;
+    yar_sock_t sock;
+    char portbuf[16];
+    char *chost = NULL;
+    int rc;
+    int32_t status;
+
+    *out = 0;
+    yar_net_ensure_init();
+
+    if (port < 0 || port > 65535) {
+        return YAR_NET_INVALID_ARG;
+    }
+    if (host.len <= 0 || host.ptr == NULL) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+    chost = yar_fs_copy_cstr(host.ptr, (size_t)host.len);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    yar_net_port_str(port, portbuf, sizeof(portbuf));
+    rc = getaddrinfo(chost, portbuf, &hints, &res);
+    free(chost);
+    if (rc != 0) {
+        return YAR_NET_NOT_FOUND;
+    }
+
+    sock = YAR_INVALID_SOCK;
+    status = YAR_NET_IO;
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock == YAR_INVALID_SOCK) continue;
+
+#if defined(__APPLE__)
+        {
+            int nosig = 1;
+            setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+        }
+#endif
+
+        if (connect(sock, rp->ai_addr, (int)rp->ai_addrlen) == 0) {
+            status = YAR_NET_OK;
+            break;
+        }
+
+        status = yar_net_status_from_error(yar_net_last_error());
+        yar_net_close_socket(sock);
+        sock = YAR_INVALID_SOCK;
+    }
+    freeaddrinfo(res);
+
+    if (sock == YAR_INVALID_SOCK) {
+        return status;
+    }
+
+    *out = (int64_t)sock;
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_read(int64_t conn, int32_t max_bytes, yar_str *out) {
+    yar_sock_t sock = (yar_sock_t)conn;
+    char *buf;
+    long long n;
+
+    *out = yar_empty_str();
+
+    if (max_bytes <= 0) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+    buf = (char *)malloc((size_t)max_bytes);
+    if (buf == NULL) {
+        return YAR_NET_IO;
+    }
+
+#ifdef _WIN32
+    n = recv(sock, buf, max_bytes, 0);
+#else
+    n = recv(sock, buf, (size_t)max_bytes, 0);
+#endif
+
+    if (n < 0) {
+        int32_t status = yar_net_status_from_error(yar_net_last_error());
+        free(buf);
+        return status;
+    }
+
+    if (n == 0) {
+        /* EOF */
+        free(buf);
+        *out = yar_empty_str();
+        return YAR_NET_OK;
+    }
+
+    *out = yar_fs_copy_bytes(buf, (size_t)n);
+    free(buf);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_write(int64_t conn, yar_str data, int32_t *out) {
+    yar_sock_t sock = (yar_sock_t)conn;
+    long long total = 0;
+    int flags = 0;
+
+    *out = 0;
+
+    if (data.len <= 0) {
+        return YAR_NET_OK;
+    }
+    if (data.ptr == NULL) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+#if defined(__linux__)
+    flags = MSG_NOSIGNAL;
+#endif
+
+    while (total < data.len) {
+        long long n;
+#ifdef _WIN32
+        n = send(sock, data.ptr + total, (int)(data.len - total), flags);
+#else
+        n = send(sock, data.ptr + total, (size_t)(data.len - total), flags);
+#endif
+        if (n <= 0) {
+            if (total > 0) {
+                *out = (int32_t)total;
+                return YAR_NET_OK;
+            }
+            return yar_net_status_from_error(yar_net_last_error());
+        }
+        total += n;
+    }
+
+    *out = (int32_t)total;
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_close(int64_t conn) {
+    yar_sock_t sock = (yar_sock_t)conn;
+    yar_net_close_socket(sock);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_local_addr(int64_t conn, yar_net_addr *out) {
+    yar_sock_t sock = (yar_sock_t)conn;
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    out->host = yar_empty_str();
+    out->port = 0;
+
+    if (getsockname(sock, (struct sockaddr *)&sa, &salen) != 0) {
+        return yar_net_status_from_error(yar_net_last_error());
+    }
+
+    yar_net_fill_addr(out, &sa);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_remote_addr(int64_t conn, yar_net_addr *out) {
+    yar_sock_t sock = (yar_sock_t)conn;
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+
+    out->host = yar_empty_str();
+    out->port = 0;
+
+    if (getpeername(sock, (struct sockaddr *)&sa, &salen) != 0) {
+        return yar_net_status_from_error(yar_net_last_error());
+    }
+
+    yar_net_fill_addr(out, &sa);
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_set_read_deadline(int64_t conn, int32_t millis) {
+    yar_sock_t sock = (yar_sock_t)conn;
+
+    if (millis < 0) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+#ifdef _WIN32
+    {
+        DWORD tv = (DWORD)millis;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv)) != 0) {
+            return yar_net_status_from_error(yar_net_last_error());
+        }
+    }
+#else
+    {
+        struct timeval tv;
+        tv.tv_sec = millis / 1000;
+        tv.tv_usec = (millis % 1000) * 1000;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) {
+            return yar_net_status_from_error(yar_net_last_error());
+        }
+    }
+#endif
+
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_set_write_deadline(int64_t conn, int32_t millis) {
+    yar_sock_t sock = (yar_sock_t)conn;
+
+    if (millis < 0) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+#ifdef _WIN32
+    {
+        DWORD tv = (DWORD)millis;
+        if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv)) != 0) {
+            return yar_net_status_from_error(yar_net_last_error());
+        }
+    }
+#else
+    {
+        struct timeval tv;
+        tv.tv_sec = millis / 1000;
+        tv.tv_usec = (millis % 1000) * 1000;
+        if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) {
+            return yar_net_status_from_error(yar_net_last_error());
+        }
+    }
+#endif
+
+    return YAR_NET_OK;
+}
+
+int32_t yar_net_resolve(yar_str host, int32_t port, yar_net_addr *out) {
+    struct addrinfo hints, *res;
+    char portbuf[16];
+    char *chost = NULL;
+    int rc;
+
+    out->host = yar_empty_str();
+    out->port = 0;
+
+    yar_net_ensure_init();
+
+    if (port < 0 || port > 65535) {
+        return YAR_NET_INVALID_ARG;
+    }
+    if (host.len <= 0 || host.ptr == NULL) {
+        return YAR_NET_INVALID_ARG;
+    }
+
+    chost = yar_fs_copy_cstr(host.ptr, (size_t)host.len);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    yar_net_port_str(port, portbuf, sizeof(portbuf));
+    rc = getaddrinfo(chost, portbuf, &hints, &res);
+    free(chost);
+    if (rc != 0) {
+        return YAR_NET_NOT_FOUND;
+    }
+
+    {
+        struct sockaddr_storage sa;
+        memcpy(&sa, res->ai_addr, res->ai_addrlen);
+        yar_net_fill_addr(out, &sa);
+    }
+
+    freeaddrinfo(res);
+    return YAR_NET_OK;
+}

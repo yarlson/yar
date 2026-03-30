@@ -935,6 +935,55 @@ Available functions:
 
 - `stdio.eprint(msg str) void`
 
+### `net`
+
+```
+import "net"
+```
+
+Types:
+
+- `net.Addr { host str, port i32 }`
+
+Available functions:
+
+- `net.listen(host str, port i32) !i64` — bind and listen on a TCP address;
+  empty host means all interfaces
+- `net.accept(listener i64) !i64` — block until a connection arrives
+- `net.listener_addr(listener i64) !net.Addr` — return bound address of a
+  listener
+- `net.close_listener(listener i64) !void` — close a listener socket
+- `net.connect(host str, port i32) !i64` — TCP connect with DNS resolution
+- `net.read(conn i64, max_bytes i32) !str` — read up to `max_bytes`; returns
+  empty string on EOF
+- `net.write(conn i64, data str) !i32` — write all data; returns bytes written
+- `net.close(conn i64) !void` — close a connection
+- `net.local_addr(conn i64) !net.Addr` — local address of a connection
+- `net.remote_addr(conn i64) !net.Addr` — remote address of a connection
+- `net.set_read_deadline(conn i64, millis i32) !void` — set read timeout in
+  milliseconds; 0 disables
+- `net.set_write_deadline(conn i64, millis i32) !void` — set write timeout in
+  milliseconds; 0 disables
+- `net.resolve(host str, port i32) !net.Addr` — DNS resolution; returns first
+  result
+
+Listeners and connections use opaque `i64` handles. All calls are blocking.
+
+Networking errors surface through ordinary YAR errors using the names:
+
+- `error.ConnectionRefused`
+- `error.Timeout`
+- `error.AddrInUse`
+- `error.ConnectionReset`
+- `error.NotFound` (DNS failure)
+- `error.PermissionDenied`
+- `error.InvalidArgument`
+- `error.IO`
+- `error.Closed`
+
+Current implementation note: the host networking runtime uses BSD sockets on
+Unix-like systems and Winsock2 on Windows. SIGPIPE is suppressed on POSIX.
+
 ### `testing`
 
 ```

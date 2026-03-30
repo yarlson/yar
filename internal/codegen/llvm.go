@@ -227,6 +227,19 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare ptr @yar_sb_new()\n")
 	b.WriteString("declare void @yar_sb_write(ptr, ptr, i64)\n")
 	b.WriteString("declare %yar.str @yar_sb_string(ptr)\n")
+	b.WriteString("declare i32 @yar_net_listen(%yar.str, i32, ptr)\n")
+	b.WriteString("declare i32 @yar_net_accept(i64, ptr)\n")
+	b.WriteString("declare i32 @yar_net_listener_addr(i64, ptr)\n")
+	b.WriteString("declare i32 @yar_net_close_listener(i64)\n")
+	b.WriteString("declare i32 @yar_net_connect(%yar.str, i32, ptr)\n")
+	b.WriteString("declare i32 @yar_net_read(i64, i32, ptr)\n")
+	b.WriteString("declare i32 @yar_net_write(i64, %yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_net_close(i64)\n")
+	b.WriteString("declare i32 @yar_net_local_addr(i64, ptr)\n")
+	b.WriteString("declare i32 @yar_net_remote_addr(i64, ptr)\n")
+	b.WriteString("declare i32 @yar_net_set_read_deadline(i64, i32)\n")
+	b.WriteString("declare i32 @yar_net_set_write_deadline(i64, i32)\n")
+	b.WriteString("declare i32 @yar_net_resolve(%yar.str, i32, ptr)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -2284,6 +2297,94 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_temp_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		value := f.loadValue("%"+out, checker.TypeStr)
 		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.listen":
+		out := f.newTemp("net.listen.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
+		fmt.Fprintf(&f.builder, "  store i64 0, ptr %%%s\n", out)
+		status := f.newTemp("net.listen.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_listen(%%yar.str %s, i32 %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI64)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.accept":
+		out := f.newTemp("net.accept.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
+		fmt.Fprintf(&f.builder, "  store i64 0, ptr %%%s\n", out)
+		status := f.newTemp("net.accept.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_accept(i64 %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI64)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.listener_addr":
+		out := f.newTemp("net.listener_addr.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(sig.Return))
+		fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(sig.Return), out)
+		status := f.newTemp("net.listener_addr.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_listener_addr(i64 %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.close_listener":
+		status := f.newTemp("net.close_listener.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_close_listener(i64 %s)\n", status, args[0].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
+	case "net.connect":
+		out := f.newTemp("net.connect.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
+		fmt.Fprintf(&f.builder, "  store i64 0, ptr %%%s\n", out)
+		status := f.newTemp("net.connect.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_connect(%%yar.str %s, i32 %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI64)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.read":
+		out := f.newTemp("net.read.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.str zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("net.read.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_read(i64 %s, i32 %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeStr)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.write":
+		out := f.newTemp("net.write.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", out)
+		fmt.Fprintf(&f.builder, "  store i32 0, ptr %%%s\n", out)
+		status := f.newTemp("net.write.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_write(i64 %s, %%yar.str %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI32)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.close":
+		status := f.newTemp("net.close.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_close(i64 %s)\n", status, args[0].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
+	case "net.local_addr":
+		out := f.newTemp("net.local_addr.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(sig.Return))
+		fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(sig.Return), out)
+		status := f.newTemp("net.local_addr.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_local_addr(i64 %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.remote_addr":
+		out := f.newTemp("net.remote_addr.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(sig.Return))
+		fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(sig.Return), out)
+		status := f.newTemp("net.remote_addr.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_remote_addr(i64 %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "net.set_read_deadline":
+		status := f.newTemp("net.set_read_deadline.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_set_read_deadline(i64 %s, i32 %s)\n", status, args[0].ref, args[1].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
+	case "net.set_write_deadline":
+		status := f.newTemp("net.set_write_deadline.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_set_write_deadline(i64 %s, i32 %s)\n", status, args[0].ref, args[1].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
+	case "net.resolve":
+		out := f.newTemp("net.resolve.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(sig.Return))
+		fmt.Fprintf(&f.builder, "  store %s zeroinitializer, ptr %%%s\n", f.g.llvmType(sig.Return), out)
+		status := f.newTemp("net.resolve.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_net_resolve(%%yar.str %s, i32 %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, sig.Return)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
 	default:
 		panic("unsupported host intrinsic")
 	}
@@ -2626,6 +2727,24 @@ func (f *functionEmitter) emitHostErrorCode(fullName, status string) string {
 			{status: 3, name: "InvalidArgument"},
 			{status: 2, name: "PermissionDenied"},
 			{status: 1, name: "NotFound"},
+		}
+	case "net.listen", "net.accept", "net.listener_addr", "net.close_listener",
+		"net.connect", "net.read", "net.write", "net.close",
+		"net.local_addr", "net.remote_addr",
+		"net.set_read_deadline", "net.set_write_deadline",
+		"net.resolve":
+		items = []struct {
+			status int
+			name   string
+		}{
+			{status: 9, name: "Closed"},
+			{status: 7, name: "InvalidArgument"},
+			{status: 6, name: "PermissionDenied"},
+			{status: 5, name: "NotFound"},
+			{status: 4, name: "ConnectionReset"},
+			{status: 3, name: "AddrInUse"},
+			{status: 2, name: "Timeout"},
+			{status: 1, name: "ConnectionRefused"},
 		}
 	default:
 		panic("missing host error mapping for " + fullName)

@@ -26,6 +26,9 @@ func invokeCC(ctx context.Context, target Target, irPath, runtimePath, outputPat
 		args = append(args, "--target="+target.Triple)
 	}
 	args = append(args, irPath, runtimePath, "-o", outputPath)
+	if strings.Contains(target.Triple, "windows") {
+		args = append(args, "-lws2_32")
+	}
 	cmd := exec.CommandContext(ctx, cc, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

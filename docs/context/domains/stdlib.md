@@ -12,9 +12,9 @@
 - Stdlib packages are parsed, type-checked, and compiled through the same
   pipeline as user code.
 - Most stdlib functions are ordinary Yar code. A small set of embedded `fs`,
-  `process`, `env`, and `stdio` declarations are tagged as host intrinsics
-  during checking and code generation and lower to runtime shims while keeping
-  the user-facing API package-shaped.
+  `process`, `env`, `stdio`, and `net` declarations are tagged as host
+  intrinsics during checking and code generation and lower to runtime shims
+  while keeping the user-facing API package-shaped.
 
 ## Infrastructure
 
@@ -188,6 +188,50 @@ Functions:
 
 - `eprint(msg str) void` — write one string to stderr
 
+### `net`
+
+Host-backed TCP networking primitives.
+
+Types:
+
+- `Addr { host str, port i32 }`
+
+Functions:
+
+- `listen(host str, port i32) !i64` — bind and listen on a TCP address; empty
+  host means all interfaces; returns an opaque listener handle
+- `accept(listener i64) !i64` — block until a connection arrives on the
+  listener; returns an opaque connection handle
+- `listener_addr(listener i64) !Addr` — return the bound address of a listener
+  (useful for OS-assigned port discovery)
+- `close_listener(listener i64) !void` — close a listener socket
+- `connect(host str, port i32) !i64` — TCP connect with DNS resolution; returns
+  an opaque connection handle
+- `read(conn i64, max_bytes i32) !str` — read up to `max_bytes`; returns empty
+  string on EOF
+- `write(conn i64, data str) !i32` — write all of data; returns bytes written
+- `close(conn i64) !void` — close a connection
+- `local_addr(conn i64) !Addr` — local address of a connection
+- `remote_addr(conn i64) !Addr` — remote address of a connection
+- `set_read_deadline(conn i64, millis i32) !void` — set read timeout in
+  milliseconds; 0 disables the timeout
+- `set_write_deadline(conn i64, millis i32) !void` — set write timeout in
+  milliseconds; 0 disables the timeout
+- `resolve(host str, port i32) !Addr` — DNS resolution; returns the first
+  resolved address
+
+Errors:
+
+- `error.ConnectionRefused`
+- `error.Timeout`
+- `error.AddrInUse`
+- `error.ConnectionReset`
+- `error.NotFound` (DNS failure)
+- `error.PermissionDenied`
+- `error.InvalidArgument`
+- `error.IO`
+- `error.Closed`
+
 ### `testing`
 
 Test framework for `yar test`.
@@ -215,12 +259,18 @@ Functions:
 - Performance is straightforward and correctness-first. Concatenation-heavy
   functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for
   large inputs, and `sort` uses O(n^2) insertion sort.
-- The `fs` and `process` runtime boundaries use `#ifdef _WIN32` conditionals to
-  support both POSIX and Windows from a single C source file. On POSIX, the
-  implementations use `stat`, `opendir`, `mkdir`, `remove`, `fork`, `execvp`,
-  `waitpid`, and `mkstemp`. On Windows, the implementations use Win32 APIs
-  (`CreateFileA`, `FindFirstFileA`, `CreateDirectoryA`, `CreateProcessA`,
-  `GetEnvironmentVariableA`, and related functions).
+- The `fs`, `process`, and `net` runtime boundaries use `#ifdef _WIN32`
+  conditionals to support both POSIX and Windows from a single C source file.
+  On POSIX, the implementations use `stat`, `opendir`, `mkdir`, `remove`,
+  `fork`, `execvp`, `waitpid`, `mkstemp`, and BSD sockets (`socket`, `bind`,
+  `listen`, `accept`, `connect`, `recv`, `send`, `getaddrinfo`). On Windows,
+  the implementations use Win32 APIs (`CreateFileA`, `FindFirstFileA`,
+  `CreateDirectoryA`, `CreateProcessA`, `GetEnvironmentVariableA`, and
+  Winsock2 functions). Windows builds link `-lws2_32` for networking.
+- The `net` package uses opaque `i64` handles for listeners and connections.
+  All networking calls are blocking. Timeouts are set per-connection via
+  `SO_RCVTIMEO`/`SO_SNDTIMEO`. SIGPIPE is suppressed on POSIX
+  (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
 - `process.run` and `process.run_inherit` require at least one argv element.
   Empty command vectors and strings that cannot cross the host boundary surface
   `error.InvalidArgument`.

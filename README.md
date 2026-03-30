@@ -103,6 +103,7 @@ and function types.
 | `process` | Argv access and child-process execution               |
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
+| `net`     | TCP networking (listen, connect, read, write)         |
 | `testing` | Test assertions and framework                         |
 
 ## Install

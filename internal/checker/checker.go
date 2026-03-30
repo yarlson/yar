@@ -433,6 +433,12 @@ func IsHostIntrinsic(file, fullName string) bool {
 		return true
 	case "process.args", "process.run", "process.run_inherit", "env.lookup", "stdio.eprint":
 		return true
+	case "net.listen", "net.accept", "net.listener_addr", "net.close_listener",
+		"net.connect", "net.read", "net.write", "net.close",
+		"net.local_addr", "net.remote_addr",
+		"net.set_read_deadline", "net.set_write_deadline",
+		"net.resolve":
+		return true
 	default:
 		return false
 	}
@@ -2068,6 +2074,24 @@ func (c *Checker) registerHostErrorNames(fullName string) {
 			"InvalidArgument",
 			"NotFound",
 			"PermissionDenied",
+		} {
+			c.info.ErrorCodes[name] = 0
+		}
+	case "net.listen", "net.accept", "net.listener_addr", "net.close_listener",
+		"net.connect", "net.read", "net.write", "net.close",
+		"net.local_addr", "net.remote_addr",
+		"net.set_read_deadline", "net.set_write_deadline",
+		"net.resolve":
+		for _, name := range []string{
+			"AddrInUse",
+			"Closed",
+			"ConnectionRefused",
+			"ConnectionReset",
+			"IO",
+			"InvalidArgument",
+			"NotFound",
+			"PermissionDenied",
+			"Timeout",
 		} {
 			c.info.ErrorCodes[name] = 0
 		}

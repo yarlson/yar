@@ -71,6 +71,9 @@
 - Process and environment intrinsics contribute stable host error names when
   they are used: `IO`, `InvalidArgument`, `NotFound`, and
   `PermissionDenied`.
+- Networking intrinsics contribute stable host error names when they are used:
+  `AddrInUse`, `Closed`, `ConnectionRefused`, `ConnectionReset`, `IO`,
+  `InvalidArgument`, `NotFound`, `PermissionDenied`, and `Timeout`.
 - These names join user-declared `error.Name` values in one program-wide
   error-code table.
 
