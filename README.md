@@ -1,6 +1,9 @@
 # Yar
 
-Yar is a compiled programming language. 
+Yar is a compiled programming language that targets native executables through
+LLVM. It has explicit error handling, closed enums with exhaustive matching,
+generics, interfaces, and automatic memory management — with no exceptions, no
+implicit coercions, and no hidden control flow.
 
 Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 
@@ -15,9 +18,7 @@ fn greet(name str) !void {
     if strings.contains(name, " ") {
         return error.InvalidName
     }
-    print("hello, ")
-    print(name)
-    print("\n")
+    print("hello, " + name + "\n")
 }
 
 fn main() !i32 {
@@ -26,45 +27,83 @@ fn main() !i32 {
 }
 ```
 
-```bash
-./bin/yar run greet.yar
+```
+$ yar run greet.yar
 hello, world
 ```
 
-## What Yar does
+Enums are closed. `match` is exhaustive:
 
-- Functions that can fail return `!T`. The caller handles it or propagates it.
-  There are no exceptions.
+```
+package main
+
+enum Shape {
+    case Circle { radius i32 }
+    case Rect { w i32, h i32 }
+}
+
+fn area(s Shape) i32 {
+    match s {
+        case Shape.Circle { radius } {
+            return radius * radius * 3
+        }
+        case Shape.Rect { w, h } {
+            return w * h
+        }
+    }
+}
+
+fn main() i32 {
+    s := Shape.Rect{w: 4, h: 5}
+    print("area: " + to_str(area(s)) + "\n")
+    return 0
+}
+```
+
+```
+$ yar run shapes.yar
+area: 20
+```
+
+## Design
+
+- Functions that can fail return `!T`. The caller handles it or propagates with
+  `?`. There are no exceptions.
 - Enums are closed and `match` is exhaustive. The compiler tells you when you
   miss a case.
 - Packages are explicit. Imports stay qualified. Exported APIs use `pub`.
 - Generics use explicit type arguments. The compiler does not guess.
 - Methods use explicit receivers. Value and pointer receivers are distinct.
-- Interfaces are named and implicit. Concrete values satisfy them by matching
-  the required methods exactly.
-- Closures capture by value at creation time. No surprises.
+- Interfaces are named and implicit. A concrete type satisfies an interface by
+  providing every required method with an exact signature match.
+- Closures capture by value at creation time.
 - The runtime manages memory automatically. There is no manual `free` and no
-  visible garbage collector — the runtime reclaims unreachable heap storage on
-  its own.
+  visible garbage collector.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
 - The standard library is written in Yar and compiled through the same pipeline
   as user code.
 
+## Types
+
+`bool`, `i32`, `i64`, `str`, `error`, typed pointers (`*T`), structs,
+interfaces, enums, fixed arrays (`[N]T`), slices (`[]T`), maps (`map[K]V`),
+and function types.
+
 ## Standard library
 
-| Package   | What it does                                              |
-| --------- | --------------------------------------------------------- |
-| `strings` | String helpers: split, join, trim, case conversion, parse |
-| `utf8`    | Decoding and rune classification                          |
-| `conv`    | Numeric and byte/string conversions                       |
-| `sort`    | In-place sorting for slices                               |
-| `path`    | Path normalization and joining                            |
-| `fs`      | Text file and directory operations                        |
-| `process` | Argv access and child-process execution                   |
-| `env`     | Environment variable lookup                               |
-| `stdio`   | Stderr output                                             |
-| `testing` | Test assertions and framework                             |
+| Package   | What it does                                          |
+| --------- | ----------------------------------------------------- |
+| `strings` | Split, join, trim, contains, replace, case conversion |
+| `utf8`    | Decoding and rune classification                      |
+| `conv`    | Numeric and byte/string conversions                   |
+| `sort`    | In-place sorting for slices                           |
+| `path`    | Path normalization and joining                        |
+| `fs`      | Text file and directory operations                    |
+| `process` | Argv access and child-process execution               |
+| `env`     | Environment variable lookup                           |
+| `stdio`   | Stderr output                                         |
+| `testing` | Test assertions and framework                         |
 
 ## Install
 
@@ -80,29 +119,6 @@ Override the C compiler if needed:
 CC=clang-17 ./bin/yar build main.yar
 ```
 
-## Cross-compilation
-
-Set `YAR_OS` and `YAR_ARCH` to build for a different platform:
-
-```bash
-YAR_OS=linux YAR_ARCH=amd64 ./bin/yar build main.yar
-YAR_OS=windows YAR_ARCH=amd64 ./bin/yar build main.yar -o main.exe
-```
-
-Supported targets:
-
-| `YAR_OS`  | `YAR_ARCH` |
-| --------- | ---------- |
-| `darwin`  | `amd64`    |
-| `darwin`  | `arm64`    |
-| `linux`   | `amd64`    |
-| `linux`   | `arm64`    |
-| `windows` | `amd64`    |
-
-Cross-compilation requires a `clang` that can target the requested platform
-(appropriate sysroot and system libraries). `yar run` only supports the host
-platform.
-
 <details>
 <summary>Installing clang</summary>
 
@@ -114,6 +130,52 @@ platform.
 | Windows       | `winget install LLVM.LLVM` or [releases.llvm.org](https://releases.llvm.org) |
 
 </details>
+
+## Commands
+
+```text
+yar <command> [arguments]
+```
+
+| Command   | What it does                                      |
+| --------- | ------------------------------------------------- |
+| `check`   | Parse and type-check without generating a binary  |
+| `emit-ir` | Print LLVM IR to stdout                           |
+| `build`   | Compile to a native executable                    |
+| `run`     | Compile and execute a temporary native executable |
+| `test`    | Discover and run test functions from `_test.yar`  |
+| `init`    | Create a `yar.toml` manifest                      |
+| `add`     | Add a dependency to `yar.toml`                    |
+| `remove`  | Remove a dependency from `yar.toml`               |
+| `fetch`   | Download dependencies from `yar.lock` to cache    |
+| `lock`    | Regenerate `yar.lock` from `yar.toml`             |
+| `update`  | Re-resolve dependencies and update `yar.lock`     |
+
+## Testing
+
+Test files end in `_test.yar`. Test functions take `*testing.T` and return `void`:
+
+```
+package main
+
+import "testing"
+
+fn add(a i32, b i32) i32 {
+    return a + b
+}
+
+fn test_add(t *testing.T) void {
+    testing.equal[i32](t, add(2, 3), 5)
+    testing.equal[i32](t, add(-1, 1), 0)
+}
+```
+
+```
+$ yar test .
+PASS: test_add
+
+2 passed, 0 failed
+```
 
 ## Dependencies
 
@@ -136,38 +198,41 @@ http = { git = "https://github.com/user/yar-http.git", tag = "v0.3.1" }
 local_lib = { path = "../my-local-lib" }
 ```
 
-The alias becomes the import path: `import "http"`. Resolution order: local →
-dependency → stdlib.
+The alias becomes the import path: `import "http"`. Resolution order: local >
+dependency > stdlib.
 
 `yar.lock` pins exact commit SHAs and content hashes. Commit it to version
 control for reproducible builds.
 
-## Commands
+## Cross-compilation
 
-```text
-yar <command> [arguments]
+Set `YAR_OS` and `YAR_ARCH` to build for a different platform:
+
+```bash
+YAR_OS=linux YAR_ARCH=amd64 yar build main.yar
+YAR_OS=windows YAR_ARCH=amd64 yar build main.yar -o main.exe
 ```
 
-| Command   | What it does                                      |
-| --------- | ------------------------------------------------- |
-| `check`   | Parse and type-check without generating a binary  |
-| `emit-ir` | Print LLVM IR to stdout                           |
-| `build`   | Compile to a native executable                    |
-| `run`     | Compile and execute a temporary native executable |
-| `test`    | Discover and run test functions from `_test.yar`  |
-| `init`    | Create a `yar.toml` manifest                      |
-| `add`     | Add a dependency to `yar.toml`                    |
-| `remove`  | Remove a dependency from `yar.toml`               |
-| `fetch`   | Download dependencies from `yar.lock` to cache    |
-| `lock`    | Regenerate `yar.lock` from `yar.toml`             |
-| `update`  | Re-resolve dependencies and update `yar.lock`     |
+Supported targets:
+
+| `YAR_OS`  | `YAR_ARCH` |
+| --------- | ---------- |
+| `darwin`  | `amd64`    |
+| `darwin`  | `arm64`    |
+| `linux`   | `amd64`    |
+| `linux`   | `arm64`    |
+| `windows` | `amd64`    |
+
+Cross-compilation requires a `clang` that can target the requested platform
+(appropriate sysroot and system libraries). `yar run` and `yar test` only
+support the host platform.
 
 ## Documentation
 
-- [The Yar Code](docs/language/the-yar-code.md) — how to write Yar programs
-- [Language reference](docs/YAR.md) — what the compiler implements today
-- [Language design docs](docs/language/) — proposals, decisions, and process
-- [Context docs](docs/context/) — architecture, runtime, and compiler internals
+- [The Yar Code](docs/language/the-yar-code.md) -- how to write Yar programs
+- [Language reference](docs/YAR.md) -- what the compiler implements today
+- [Language design docs](docs/language/) -- proposals, decisions, and process
+- [Context docs](docs/context/) -- architecture, runtime, and compiler internals
 
 ## Development
 
