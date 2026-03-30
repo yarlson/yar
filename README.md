@@ -1,7 +1,6 @@
 # Yar
 
-Yar is a compiled programming language. Errors are visible. Variants are
-closed. Output is native.
+Yar is a compiled programming language. 
 
 Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 
@@ -54,18 +53,18 @@ hello, world
 
 ## Standard library
 
-| Package   | What it does                            |
-| --------- | --------------------------------------- |
-| `strings` | String helpers and `parse_i64`          |
-| `utf8`    | Decoding and rune classification        |
-| `conv`    | Numeric and byte/string conversions     |
-| `sort`    | In-place sorting for slices             |
-| `path`    | Path normalization and joining          |
-| `fs`      | Text file and directory operations      |
-| `process` | Argv access and child-process execution |
-| `env`     | Environment variable lookup             |
-| `stdio`   | Stderr output                           |
-| `testing` | Test assertions and framework           |
+| Package   | What it does                                              |
+| --------- | --------------------------------------------------------- |
+| `strings` | String helpers: split, join, trim, case conversion, parse |
+| `utf8`    | Decoding and rune classification                          |
+| `conv`    | Numeric and byte/string conversions                       |
+| `sort`    | In-place sorting for slices                               |
+| `path`    | Path normalization and joining                            |
+| `fs`      | Text file and directory operations                        |
+| `process` | Argv access and child-process execution                   |
+| `env`     | Environment variable lookup                               |
+| `stdio`   | Stderr output                                             |
+| `testing` | Test assertions and framework                             |
 
 ## Install
 

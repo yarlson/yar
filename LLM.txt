@@ -107,6 +107,10 @@ enum Expr {
 c := Color.Red
 e := Expr.Int{value: 42}
 
+// Single-field cases also accept positional syntax
+e2 := Expr.Int(42)            // same as Expr.Int{value: 42}
+e3 := Expr.Name("main")      // same as Expr.Name{text: "main"}
+
 // Match (exhaustive, statement-form only)
 match e {
 case Expr.Int(v) {
@@ -171,7 +175,7 @@ fn (c Counter) current() i32 {
 }
 
 fn (c *Counter) inc() void {
-    (*c).n = (*c).n + 1
+    c.n += 1
 }
 
 // Call: c.current(), c.inc() -- but receiver types must match exactly
@@ -224,12 +228,13 @@ struct Node {
 }
 
 n := &Node{value: 1, next: nil}
-(*n).value = 2              // explicit dereference required
-p := &(*n).next             // address-of field
+n.value = 2                 // implicit dereference for pointer-to-struct
+(*n).value = 2              // explicit dereference also works
+p := &n.next                // address-of field through pointer
 ```
 
 - `&expr` (address-of), `*ptr` (dereference), `nil`
-- No `ptr.field` sugar; must use `(*ptr).field`
+- `ptr.field` works for pointer-to-struct (implicit dereference for field access)
 - `nil` requires pointer-typed context (`p := nil` is rejected)
 - No pointer arithmetic
 
@@ -246,6 +251,8 @@ values := []i32{}
 values = append(values, 1)
 values = append(values, 2)
 part := values[0:1]
+tail := values[1:]           // open-ended: end defaults to len(values)
+head := values[:2]           // open-ended: start defaults to 0
 ```
 
 Runtime bounds-checked. `len()` works on both. `append()` on slices only.
@@ -282,11 +289,11 @@ if x > 0 {
 
 // For (condition)
 for i < 10 {
-    i = i + 1
+    i += 1
 }
 
 // For (C-style)
-for i := 0; i < 10; i = i + 1 {
+for i := 0; i < 10; i += 1 {
     print(to_str(i))
 }
 
@@ -301,7 +308,8 @@ Arithmetic: `+`, `-`, `*`, `/`, `%`
 Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 Boolean: `&&` (short-circuit AND), `||` (short-circuit OR)
 Unary: `-` (negate), `!` (not), `&` (address-of), `*` (dereference)
-String: `+` (concatenation), `==`/`!=` (equality), `s[i]` (byte), `s[i:j]` (slice)
+Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (sugar for `x = x op expr`)
+String: `+` (concatenation), `==`/`!=` (equality), `s[i]` (byte), `s[i:j]`, `s[i:]`, `s[:j]` (slice)
 
 ## Error Handling
 
@@ -386,6 +394,10 @@ strings.repeat(s, n) str
 strings.replace(s, old, new, n) str       // n < 0 replaces all
 strings.trim_left(s, cutset) str
 strings.trim_right(s, cutset) str
+strings.trim(s, cutset) str                  // both ends
+strings.split(s, sep) []str                  // empty sep splits into bytes
+strings.to_lower(s) str                      // ASCII lowercase
+strings.to_upper(s) str                      // ASCII uppercase
 strings.join(parts []str, sep str) str
 strings.from_byte(b i32) str
 strings.parse_i64(s str) !i64
@@ -596,7 +608,7 @@ fn fizzbuzz(n i32) str {
 }
 
 fn main() i32 {
-    for i := 1; i <= 20; i = i + 1 {
+    for i := 1; i <= 20; i += 1 {
         print(fizzbuzz(i) + "\n")
     }
     return 0
@@ -673,7 +685,6 @@ Cache: `~/.cache/yar/deps/` (override with `YAR_CACHE`).
 ## Key Restrictions
 
 - No type inference for generics (always explicit: `Box[i32]`)
-- No implicit pointer dereference (`(*ptr).field`, not `ptr.field`)
 - No `nil` without pointer context
 - No variadics
 - No exceptions
