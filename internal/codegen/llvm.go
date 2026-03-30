@@ -224,6 +224,9 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_fs_mkdir_all(%yar.str)\n")
 	b.WriteString("declare i32 @yar_fs_remove_all(%yar.str)\n")
 	b.WriteString("declare i32 @yar_fs_temp_dir(%yar.str, ptr)\n")
+	b.WriteString("declare ptr @yar_sb_new()\n")
+	b.WriteString("declare void @yar_sb_write(ptr, ptr, i64)\n")
+	b.WriteString("declare %yar.str @yar_sb_string(ptr)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -261,6 +264,27 @@ func builtins() map[string]checker.Signature {
 			FullName: "i64_to_i32",
 			Params:   []checker.Type{checker.TypeI64},
 			Return:   checker.TypeI32,
+			Builtin:  true,
+		},
+		"sb_new": {
+			Name:     "sb_new",
+			FullName: "sb_new",
+			Params:   nil,
+			Return:   checker.TypeI64,
+			Builtin:  true,
+		},
+		"sb_write": {
+			Name:     "sb_write",
+			FullName: "sb_write",
+			Params:   []checker.Type{checker.TypeI64, checker.TypeStr},
+			Return:   checker.TypeVoid,
+			Builtin:  true,
+		},
+		"sb_string": {
+			Name:     "sb_string",
+			FullName: "sb_string",
+			Params:   []checker.Type{checker.TypeI64},
+			Return:   checker.TypeStr,
 			Builtin:  true,
 		},
 	}
@@ -1112,8 +1136,17 @@ func (f *functionEmitter) genMatch(stmt *ast.MatchStmt) {
 	}
 
 	f.emitLabel(defaultLabel)
-	f.builder.WriteString("  unreachable\n")
-	f.terminated = true
+	if stmt.ElseBody != nil {
+		f.genBlock(stmt.ElseBody)
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+			f.terminated = true
+			needsEnd = true
+		}
+	} else {
+		f.builder.WriteString("  unreachable\n")
+		f.terminated = true
+	}
 
 	if needsEnd {
 		f.emitLabel(endLabel)
@@ -1185,6 +1218,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 			literalType = checker.TypeI32
 		}
 		return exprValue{ref: fmt.Sprintf("%d", e.Value), typ: literalType}
+	case *ast.CharLiteral:
+		return exprValue{ref: fmt.Sprintf("%d", e.Value), typ: checker.TypeI32}
 	case *ast.BoolLiteral:
 		if e.Value {
 			return exprValue{ref: "1", typ: checker.TypeBool}
@@ -1333,6 +1368,13 @@ func (f *functionEmitter) emitStructValue(typ checker.Type, fields []ast.StructL
 
 func (f *functionEmitter) genSelector(expr *ast.SelectorExpr) exprValue {
 	basePtr, baseType := f.addressOfAggregateExpr(expr.Inner)
+	if f.g.info.AutoDeref[expr] {
+		pointer, _ := checker.ParsePointerType(baseType)
+		loaded := f.newTemp("autoderef")
+		fmt.Fprintf(&f.builder, "  %%%s = load ptr, ptr %s\n", loaded, basePtr)
+		basePtr = "%" + loaded
+		baseType = pointer.Elem
+	}
 	info := f.g.info.Structs[string(baseType)]
 	field, index, _ := info.Field(expr.Name)
 	ptr := f.newTemp("field.ptr")
@@ -1677,6 +1719,12 @@ func (f *functionEmitter) genBinary(expr *ast.BinaryExpr) exprValue {
 
 	left := f.genExpression(expr.Left)
 	right := f.genExpression(expr.Right)
+	if left.typ == checker.TypeUntypedInt {
+		left.typ = checker.TypeI32
+	}
+	if right.typ == checker.TypeUntypedInt {
+		right.typ = checker.TypeI32
+	}
 	if left.typ == checker.TypeStr {
 		return f.genStringBinary(expr.Operator, left, right)
 	}
@@ -2005,6 +2053,27 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 			tmp := f.newTemp("narrow")
 			fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %s to i32\n", tmp, args[0].ref)
 			return exprValue{ref: "%" + tmp, typ: checker.TypeI32}
+		case "sb_new":
+			ptrTmp := f.newTemp("sb.ptr")
+			handleTmp := f.newTemp("sb.handle")
+			fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_sb_new()\n", ptrTmp)
+			fmt.Fprintf(&f.builder, "  %%%s = ptrtoint ptr %%%s to i64\n", handleTmp, ptrTmp)
+			return exprValue{ref: "%" + handleTmp, typ: checker.TypeI64}
+		case "sb_write":
+			ptrTmp := f.newTemp("sb.ptr")
+			strPtr := f.newTemp("sb.str.ptr")
+			strLen := f.newTemp("sb.str.len")
+			fmt.Fprintf(&f.builder, "  %%%s = inttoptr i64 %s to ptr\n", ptrTmp, args[0].ref)
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", strPtr, args[1].ref)
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", strLen, args[1].ref)
+			fmt.Fprintf(&f.builder, "  call void @yar_sb_write(ptr %%%s, ptr %%%s, i64 %%%s)\n", ptrTmp, strPtr, strLen)
+			return exprValue{typ: checker.TypeVoid}
+		case "sb_string":
+			ptrTmp := f.newTemp("sb.ptr")
+			resultTmp := f.newTemp("sb.result")
+			fmt.Fprintf(&f.builder, "  %%%s = inttoptr i64 %s to ptr\n", ptrTmp, args[0].ref)
+			fmt.Fprintf(&f.builder, "  %%%s = call %%yar.str @yar_sb_string(ptr %%%s)\n", resultTmp, ptrTmp)
+			return exprValue{ref: "%" + resultTmp, typ: checker.TypeStr}
 		}
 	}
 
@@ -2224,6 +2293,13 @@ func (f *functionEmitter) addressOfLValueExpr(expr ast.Expression) (string, chec
 		basePtr, baseType, ok := f.addressOfLValueExpr(e.Inner)
 		if !ok {
 			return "", checker.TypeInvalid, false
+		}
+		if f.g.info.AutoDeref[e] {
+			pointer, _ := checker.ParsePointerType(baseType)
+			loaded := f.newTemp("autoderef")
+			fmt.Fprintf(&f.builder, "  %%%s = load ptr, ptr %s\n", loaded, basePtr)
+			basePtr = "%" + loaded
+			baseType = pointer.Elem
 		}
 		info := f.g.info.Structs[string(baseType)]
 		field, index, _ := info.Field(e.Name)

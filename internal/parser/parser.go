@@ -526,8 +526,12 @@ func (p *Parser) parseMatch() ast.Statement {
 		MatchPos: matchTok.Pos,
 		Value:    value,
 	}
-	for !p.at(token.RBrace) && !p.at(token.EOF) {
+	for !p.at(token.RBrace) && !p.at(token.EOF) && !p.at(token.Else) {
 		stmt.Arms = append(stmt.Arms, p.parseMatchArm())
+	}
+	if p.at(token.Else) {
+		p.advance()
+		stmt.ElseBody = p.parseBlock()
 	}
 	p.expect(token.RBrace, "expected '}' after match")
 	return stmt
@@ -768,6 +772,10 @@ func (p *Parser) parsePrimary() ast.Expression {
 			value = 0
 		}
 		return &ast.IntLiteral{Value: value, LitPos: tok.Pos}
+	case token.Char:
+		p.advance()
+		value := lexer.ParseCharLiteral(tok)
+		return &ast.CharLiteral{Value: value, LitPos: tok.Pos}
 	case token.String:
 		p.advance()
 		return &ast.StringLiteral{Value: tok.Text, LitPos: tok.Pos}

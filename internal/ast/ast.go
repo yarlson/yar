@@ -330,6 +330,7 @@ type MatchStmt struct {
 	MatchPos token.Position
 	Value    Expression
 	Arms     []MatchArm
+	ElseBody *BlockStmt
 }
 
 func (s *MatchStmt) Pos() token.Position {
@@ -380,6 +381,17 @@ func (e *IntLiteral) Pos() token.Position {
 }
 
 func (*IntLiteral) exprNode() {}
+
+type CharLiteral struct {
+	Value  rune
+	LitPos token.Position
+}
+
+func (e *CharLiteral) Pos() token.Position {
+	return e.LitPos
+}
+
+func (*CharLiteral) exprNode() {}
 
 type StringLiteral struct {
 	Value  string

@@ -52,7 +52,7 @@
 - `break`
 - `continue`
 - `return`
-- `match value { case Enum.Case { ... } ... }`
+- `match value { case Enum.Case { ... } ... [else { ... }] }`
 - Expression statements
 
 ## Expressions
@@ -61,8 +61,10 @@
 - Package-qualified function calls such as `lexer.classify()`
 - Method calls such as `user.display_name()`
 - Interface method calls such as `writer.write(msg)`
-- Integer literals with coercion into `i32` or `i64`
-- String literals with `\n`, `\t`, `\\`, and `\"` escapes
+- Integer literals with coercion into `i32` or `i64`; binary expressions on
+  untyped literals stay untyped until a concrete type is required
+- Character literals (`'a'`, `'\n'`) producing `i32` values
+- String literals with `\n`, `\t`, `\r`, `\0`, `\\`, and `\"` escapes
 - Boolean literals
 - `nil`
 - `error.Name` expressions as general values and in return position
@@ -157,7 +159,8 @@
 - Unary `!` requires a `bool` operand.
 - Address-of requires an addressable operand or a composite literal.
 - Dereference requires a non-errorable pointer operand.
-- Field access requires a struct value and a known field.
+- Field access requires a struct value and a known field. Pointer-to-struct
+  values are implicitly dereferenced for field access and assignment.
 - Plain enum cases are values of their enum type.
 - Payload enum cases are constructed with keyed field syntax and produce the
   enclosing enum type.
@@ -167,7 +170,7 @@
   yielding `error.MissingKey` on absent keys.
 - Slicing requires a slice or `str` value and integer bounds.
 - `match` requires a non-errorable enum value, each arm must use a case from
-  that same enum, and every case must be covered exactly once.
+  that same enum, and every case must be covered (or an `else` arm present).
 - Payload bindings in `match` arms have a generated payload-struct type, and
   `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because
@@ -200,6 +203,9 @@
 - `delete(map[K]V, K) void`
 - `keys(map[K]V) []K`
 - `to_str(i32 | i64 | bool | str | error) str`
+- `sb_new() i64` — create a string builder (opaque handle)
+- `sb_write(i64, str) void` — append to builder
+- `sb_string(i64) str` — extract built string, reset builder
 
 Builtins remain globally available and are not imported.
 

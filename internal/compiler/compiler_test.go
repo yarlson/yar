@@ -1732,3 +1732,171 @@ func joinDiagnosticMessages(diags []diag.Diagnostic) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+func TestCarriageReturnEscape(t *testing.T) {
+	src := "package main\nfn main() i32 {\n\ts := \"a\\rb\"\n\tif len(s) != 3 { return 1 }\n\treturn 0\n}\n"
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestNullEscape(t *testing.T) {
+	src := "package main\nfn main() i32 {\n\ts := \"a\\0b\"\n\tif len(s) != 3 { return 1 }\n\treturn 0\n}\n"
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestCharLiteral(t *testing.T) {
+	src := `package main
+fn main() i32 {
+	if 'a' != 97 { return 1 }
+	if '\n' != 10 { return 2 }
+	if '\t' != 9 { return 3 }
+	if '\\' != 92 { return 4 }
+	if '\'' != 39 { return 5 }
+	var x i32 = 'z'
+	if x != 122 { return 6 }
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestMatchElseArm(t *testing.T) {
+	src := `package main
+
+enum Color {
+	Red
+	Green
+	Blue
+}
+
+fn describe(c Color) i32 {
+	match c {
+	case Color.Red { return 1 }
+	else { return 0 }
+	}
+}
+
+fn main() i32 {
+	if describe(Color.Red) != 1 { return 1 }
+	if describe(Color.Green) != 0 { return 2 }
+	if describe(Color.Blue) != 0 { return 3 }
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestMatchElseOnlyArm(t *testing.T) {
+	src := `package main
+
+enum Direction {
+	Up
+	Down
+}
+
+fn classify(d Direction) i32 {
+	match d {
+	else { return 42 }
+	}
+}
+
+fn main() i32 {
+	if classify(Direction.Up) != 42 { return 1 }
+	if classify(Direction.Down) != 42 { return 2 }
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestImplicitPointerDeref(t *testing.T) {
+	src := `package main
+
+struct Point {
+	x i32
+	y i32
+}
+
+fn set_x(p *Point, val i32) void {
+	p.x = val
+}
+
+fn get_x(p *Point) i32 {
+	return p.x
+}
+
+fn main() i32 {
+	p := &Point{x: 1, y: 2}
+	if p.x != 1 { return 1 }
+	if p.y != 2 { return 2 }
+	set_x(p, 10)
+	if get_x(p) != 10 { return 3 }
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestUntypedIntBinaryI64(t *testing.T) {
+	src := `package main
+fn main() i32 {
+	var x i64 = 0 - 1
+	if x != 0 - i32_to_i64(1) { return 1 }
+	var y i64 = 2 + 3
+	if y != i32_to_i64(5) { return 2 }
+	z := 0 - 1
+	if z != 0 - 1 { return 3 }
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}
+
+func TestStringBuilder(t *testing.T) {
+	src := `package main
+fn main() i32 {
+	b := sb_new()
+	sb_write(b, "hello")
+	sb_write(b, " ")
+	sb_write(b, "world")
+	result := sb_string(b)
+	if len(result) != 11 { return 1 }
+
+	// Build in a loop
+	b2 := sb_new()
+	var i i32 = 0
+	for i < 100 {
+		sb_write(b2, "x")
+		i = i + 1
+	}
+	result2 := sb_string(b2)
+	if len(result2) != 100 { return 2 }
+
+	return 0
+}
+`
+	output, err := buildAndRun(t, src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
+	}
+}

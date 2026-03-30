@@ -2155,3 +2155,47 @@ void *yar_alloc_zeroed(long long size) {
     }
     return yar_gc_alloc_bytes((size_t)size, 1);
 }
+
+typedef struct {
+    char     *buf;
+    long long len;
+    long long cap;
+} yar_sb;
+
+void *yar_sb_new(void) {
+    yar_sb *sb = (yar_sb *)yar_alloc_zeroed((long long)sizeof(yar_sb));
+    sb->cap = 64;
+    sb->buf = (char *)yar_alloc(sb->cap);
+    sb->len = 0;
+    return sb;
+}
+
+void yar_sb_write(void *handle, const char *data, long long data_len) {
+    if (data_len <= 0) return;
+    yar_sb *sb = (yar_sb *)handle;
+    long long needed = sb->len + data_len;
+    if (needed > sb->cap) {
+        long long new_cap = sb->cap * 2;
+        if (new_cap < needed) new_cap = needed;
+        char *new_buf = (char *)yar_alloc(new_cap);
+        memcpy(new_buf, sb->buf, (size_t)sb->len);
+        sb->buf = new_buf;
+        sb->cap = new_cap;
+    }
+    memcpy(sb->buf + sb->len, data, (size_t)data_len);
+    sb->len = needed;
+}
+
+yar_str yar_sb_string(void *handle) {
+    yar_sb *sb = (yar_sb *)handle;
+    yar_str result;
+    if (sb->len == 0) {
+        return yar_empty_str();
+    }
+    char *buf = (char *)yar_alloc(sb->len);
+    memcpy(buf, sb->buf, (size_t)sb->len);
+    result.ptr = buf;
+    result.len = sb->len;
+    sb->len = 0;
+    return result;
+}

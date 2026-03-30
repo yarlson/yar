@@ -6,7 +6,7 @@ struct Node {
 }
 
 fn set_value(node *Node, value i32) void {
-	(*node).value = value
+	node.value = value
 }
 
 fn main() i32 {
@@ -15,14 +15,14 @@ fn main() i32 {
 
 	set_value(head, 3)
 
-	if (*head).next == nil {
+	if head.next == nil {
 		return 1
 	}
 
-	next := (*head).next
-	print(to_str((*head).value))
+	next := head.next
+	print(to_str(head.value))
 	print("\n")
-	print(to_str((*next).value))
+	print(to_str(next.value))
 	print("\n")
 	return 0
 }

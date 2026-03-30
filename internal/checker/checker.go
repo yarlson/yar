@@ -136,6 +136,7 @@ type Info struct {
 	Enums            map[string]EnumInfo
 	ErrorCodes       map[string]int
 	OrderedErrors    []string
+	AutoDeref        map[*ast.SelectorExpr]bool
 }
 
 type CaptureInfo struct {
@@ -400,7 +401,8 @@ func methodReceiverBaseType(typ Type) (Type, bool) {
 
 func IsBuiltinFunction(name string) bool {
 	switch name {
-	case "print", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str":
+	case "print", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str",
+		"sb_new", "sb_write", "sb_string":
 		return true
 	default:
 		return false
@@ -510,6 +512,27 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				Return:   TypeI32,
 				Builtin:  true,
 			},
+			"sb_new": {
+				Name:     "sb_new",
+				FullName: "sb_new",
+				Params:   nil,
+				Return:   TypeI64,
+				Builtin:  true,
+			},
+			"sb_write": {
+				Name:     "sb_write",
+				FullName: "sb_write",
+				Params:   []Type{TypeI64, TypeStr},
+				Return:   TypeVoid,
+				Builtin:  true,
+			},
+			"sb_string": {
+				Name:     "sb_string",
+				FullName: "sb_string",
+				Params:   []Type{TypeI64},
+				Return:   TypeStr,
+				Builtin:  true,
+			},
 		},
 		methods:    make(map[Type]map[string]Signature),
 		structs:    make(map[string]*ast.StructDecl),
@@ -525,6 +548,7 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 			Interfaces:       make(map[string]InterfaceInfo),
 			Enums:            make(map[string]EnumInfo),
 			ErrorCodes:       make(map[string]int),
+			AutoDeref:        make(map[*ast.SelectorExpr]bool),
 		},
 	}
 
@@ -1095,6 +1119,11 @@ func (c *Checker) checkMatch(stmt *ast.MatchStmt) {
 		}
 	}
 
+	if stmt.ElseBody != nil {
+		c.checkBlock(stmt.ElseBody)
+		return
+	}
+
 	if len(seen) == len(enumInfo.Cases) {
 		return
 	}
@@ -1228,6 +1257,10 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		return et
 	case *ast.IntLiteral:
 		et := ExprType{Base: TypeUntypedInt}
+		c.info.ExprTypes[expr] = et
+		return et
+	case *ast.CharLiteral:
+		et := ExprType{Base: TypeI32}
 		c.info.ExprTypes[expr] = et
 		return et
 	case *ast.StringLiteral:
@@ -1372,7 +1405,15 @@ func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr)
 		return ExprType{Base: TypeInvalid}
 	}
 
-	info, ok := c.info.Structs[string(inner.Base)]
+	base := inner.Base
+	if pointer, ok := ParsePointerType(base); ok {
+		if _, isStruct := c.info.Structs[string(pointer.Elem)]; isStruct {
+			base = pointer.Elem
+			c.info.AutoDeref[selector] = true
+		}
+	}
+
+	info, ok := c.info.Structs[string(base)]
 	if ok {
 		field, _, hasField := info.Field(selector.Name)
 		if hasField {
@@ -1381,7 +1422,7 @@ func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr)
 			return et
 		}
 	}
-	if iface, ok := c.info.Interfaces[string(inner.Base)]; ok {
+	if iface, ok := c.info.Interfaces[string(base)]; ok {
 		if _, _, ok := iface.Method(selector.Name); ok {
 			c.diag.Add(selector.NamePos, "method values are not supported")
 			return ExprType{Base: TypeInvalid}
@@ -1389,7 +1430,7 @@ func (c *Checker) checkSelector(expr ast.Expression, selector *ast.SelectorExpr)
 		c.diag.Add(selector.NamePos, "interface %q has no method %q", iface.Name, selector.Name)
 		return ExprType{Base: TypeInvalid}
 	}
-	if _, ok := c.lookupMethod(inner.Base, selector.Name); ok {
+	if _, ok := c.lookupMethod(base, selector.Name); ok {
 		c.diag.Add(selector.NamePos, "method values are not supported")
 		return ExprType{Base: TypeInvalid}
 	}
@@ -2050,20 +2091,26 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 		c.info.ExprTypes[expr] = et
 		return et
 	case token.Less, token.LessEqual, token.Greater, token.GreaterEqual:
-		_, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+		coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
 		if !ok {
 			c.diag.Add(binary.OpPos, "relational operators require matching integer operands")
 			return ExprType{Base: TypeInvalid}
+		}
+		if coerced.Result == TypeUntypedInt {
+			c.resolveUntypedBinaryOperands(binary, left, right)
 		}
 		et := ExprType{Base: TypeBool}
 		c.info.ExprTypes[expr] = et
 		return et
 	case token.EqualEqual, token.BangEqual:
 		if isIntegerType(left.Base) || isIntegerType(right.Base) {
-			_, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
+			coerced, ok := c.coerceBinaryIntegers(binary.Left, left, binary.Right, right)
 			if !ok {
 				c.diag.Add(binary.OpPos, "comparison operands must have the same type")
 				return ExprType{Base: TypeInvalid}
+			}
+			if coerced.Result == TypeUntypedInt {
+				c.resolveUntypedBinaryOperands(binary, left, right)
 			}
 			et := ExprType{Base: TypeBool}
 			c.info.ExprTypes[expr] = et
@@ -2418,13 +2465,16 @@ func (c *Checker) stmtDefinitelyReturns(stmt ast.Statement) bool {
 		}
 		return c.blockDefinitelyReturns(s.Then) && c.stmtDefinitelyReturns(s.Else)
 	case *ast.MatchStmt:
-		if len(s.Arms) == 0 {
+		if len(s.Arms) == 0 && s.ElseBody == nil {
 			return false
 		}
 		for _, arm := range s.Arms {
 			if !c.blockDefinitelyReturns(arm.Body) {
 				return false
 			}
+		}
+		if s.ElseBody != nil {
+			return c.blockDefinitelyReturns(s.ElseBody)
 		}
 		return true
 	default:
@@ -2456,13 +2506,16 @@ func (c *Checker) stmtTerminatesControlFlow(stmt ast.Statement) bool {
 		}
 		return c.blockTerminatesControlFlow(s.Then) && c.stmtTerminatesControlFlow(s.Else)
 	case *ast.MatchStmt:
-		if len(s.Arms) == 0 {
+		if len(s.Arms) == 0 && s.ElseBody == nil {
 			return false
 		}
 		for _, arm := range s.Arms {
 			if !c.blockTerminatesControlFlow(arm.Body) {
 				return false
 			}
+		}
+		if s.ElseBody != nil {
+			return c.blockTerminatesControlFlow(s.ElseBody)
 		}
 		return true
 	default:
@@ -2647,7 +2700,14 @@ func (c *Checker) checkAddressableExpr(expr ast.Expression, allowCompositeLitera
 		if !ok {
 			return TypeInvalid, false
 		}
-		info, ok := c.info.Structs[string(base)]
+		resolved := base
+		if pointer, ok := ParsePointerType(base); ok {
+			if _, isStruct := c.info.Structs[string(pointer.Elem)]; isStruct {
+				resolved = pointer.Elem
+				c.info.AutoDeref[e] = true
+			}
+		}
+		info, ok := c.info.Structs[string(resolved)]
 		if !ok {
 			c.diag.Add(e.DotPos, "field access requires a struct value")
 			return TypeInvalid, false
@@ -2821,6 +2881,19 @@ func (c *Checker) coerceValue(expr ast.Expression, exprType ExprType, target Typ
 	return c.coerceUntypedInteger(expr, exprType, target)
 }
 
+func (c *Checker) resolveUntypedBinaryOperands(binary *ast.BinaryExpr, left, right ExprType) {
+	target := c.defaultUntypedIntegerType(binary)
+	if target == TypeInvalid {
+		target = TypeI32
+	}
+	if left.Base == TypeUntypedInt {
+		c.coerceUntypedInteger(binary.Left, left, target)
+	}
+	if right.Base == TypeUntypedInt {
+		c.coerceUntypedInteger(binary.Right, right, target)
+	}
+}
+
 func (c *Checker) coerceBinaryIntegers(leftExpr ast.Expression, left ExprType, rightExpr ast.Expression, right ExprType) (coercedIntegers, bool) {
 	out := coercedIntegers{
 		Left:  left,
@@ -2831,16 +2904,7 @@ func (c *Checker) coerceBinaryIntegers(leftExpr ast.Expression, left ExprType, r
 	}
 	switch {
 	case left.Base == TypeUntypedInt && right.Base == TypeUntypedInt:
-		target := TypeI32
-		if !c.intLiteralFits(leftExpr, TypeI32) || !c.intLiteralFits(rightExpr, TypeI32) {
-			target = TypeI64
-		}
-		if !c.intLiteralFits(leftExpr, target) || !c.intLiteralFits(rightExpr, target) {
-			return out, false
-		}
-		out.Left = c.coerceUntypedInteger(leftExpr, out.Left, target)
-		out.Right = c.coerceUntypedInteger(rightExpr, out.Right, target)
-		out.Result = target
+		out.Result = TypeUntypedInt
 		return out, true
 	case left.Base == TypeUntypedInt:
 		if !c.intLiteralFits(leftExpr, right.Base) {
@@ -2866,8 +2930,20 @@ func (c *Checker) coerceBinaryIntegers(leftExpr ast.Expression, left ExprType, r
 
 func (c *Checker) setExprType(expr ast.Expression, exprType ExprType) {
 	c.info.ExprTypes[expr] = exprType
-	if group, ok := expr.(*ast.GroupExpr); ok {
-		c.setExprType(group.Inner, exprType)
+	switch e := expr.(type) {
+	case *ast.GroupExpr:
+		c.setExprType(e.Inner, exprType)
+	case *ast.BinaryExpr:
+		if c.info.ExprTypes[e.Left].Base == TypeUntypedInt {
+			c.setExprType(e.Left, exprType)
+		}
+		if c.info.ExprTypes[e.Right].Base == TypeUntypedInt {
+			c.setExprType(e.Right, exprType)
+		}
+	case *ast.UnaryExpr:
+		if e.Operator == token.Minus && c.info.ExprTypes[e.Inner].Base == TypeUntypedInt {
+			c.setExprType(e.Inner, exprType)
+		}
 	}
 }
 
@@ -2890,6 +2966,8 @@ func unwrapIntLiteral(expr ast.Expression) (*ast.IntLiteral, bool) {
 	switch e := expr.(type) {
 	case *ast.IntLiteral:
 		return e, true
+	case *ast.CharLiteral:
+		return &ast.IntLiteral{Value: int64(e.Value), LitPos: e.LitPos}, true
 	case *ast.GroupExpr:
 		return unwrapIntLiteral(e.Inner)
 	case *ast.UnaryExpr:
@@ -2901,6 +2979,34 @@ func unwrapIntLiteral(expr ast.Expression) (*ast.IntLiteral, bool) {
 			return nil, false
 		}
 		return &ast.IntLiteral{Value: -inner.Value, LitPos: e.OpPos}, true
+	case *ast.BinaryExpr:
+		left, lok := unwrapIntLiteral(e.Left)
+		right, rok := unwrapIntLiteral(e.Right)
+		if !lok || !rok {
+			return nil, false
+		}
+		var result int64
+		switch e.Operator {
+		case token.Plus:
+			result = left.Value + right.Value
+		case token.Minus:
+			result = left.Value - right.Value
+		case token.Star:
+			result = left.Value * right.Value
+		case token.Slash:
+			if right.Value == 0 {
+				return nil, false
+			}
+			result = left.Value / right.Value
+		case token.Percent:
+			if right.Value == 0 {
+				return nil, false
+			}
+			result = left.Value % right.Value
+		default:
+			return nil, false
+		}
+		return &ast.IntLiteral{Value: result, LitPos: e.OpPos}, true
 	default:
 		return nil, false
 	}

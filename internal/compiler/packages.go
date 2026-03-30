@@ -965,7 +965,11 @@ func (l *packageLowerer) rewriteStatement(pkg *ast.Package, stmt ast.Statement, 
 				Body:        l.rewriteBlock(pkg, arm.Body, typeParams),
 			})
 		}
-		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: l.rewriteExpr(pkg, s.Value, typeParams), Arms: arms}
+		var elseBody *ast.BlockStmt
+		if s.ElseBody != nil {
+			elseBody = l.rewriteBlock(pkg, s.ElseBody, typeParams)
+		}
+		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: l.rewriteExpr(pkg, s.Value, typeParams), Arms: arms, ElseBody: elseBody}
 	case *ast.BreakStmt:
 		return &ast.BreakStmt{BreakPos: s.BreakPos}
 	case *ast.ContinueStmt:
@@ -988,6 +992,8 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression, type
 		return &ast.IdentExpr{Name: e.Name, NamePos: e.NamePos}
 	case *ast.IntLiteral:
 		return &ast.IntLiteral{Value: e.Value, LitPos: e.LitPos}
+	case *ast.CharLiteral:
+		return &ast.CharLiteral{Value: e.Value, LitPos: e.LitPos}
 	case *ast.StringLiteral:
 		return &ast.StringLiteral{Value: e.Value, LitPos: e.LitPos}
 	case *ast.BoolLiteral:

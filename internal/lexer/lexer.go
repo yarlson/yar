@@ -134,6 +134,9 @@ func (l *Lexer) Lex() []token.Token {
 			case '"':
 				value := l.lexString(pos)
 				tokens = append(tokens, token.Token{Kind: token.String, Text: value, Pos: pos})
+			case '\'':
+				value := l.lexChar(pos)
+				tokens = append(tokens, token.Token{Kind: token.Char, Text: string([]rune{value}), Pos: pos})
 			default:
 				l.diag.Add(pos, "unexpected character %q", r)
 				tokens = append(tokens, token.Token{Kind: token.Illegal, Text: string(r), Pos: pos})
@@ -212,6 +215,10 @@ func (l *Lexer) lexString(pos token.Position) string {
 				out = append(out, '\\')
 			case '"':
 				out = append(out, '"')
+			case 'r':
+				out = append(out, '\r')
+			case '0':
+				out = append(out, 0)
 			default:
 				l.diag.Add(pos, "unsupported string escape %q", "\\"+string(esc))
 			}
@@ -224,6 +231,64 @@ func (l *Lexer) lexString(pos token.Position) string {
 	}
 	l.diag.Add(pos, "unterminated string literal")
 	return string(out)
+}
+
+func (l *Lexer) lexChar(pos token.Position) rune {
+	if l.offset >= len(l.src) {
+		l.diag.Add(pos, "unterminated character literal")
+		return 0
+	}
+	r, width := utf8.DecodeRuneInString(l.src[l.offset:])
+	l.advanceWidth(width)
+	var value rune
+	switch r {
+	case '\'':
+		l.diag.Add(pos, "empty character literal")
+		return 0
+	case '\n':
+		l.diag.Add(pos, "unterminated character literal")
+		return 0
+	case '\\':
+		if l.offset >= len(l.src) {
+			l.diag.Add(pos, "unterminated character literal")
+			return 0
+		}
+		esc, escWidth := utf8.DecodeRuneInString(l.src[l.offset:])
+		l.advanceWidth(escWidth)
+		switch esc {
+		case 'n':
+			value = '\n'
+		case 't':
+			value = '\t'
+		case 'r':
+			value = '\r'
+		case '\\':
+			value = '\\'
+		case '\'':
+			value = '\''
+		case '0':
+			value = 0
+		default:
+			l.diag.Add(pos, "unsupported character escape %q", "\\"+string(esc))
+			value = esc
+		}
+	default:
+		value = r
+	}
+	if l.offset >= len(l.src) || l.src[l.offset] != '\'' {
+		l.diag.Add(pos, "unterminated character literal")
+		return value
+	}
+	l.advanceWidth(1)
+	return value
+}
+
+func ParseCharLiteral(tok token.Token) rune {
+	runes := []rune(tok.Text)
+	if len(runes) == 0 {
+		return 0
+	}
+	return runes[0]
 }
 
 func (l *Lexer) matchEquals() bool {

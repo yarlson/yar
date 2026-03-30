@@ -193,7 +193,11 @@ func (m *genericMonomorphizer) rewriteStatement(stmt ast.Statement, subst map[st
 				Body:        m.rewriteBlock(arm.Body, subst),
 			})
 		}
-		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: m.rewriteExpr(s.Value, subst), Arms: arms}
+		var elseBody *ast.BlockStmt
+		if s.ElseBody != nil {
+			elseBody = m.rewriteBlock(s.ElseBody, subst)
+		}
+		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: m.rewriteExpr(s.Value, subst), Arms: arms, ElseBody: elseBody}
 	case *ast.ExprStmt:
 		return &ast.ExprStmt{Expr: m.rewriteExpr(s.Expr, subst)}
 	default:
@@ -210,6 +214,8 @@ func (m *genericMonomorphizer) rewriteExpr(expr ast.Expression, subst map[string
 		return &ast.IdentExpr{Name: e.Name, NamePos: e.NamePos}
 	case *ast.IntLiteral:
 		return &ast.IntLiteral{Value: e.Value, LitPos: e.LitPos}
+	case *ast.CharLiteral:
+		return &ast.CharLiteral{Value: e.Value, LitPos: e.LitPos}
 	case *ast.StringLiteral:
 		return &ast.StringLiteral{Value: e.Value, LitPos: e.LitPos}
 	case *ast.BoolLiteral:

@@ -289,11 +289,20 @@ case Expr.Name(v) {
 }
 ```
 
+An `else` arm can replace any number of unmatched cases:
+
+```
+match color {
+case Color.Red { return 1 }
+else { return 0 }
+}
+```
+
 Current enum restrictions:
 
 - case names must be unique within an enum
 - payload field names must be unique within a case
-- `match` requires explicit exhaustive arms
+- `match` requires exhaustive arms or an `else` wildcard
 - enum values do not currently support `==` or `!=`
 - direct recursive enum containment is rejected; use pointers for recursive shapes
 
@@ -481,16 +490,17 @@ fn set_value(node *Node, value i32) void {
 Supported pointer operations:
 
 - pointer types: `*T`
-- address-of on addressable values: `&x`, `&items[0]`, `&(*node).next`
+- address-of on addressable values: `&x`, `&items[0]`, `&node.next`
 - address-of on composite literals: `&Node{value: 1, next: nil}`
 - `nil`
 - dereference: `*ptr`
 - dereference assignment: `*ptr = value`
+- implicit dereference for field access: `ptr.field` (equivalent to `(*ptr).field`)
+- implicit dereference for field assignment: `ptr.field = value`
 - pointer equality and inequality against `nil` or the same pointer type
 
 Current pointer restrictions:
 
-- there is no implicit dereference; use `(*ptr).field`, not `ptr.field`
 - `nil` is only valid in pointer-typed contexts, so `p := nil` is rejected
 - pointers do not support arithmetic, casts, or raw address exposure
 - `*void` and `*noreturn` are rejected
@@ -545,7 +555,8 @@ Implemented expressions:
 ### Integer Literals
 
 Integer literals start as untyped integers and are coerced by context into `i32`
-or `i64`.
+or `i64`. Binary expressions on untyped integer literals (e.g., `0 - 1`) remain
+untyped until a concrete type is required, allowing `var x i64 = 0 - 1`.
 
 ### Strings
 
@@ -561,10 +572,25 @@ Out-of-range string indexing and slicing trap at runtime.
 
 Supported escapes:
 
-- `\n`
-- `\t`
-- `\\`
-- `\"`
+- `\n` — newline
+- `\t` — tab
+- `\r` — carriage return
+- `\0` — null byte
+- `\\` — backslash
+- `\"` — double quote
+
+### Character Literals
+
+Character literals use single quotes and produce an `i32` value representing
+the Unicode code point:
+
+```yar
+x := 'a'      // 97
+y := '\n'      // 10
+z := '\''      // 39
+```
+
+Supported escapes in character literals: `\n`, `\t`, `\r`, `\0`, `\\`, `\'`.
 
 ### Boolean Operators
 
@@ -707,6 +733,9 @@ Builtins are fixed by the compiler:
 - `delete(map[K]V, K) void`
 - `keys(map[K]V) []K`
 - `to_str(i32 | i64 | bool | str | error) str`
+- `sb_new() i64` — create a new string builder (returns opaque handle)
+- `sb_write(i64, str) void` — append a string to the builder
+- `sb_string(i64) str` — extract the built string and reset the builder
 
 They are not user-overridable.
 

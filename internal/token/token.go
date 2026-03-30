@@ -11,6 +11,7 @@ const (
 	Ident
 	Int
 	String
+	Char
 
 	Assign
 	Colon
@@ -79,6 +80,8 @@ func (k Kind) String() string {
 		return "integer"
 	case String:
 		return "string"
+	case Char:
+		return "character"
 	case Assign:
 		return "="
 	case Colon:
