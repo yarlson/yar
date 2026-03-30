@@ -56,6 +56,85 @@ fn main() i32 {
         return 14
     }
 
+    if strings.trim("  hello  ", " ") != "hello" {
+        return 15
+    }
+    if strings.trim("xxhelloxx", "x") != "hello" {
+        return 16
+    }
+    if strings.trim("", " ") != "" {
+        return 17
+    }
+
+    s1 := strings.split("a.b.c", ".")
+    if len(s1) != 3 {
+        return 18
+    }
+    if s1[0] != "a" {
+        return 19
+    }
+    if s1[1] != "b" {
+        return 20
+    }
+    if s1[2] != "c" {
+        return 21
+    }
+
+    s2 := strings.split("hello", "x")
+    if len(s2) != 1 {
+        return 22
+    }
+    if s2[0] != "hello" {
+        return 23
+    }
+
+    s3 := strings.split("", ".")
+    if len(s3) != 1 {
+        return 24
+    }
+    if s3[0] != "" {
+        return 25
+    }
+
+    s4 := strings.split("abc", "")
+    if len(s4) != 3 {
+        return 26
+    }
+    if s4[0] != "a" {
+        return 27
+    }
+    if s4[2] != "c" {
+        return 28
+    }
+
+    s5 := strings.split("a..b", ".")
+    if len(s5) != 3 {
+        return 29
+    }
+    if s5[1] != "" {
+        return 30
+    }
+
+    if strings.to_lower("Hello World") != "hello world" {
+        return 31
+    }
+    if strings.to_lower("abc123") != "abc123" {
+        return 32
+    }
+    if strings.to_lower("") != "" {
+        return 33
+    }
+
+    if strings.to_upper("Hello World") != "HELLO WORLD" {
+        return 34
+    }
+    if strings.to_upper("ABC123") != "ABC123" {
+        return 35
+    }
+    if strings.to_upper("") != "" {
+        return 36
+    }
+
     print("strings ok\n")
     return 0
 }

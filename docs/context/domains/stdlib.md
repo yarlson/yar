@@ -48,6 +48,11 @@ Functions:
   means all
 - `trim_left(s str, cutset str) str` — strip leading bytes in cutset
 - `trim_right(s str, cutset str) str` — strip trailing bytes in cutset
+- `trim(s str, cutset str) str` — strip leading and trailing bytes in cutset
+- `split(s str, sep str) []str` — split string by separator; empty separator
+  splits into individual bytes
+- `to_lower(s str) str` — ASCII lowercase conversion
+- `to_upper(s str) str` — ASCII uppercase conversion
 - `join(parts []str, sep str) str` — join slice of strings
 - `from_byte(i32) str` — construct a single-byte string
 - `parse_i64(str) !i64` — parse a base-10 signed integer; returns

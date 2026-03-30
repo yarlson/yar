@@ -110,15 +110,35 @@ func (l *Lexer) Lex() []token.Token {
 					tokens = append(tokens, token.Token{Kind: token.Pipe, Text: "|", Pos: pos})
 				}
 			case '+':
-				tokens = append(tokens, token.Token{Kind: token.Plus, Text: "+", Pos: pos})
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.PlusAssign, Text: "+=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Plus, Text: "+", Pos: pos})
+				}
 			case '-':
-				tokens = append(tokens, token.Token{Kind: token.Minus, Text: "-", Pos: pos})
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.MinusAssign, Text: "-=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Minus, Text: "-", Pos: pos})
+				}
 			case '*':
-				tokens = append(tokens, token.Token{Kind: token.Star, Text: "*", Pos: pos})
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.StarAssign, Text: "*=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Star, Text: "*", Pos: pos})
+				}
 			case '/':
-				tokens = append(tokens, token.Token{Kind: token.Slash, Text: "/", Pos: pos})
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.SlashAssign, Text: "/=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Slash, Text: "/", Pos: pos})
+				}
 			case '%':
-				tokens = append(tokens, token.Token{Kind: token.Percent, Text: "%", Pos: pos})
+				if l.matchEquals() {
+					tokens = append(tokens, token.Token{Kind: token.PercentAssign, Text: "%=", Pos: pos})
+				} else {
+					tokens = append(tokens, token.Token{Kind: token.Percent, Text: "%", Pos: pos})
+				}
 			case '<':
 				if l.matchEquals() {
 					tokens = append(tokens, token.Token{Kind: token.LessEqual, Text: "<=", Pos: pos})

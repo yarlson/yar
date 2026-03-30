@@ -271,7 +271,8 @@ enum Expr {
 Supported enum operations:
 
 - plain cases such as `TokenKind.Ident`
-- payload constructors such as `Expr.Name{text: "main"}`
+- payload constructors such as `Expr.Name{text: "main"}` (keyed form)
+- positional constructors for single-field cases such as `Expr.Name("main")`
 - exhaustive `match`
 - payload binding inside `match` arms with `case Expr.Name(v) { ... }`
 - payload ignore binding with `case Expr.Int(_) { ... }`
@@ -343,7 +344,8 @@ Supported slice operations:
 - slice literals
 - indexing
 - index assignment
-- slicing with `s[i:j]`
+- slicing with `s[i:j]`, `s[i:]` (end defaults to `len(s)`), and `s[:j]` (start
+  defaults to `0`)
 - taking addresses of addressable elements with `&slice[i]`
 - `len(slice)`
 - `append(slice, value)` returning an updated slice
@@ -513,6 +515,7 @@ Implemented statements:
 - short local declarations: `x := expr`
 - typed local declarations: `var name Type` and `var name Type = expr`
 - assignment to locals, struct fields, array indices, slice indices, and dereferenced pointers
+- compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (desugars to `x = x op expr`)
 - `if`
 - `if` / `else`
 - `else if`
@@ -566,7 +569,8 @@ Supported string operations:
 - `s == t` and `s != t` compare strings by exact byte equality
 - `s + t` concatenates two strings (allocates a new string)
 - `s[i]` returns the byte value at offset `i` as `i32`
-- `s[i:j]` returns the byte substring covering offsets `[i, j)` as `str`
+- `s[i:j]`, `s[i:]`, and `s[:j]` return the byte substring as `str` (omitted
+  start defaults to `0`, omitted end defaults to `len(s)`)
 
 Out-of-range string indexing and slicing trap at runtime.
 
@@ -776,6 +780,10 @@ Available functions:
 - `strings.replace(s str, old str, new str, n i32) str` — `n < 0` replaces all
 - `strings.trim_left(s str, cutset str) str`
 - `strings.trim_right(s str, cutset str) str`
+- `strings.trim(s str, cutset str) str` — strip both ends
+- `strings.split(s str, sep str) []str` — split string by separator
+- `strings.to_lower(s str) str` — ASCII lowercase conversion
+- `strings.to_upper(s str) str` — ASCII uppercase conversion
 - `strings.join(parts []str, sep str) str`
 - `strings.from_byte(i32) str` — construct a single-byte string from a byte value
 - `strings.parse_i64(str) !i64` — parse a base-10 signed integer

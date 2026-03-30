@@ -1265,6 +1265,9 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 	case *ast.MapLiteralExpr:
 		return f.genMapLiteral(expr, e)
 	case *ast.CallExpr:
+		if ec, ok := f.g.info.EnumConstructors[e]; ok {
+			return f.genEnumPositionalConstructor(expr, e, ec)
+		}
 		return f.genCall(e)
 	default:
 		panic(fmt.Sprintf("unsupported expression %T", expr))
@@ -1347,6 +1350,20 @@ func (f *functionEmitter) genEnumCaseLiteral(expr ast.Expression, lit *ast.Struc
 	value := f.emitEnumValue(checker.Type(enumInfo.Name), enumCase, &exprValue{ref: payload, typ: enumCase.PayloadType})
 	value.typ = f.exprType(expr)
 	return value, true
+}
+
+func (f *functionEmitter) genEnumPositionalConstructor(expr ast.Expression, call *ast.CallExpr, ec checker.EnumConstructorInfo) exprValue {
+	enumInfo := f.g.info.Enums[ec.EnumName]
+	enumCase, _, _ := enumInfo.Case(ec.CaseName)
+	field := enumCase.Fields[0]
+	argValue := f.genCoercedExpression(call.Args[0], field.Type)
+	payload := "zeroinitializer"
+	next := f.newTemp("struct")
+	fmt.Fprintf(&f.builder, "  %%%s = insertvalue %s %s, %s %s, 0\n", next, f.g.llvmType(enumCase.PayloadType), payload, f.g.llvmType(field.Type), argValue.ref)
+	payload = "%" + next
+	value := f.emitEnumValue(checker.Type(enumInfo.Name), enumCase, &exprValue{ref: payload, typ: enumCase.PayloadType})
+	value.typ = f.exprType(expr)
+	return value
 }
 
 func (f *functionEmitter) emitStructValue(typ checker.Type, fields []ast.StructLiteralField) string {
@@ -1440,11 +1457,20 @@ func (f *functionEmitter) genStringSlice(_ ast.Expression, sliceExpr *ast.SliceE
 	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 0\n", strPtr, strValue.ref)
 	fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.str %s, 1\n", strLen, strValue.ref)
 
-	start := f.genExpression(sliceExpr.Start)
-	end := f.genExpression(sliceExpr.End)
-
-	start64 := f.intToI64(start.ref, start.typ)
-	end64 := f.intToI64(end.ref, end.typ)
+	var start64 string
+	if sliceExpr.Start != nil {
+		start := f.genExpression(sliceExpr.Start)
+		start64 = f.intToI64(start.ref, start.typ)
+	} else {
+		start64 = "0"
+	}
+	var end64 string
+	if sliceExpr.End != nil {
+		end := f.genExpression(sliceExpr.End)
+		end64 = f.intToI64(end.ref, end.typ)
+	} else {
+		end64 = "%" + strLen
+	}
 
 	fmt.Fprintf(&f.builder, "  call void @yar_slice_range_check(i64 %s, i64 %s, i64 %%%s)\n", start64, end64, strLen)
 
@@ -1519,10 +1545,20 @@ func (f *functionEmitter) genSlice(expr ast.Expression, sliceExpr *ast.SliceExpr
 	capacity := f.extractSliceField(sliceValue.ref, 2, "slice.cap")
 	length64 := f.intToI64(length.ref, length.typ)
 	capacity64 := f.intToI64(capacity.ref, capacity.typ)
-	start := f.genExpression(sliceExpr.Start)
-	end := f.genExpression(sliceExpr.End)
-	start64 := f.intToI64(start.ref, start.typ)
-	end64 := f.intToI64(end.ref, end.typ)
+	var start64 string
+	if sliceExpr.Start != nil {
+		start := f.genExpression(sliceExpr.Start)
+		start64 = f.intToI64(start.ref, start.typ)
+	} else {
+		start64 = "0"
+	}
+	var end64 string
+	if sliceExpr.End != nil {
+		end := f.genExpression(sliceExpr.End)
+		end64 = f.intToI64(end.ref, end.typ)
+	} else {
+		end64 = length64
+	}
 	fmt.Fprintf(&f.builder, "  call void @yar_slice_range_check(i64 %s, i64 %s, i64 %s)\n", start64, end64, length64)
 	newPtr := f.newTemp("slice.ptr")
 	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr %s, i64 %s\n", newPtr, f.g.llvmType(sliceType.Elem), dataPtr.ref, start64)

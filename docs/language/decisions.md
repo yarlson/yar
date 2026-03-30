@@ -255,6 +255,28 @@ heap-allocated opaque handles backed by an open-addressing hash table in the
 runtime. The current surface has no live iteration protocol, ordering
 guarantees, or set syntax.
 
+### Compound assignment operators
+
+Status: accepted
+
+YAR supports `+=`, `-=`, `*=`, `/=`, and `%=` as sugar that desugars to
+`x = x op expr`. Works for integer arithmetic and string `+` concatenation.
+
+### Open-ended slice syntax
+
+Status: accepted
+
+YAR supports `s[i:]` (end defaults to `len(s)`) and `s[:j]` (start defaults to
+`0`) for both slices and strings. The full `s[i:j]` form remains supported.
+
+### Single-field enum positional constructors
+
+Status: accepted
+
+Payload enum cases with exactly one field accept positional syntax:
+`Enum.Case(value)` as sugar for `Enum.Case{field: value}`. Multi-field cases
+keep keyed syntax only. The keyed form remains valid for all cases.
+
 ---
 
 ## Decision Update Rule

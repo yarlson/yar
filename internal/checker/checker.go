@@ -125,6 +125,11 @@ func (i InterfaceInfo) Method(name string) (InterfaceMethodInfo, int, bool) {
 	return InterfaceMethodInfo{}, -1, false
 }
 
+type EnumConstructorInfo struct {
+	EnumName string
+	CaseName string
+}
+
 type Info struct {
 	Functions        map[*ast.FunctionDecl]Signature
 	FunctionLiterals map[*ast.FunctionLiteralExpr]FunctionLiteralInfo
@@ -137,6 +142,7 @@ type Info struct {
 	ErrorCodes       map[string]int
 	OrderedErrors    []string
 	AutoDeref        map[*ast.SelectorExpr]bool
+	EnumConstructors map[*ast.CallExpr]EnumConstructorInfo
 }
 
 type CaptureInfo struct {
@@ -549,6 +555,7 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 			Enums:            make(map[string]EnumInfo),
 			ErrorCodes:       make(map[string]int),
 			AutoDeref:        make(map[*ast.SelectorExpr]bool),
+			EnumConstructors: make(map[*ast.CallExpr]EnumConstructorInfo),
 		},
 	}
 
@@ -1899,6 +1906,31 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		name = callee.Name
 		namePos = callee.NamePos
 	case *ast.SelectorExpr:
+		if ident, isIdent := callee.Inner.(*ast.IdentExpr); isIdent {
+			if _, isLocal, _ := c.lookupLocalBinding(ident.Name); !isLocal {
+				if enumInfo, isEnum := c.info.Enums[ident.Name]; isEnum {
+					enumCase, _, caseOK := enumInfo.Case(callee.Name)
+					if caseOK && len(enumCase.Fields) == 1 && len(call.Args) == 1 {
+						field := enumCase.Fields[0]
+						argType := c.checkExpression(call.Args[0])
+						argType = c.requireNonErrorableValue(call.Args[0], argType, "errorable value cannot be used in an enum constructor")
+						if argType.Base != TypeInvalid {
+							argType = c.coerceValue(call.Args[0], argType, field.Type)
+							if argType.Base != field.Type {
+								c.diag.Add(call.Args[0].Pos(), "cannot assign %s to %s", argType.Base, field.Type)
+							}
+						}
+						et := ExprType{Base: Type(enumInfo.Name)}
+						c.info.ExprTypes[expr] = et
+						c.info.EnumConstructors[call] = EnumConstructorInfo{
+							EnumName: enumInfo.Name,
+							CaseName: callee.Name,
+						}
+						return et
+					}
+				}
+			}
+		}
 		receiver := c.checkExpression(callee.Inner)
 		if receiver.Errorable {
 			c.diag.Add(callee.DotPos, "method call cannot use an errorable receiver")
@@ -2810,6 +2842,9 @@ func (c *Checker) addressRootCapturedOuterLocal(expr ast.Expression) (string, bo
 }
 
 func (c *Checker) checkSliceBound(expr ast.Expression) bool {
+	if expr == nil {
+		return true
+	}
 	boundType := c.checkExpression(expr)
 	if boundType.Errorable {
 		c.diag.Add(expr.Pos(), "slice bounds cannot be errorable")

@@ -330,7 +330,7 @@ func (p *Parser) parseStatement() ast.Statement {
 	if expr == nil {
 		return nil
 	}
-	if p.at(token.Assign) {
+	if p.isAssignOp() {
 		return p.parseAssign(expr)
 	}
 	return &ast.ExprStmt{Expr: expr}
@@ -368,7 +368,30 @@ func (p *Parser) parseVarDecl() ast.Statement {
 	}
 }
 
+func (p *Parser) isAssignOp() bool {
+	k := p.current().Kind
+	if k == token.Assign {
+		return true
+	}
+	_, ok := token.CompoundAssignOp(k)
+	return ok
+}
+
 func (p *Parser) parseAssign(target ast.Expression) ast.Statement {
+	tok := p.current()
+	if binOp, ok := token.CompoundAssignOp(tok.Kind); ok {
+		p.advance()
+		rhs := p.parseExpression()
+		return &ast.AssignStmt{
+			Target: target,
+			Value: &ast.BinaryExpr{
+				Left:     target,
+				Operator: binOp,
+				OpPos:    tok.Pos,
+				Right:    rhs,
+			},
+		}
+	}
 	p.expect(token.Assign, "expected '=' in assignment")
 	value := p.parseExpression()
 	return &ast.AssignStmt{
@@ -428,7 +451,7 @@ func (p *Parser) parseFor() ast.Statement {
 	}
 
 	first := p.parseExpression()
-	if first != nil && p.at(token.Assign) {
+	if first != nil && p.isAssignOp() {
 		init := p.parseAssign(first)
 		if p.at(token.Semicolon) {
 			p.advance()
@@ -489,7 +512,7 @@ func (p *Parser) parseForClauseStmt(allowDecl bool) ast.Statement {
 		if expr == nil {
 			return nil
 		}
-		if p.at(token.Assign) {
+		if p.isAssignOp() {
 			return p.parseAssign(expr)
 		}
 		return &ast.ExprStmt{Expr: expr}
@@ -915,10 +938,28 @@ func (p *Parser) parseMapLiteral() ast.Expression {
 
 func (p *Parser) finishIndexOrSlice(expr ast.Expression) ast.Expression {
 	lbracket := p.expect(token.LBracket, "expected '['")
+	if p.at(token.Colon) {
+		colon := p.expect(token.Colon, "expected ':'")
+		var end ast.Expression
+		if !p.at(token.RBracket) {
+			end = p.parseExpression()
+		}
+		p.expect(token.RBracket, "expected ']'")
+		return &ast.SliceExpr{
+			Inner:       expr,
+			LBracketPos: lbracket.Pos,
+			Start:       nil,
+			ColonPos:    colon.Pos,
+			End:         end,
+		}
+	}
 	start := p.parseExpression()
 	if p.at(token.Colon) {
 		colon := p.expect(token.Colon, "expected ':'")
-		end := p.parseExpression()
+		var end ast.Expression
+		if !p.at(token.RBracket) {
+			end = p.parseExpression()
+		}
 		p.expect(token.RBracket, "expected ']'")
 		return &ast.SliceExpr{
 			Inner:       expr,

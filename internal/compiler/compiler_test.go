@@ -1900,3 +1900,39 @@ fn main() i32 {
 		t.Fatalf("unexpected error: %v\noutput: %s", err, output)
 	}
 }
+
+func TestCompoundAssignFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "compound_assign", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "compound_assign ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestOpenEndedSliceFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "open_ended_slice", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "open_ended_slice ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestEnumPositionalFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "enum_positional", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "enum_positional ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}

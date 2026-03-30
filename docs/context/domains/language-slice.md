@@ -46,6 +46,8 @@
 - `var name Type = expr`
 - Reassignment to an existing local, struct field, array index, slice index,
   dereferenced pointer, or map element
+- Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (desugars to assignment
+  with binary expression)
 - `if`, `else`, and `else if`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
@@ -69,8 +71,8 @@
 - `nil`
 - `error.Name` expressions as general values and in return position
 - Struct literals
-- Enum case constructors such as `TokenKind.Ident` and
-  `Expr.Name{text: "main"}`
+- Enum case constructors such as `TokenKind.Ident`,
+  `Expr.Name{text: "main"}`, and `Expr.Name("main")` for single-field cases
 - Array literals
 - Slice literals
 - Map literals
@@ -81,7 +83,7 @@
 - Grouping with parentheses
 - Field access
 - Indexing
-- Slicing with `s[i:j]`
+- Slicing with `s[i:j]`, `s[i:]`, and `s[:j]`
 - Address-of with `&expr` on addressable values and composite literals
 - Dereference with `*expr`
 - Postfix error propagation with `expr?`
@@ -148,8 +150,9 @@
 - String `+` concatenates two strings into a new heap-allocated string.
 - String indexing `s[i]` returns the byte value at offset `i` as `i32`, with
   runtime bounds checking.
-- String slicing `s[i:j]` returns the byte substring as `str`, with runtime
-  bounds checking.
+- String slicing `s[i:j]`, `s[i:]`, and `s[:j]` returns the byte substring as
+  `str`, with runtime bounds checking. Omitted start defaults to `0`, omitted
+  end defaults to `len(s)`.
 - Equality and inequality are supported for integers, `bool`, `str`, `error`,
   same-typed pointers, and pointer-vs-`nil`.
 - Equality and inequality are not supported for enum values.
@@ -163,12 +166,15 @@
   values are implicitly dereferenced for field access and assignment.
 - Plain enum cases are values of their enum type.
 - Payload enum cases are constructed with keyed field syntax and produce the
-  enclosing enum type.
+  enclosing enum type. Single-field payload cases also accept positional syntax:
+  `Enum.Case(value)` is sugar for `Enum.Case{field: value}`.
 - Indexing an array or slice requires an integer index and returns the element
   type.
 - Indexing a map requires a key of the map's key type and returns `!V`,
   yielding `error.MissingKey` on absent keys.
-- Slicing requires a slice or `str` value and integer bounds.
+- Slicing requires a slice or `str` value and integer bounds. Start and end
+  bounds may be omitted: `s[i:]` defaults the end to `len(s)`, `s[:j]` defaults
+  the start to `0`.
 - `match` requires a non-errorable enum value, each arm must use a case from
   that same enum, and every case must be covered (or an `else` arm present).
 - Payload bindings in `match` arms have a generated payload-struct type, and

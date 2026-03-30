@@ -37,7 +37,7 @@ pub fn index(s str, substr str) i32 {
         return 0
     }
     if len(substr) > len(s) {
-        return 0 - 1
+        return -1
     }
     limit := len(s) - len(substr) + 1
     i := 0
@@ -47,7 +47,7 @@ pub fn index(s str, substr str) i32 {
         }
         i = i + 1
     }
-    return 0 - 1
+    return -1
 }
 
 pub fn count(s str, substr str) i32 {
@@ -170,6 +170,63 @@ fn parse_positive(s str, start i32) !i64 {
         i = i + 1
     }
     return result
+}
+
+pub fn split(s str, sep str) []str {
+    result := []str{}
+    if len(sep) == 0 {
+        i := 0
+        for i < len(s) {
+            result = append(result, s[i:i + 1])
+            i = i + 1
+        }
+        return result
+    }
+    remaining := s
+    for len(remaining) > 0 {
+        idx := index(remaining, sep)
+        if idx < 0 {
+            break
+        }
+        result = append(result, remaining[0:idx])
+        remaining = remaining[idx + len(sep):len(remaining)]
+    }
+    result = append(result, remaining)
+    return result
+}
+
+pub fn trim(s str, cutset str) str {
+    return trim_right(trim_left(s, cutset), cutset)
+}
+
+pub fn to_lower(s str) str {
+    sb := sb_new()
+    i := 0
+    for i < len(s) {
+        b := s[i]
+        if b >= 65 && b <= 90 {
+            sb_write(sb, chr(b + 32))
+        } else {
+            sb_write(sb, s[i:i + 1])
+        }
+        i = i + 1
+    }
+    return sb_string(sb)
+}
+
+pub fn to_upper(s str) str {
+    sb := sb_new()
+    i := 0
+    for i < len(s) {
+        b := s[i]
+        if b >= 97 && b <= 122 {
+            sb_write(sb, chr(b - 32))
+        } else {
+            sb_write(sb, s[i:i + 1])
+        }
+        i = i + 1
+    }
+    return sb_string(sb)
 }
 
 pub fn parse_i64(s str) !i64 {

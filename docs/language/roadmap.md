@@ -91,6 +91,19 @@ Git-based dependency management is now implemented:
 
 ---
 
+## v0.3.1 capability: language ergonomics (implemented)
+
+Driven by real-world usage in yar-cli and yar-toml, these improvements reduce
+common boilerplate without adding new semantic models:
+
+- compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`)
+- open-ended slice syntax (`s[i:]`, `s[:j]`)
+- single-field enum positional constructors (`Enum.Case(value)`)
+- stdlib additions: `strings.split`, `strings.trim`, `strings.to_lower`,
+  `strings.to_upper`
+
+---
+
 ## Accepted foundation: heap-backed feature memory model
 
 The minimal runtime-managed memory model is now an accepted design foundation.

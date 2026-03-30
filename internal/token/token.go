@@ -36,6 +36,11 @@ const (
 	Star
 	Slash
 	Percent
+	PlusAssign
+	MinusAssign
+	StarAssign
+	SlashAssign
+	PercentAssign
 	Less
 	LessEqual
 	Greater
@@ -128,6 +133,16 @@ func (k Kind) String() string {
 		return "/"
 	case Percent:
 		return "%"
+	case PlusAssign:
+		return "+="
+	case MinusAssign:
+		return "-="
+	case StarAssign:
+		return "*="
+	case SlashAssign:
+		return "/="
+	case PercentAssign:
+		return "%="
 	case Less:
 		return "<"
 	case LessEqual:
@@ -188,6 +203,23 @@ func (k Kind) String() string {
 		return "map"
 	default:
 		return fmt.Sprintf("token(%d)", k)
+	}
+}
+
+func CompoundAssignOp(k Kind) (Kind, bool) {
+	switch k {
+	case PlusAssign:
+		return Plus, true
+	case MinusAssign:
+		return Minus, true
+	case StarAssign:
+		return Star, true
+	case SlashAssign:
+		return Slash, true
+	case PercentAssign:
+		return Percent, true
+	default:
+		return Illegal, false
 	}
 }
 
