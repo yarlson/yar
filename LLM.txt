@@ -376,6 +376,9 @@ has(map[K]V, K) bool          // map key existence
 delete(map[K]V, K) void       // remove map key
 keys(map[K]V) []K             // snapshot of map keys
 to_str(i32|i64|bool|str|error) str  // convert to string
+sb_new() i64                         // create string builder (opaque handle)
+sb_write(i64, str) void              // append string to builder
+sb_string(i64) str                   // extract built string, reset builder
 ```
 
 ## Standard Library
