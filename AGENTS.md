@@ -12,13 +12,13 @@ For implementation work in this repository, follow this order:
 6. run `golangci-lint run --fix ./...` and `go test -race -count=1 -v -timeout=120s ./...`
 7. fix issues from lint and tests
 8. update `docs/context/`
-9. update `docs/YAR.md`
+9. update `docs/YAR.md`, `LLM.txt`
 10. update `docs/language`
 11. use `/review` slash command from `~/.claude/commands/review.md` or `review` skill to review the code
 12. fix all found issues
 13. run `golangci-lint run --fix ./...` and `go test -race -count=1 -v -timeout=120s ./...`
 14. fix issues from lint and tests
-15. if needed, update `docs/context/`, `docs/YAR.md`, `docs/language`
+15. if needed, update `docs/context/`, `docs/YAR.md`, `docs/language`, `LLM.txt`
 
 Do not skip the documentation updates when implementation changes behavior,
 capabilities, constraints, runtime details, or accepted language design.
