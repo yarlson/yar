@@ -33,13 +33,15 @@
 - The current generic system has no constraints.
 - Local variables are introduced with `:=` or `var`, scoped by blocks, and may
   be reassigned only after declaration.
-- Raw errorable values cannot be bound, assigned, passed as arguments, used in
-  conditions, used in unary or binary operators, or accessed through fields or
-  indexing.
+- Raw errorable call expressions cannot be bound, assigned, passed as
+  arguments, used in conditions, used in unary or binary operators, or
+  accessed through fields or indexing.
 - `&&` and `||` short-circuit in source order and require non-errorable `bool`
   operands.
 - Errorable results must be handled immediately with direct `return`, `?`, or
   `or |err| { ... }`.
+- First-class `!T` values produced by the language, such as taskgroup result
+  elements, may be handled later with `?` or `or |err| { ... }`.
 - `?` is front-end sugar for explicit error inspection and return from the
   current function.
 - `or |err| { ... }` is front-end sugar for explicit local error inspection and
@@ -54,6 +56,11 @@
   parameter.
 - Function literals have explicit function types and lower to closure values
   carrying a code pointer plus an optional captured environment.
+- `taskgroup` is an expression, `spawn` is a statement valid only inside a
+  taskgroup body, and `spawn` is rejected inside function literals nested under
+  a taskgroup body.
+- `chan[T]` is a builtin type. Channel element types cannot be `void`,
+  `noreturn`, or another channel type.
 - Methods are allowed only on named local struct types, with either value
   receivers or pointer receivers.
 - Methods cannot declare type parameters, and methods on instantiated generic

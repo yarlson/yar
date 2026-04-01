@@ -1,15 +1,18 @@
-# Proposal: Structured Concurrency (`task` and `chan`)
+# Proposal: Structured Concurrency (`taskgroup` and `chan`)
 
-Status: exploring
+Status: accepted and implemented
 
 ## 1. Summary
 
 Add structured concurrency to Yar through two constructs: `taskgroup` blocks
 that spawn and join concurrent tasks with guaranteed lifetime, and typed bounded
-channels for inter-task communication. Tasks are M:N scheduled onto a runtime
-thread pool. The design leverages Yar's existing value-capture closures for
-natural task isolation, composes with `!T` error returns for explicit error
-handling across task boundaries, and introduces no function coloring. All
+channels for inter-task communication. The current implementation starts each
+spawn on a native POSIX thread and joins through the taskgroup runtime API.
+This preserves the surface semantics proposed here while deferring the
+exploratory M:N scheduler work. The design leverages Yar's existing value-
+capture closures for natural task isolation, composes with `!T` error returns
+for explicit error handling across task boundaries, and introduces no function
+coloring. All
 blocking operations (I/O, channel, sleep) block the calling task, not the
 program.
 
@@ -1438,14 +1441,28 @@ code.
 
 ## 14. Decision
 
-Exploring. This proposal documents the intended concurrency design direction
-for Yar. It is not yet proposed for implementation. The design should be
-reviewed and refined before moving to `proposed` status.
+Accepted and implemented as the current structured-concurrency surface for Yar.
+The shipped implementation includes:
+
+- `taskgroup []R { ... }`
+- `spawn call(...)` inside taskgroups
+- `chan[T]` plus `chan_new`, `chan_send`, `chan_recv`, and `chan_close`
+- `taskgroup []!T` and `taskgroup []void`
+- immediate task start at each `spawn`
+
+The current runtime implementation deliberately differs from the original
+exploration in a few ways:
+
+- it uses native POSIX threads rather than an M:N scheduler
+- it currently rejects `return` in a taskgroup body and rejects `break` /
+  `continue` that would exit the taskgroup through an enclosing loop
+- it does not yet include a race-detector mode
+- Windows concurrency entry points currently fail at runtime with a clear
+  unsupported message
 
 ## 15. Implementation Checklist
 
-Not applicable at `exploring` status. When the proposal moves to `accepted`,
-this section will be populated with specific implementation tasks covering:
+This section tracks the implementation status against the original plan.
 
 ### Phase 1: Runtime foundation (no language changes)
 
@@ -1470,13 +1487,13 @@ this section will be populated with specific implementation tasks covering:
 
 ### Phase 2: Language surface
 
-- [ ] `internal/token/token.go` — new keywords: `taskgroup`, `spawn`, `chan`
-- [ ] `internal/ast/ast.go` — new AST nodes: `TaskgroupExpr`, `SpawnStmt`,
+- [x] `internal/token/token.go` — new keywords: `taskgroup`, `spawn`, `chan`
+- [x] `internal/ast/ast.go` — new AST nodes: `TaskgroupExpr`, `SpawnStmt`,
       `ChanType`
-- [ ] `internal/parser/parser.go` — parse taskgroup, spawn, chan type
-- [ ] `internal/checker/checker.go` — taskgroup type rules, spawn validation,
+- [x] `internal/parser/parser.go` — parse taskgroup, spawn, chan type
+- [x] `internal/checker/checker.go` — taskgroup type rules, spawn validation,
       channel builtin registration, `chan[T]` type
-- [ ] `internal/codegen/llvm.go` — taskgroup lowering, channel handle codegen,
+- [x] `internal/codegen/llvm.go` — taskgroup lowering, channel handle codegen,
       spawn descriptor construction, task function wrapper generation
 
 ### Phase 3: Race detector
@@ -1490,19 +1507,19 @@ this section will be populated with specific implementation tasks covering:
 
 ### Phase 4: Tests and documentation
 
-- [ ] `testdata/concurrency_basic/main.yar` — basic taskgroup test
-- [ ] `testdata/concurrency_channels/main.yar` — channel test
-- [ ] `testdata/concurrency_errors/main.yar` — error propagation test
+- [x] `testdata/concurrency_basic/main.yar` — basic taskgroup test
+- [x] `testdata/concurrency_channels/main.yar` — channel test
+- [x] `testdata/concurrency_errors/main.yar` — error propagation test
 - [ ] `testdata/concurrency_net/main.yar` — concurrent TCP server test
 - [ ] `testdata/concurrency_race/main.yar` — race detector validation
-- [ ] `internal/compiler/compiler_test.go` — concurrency test functions
-- [ ] `docs/context/domains/concurrency.md` — concurrency documentation
-- [ ] `docs/context/domains/language-slice.md` — updated with taskgroup, spawn,
+- [x] `internal/compiler/compiler_test.go` — concurrency test functions
+- [x] `docs/context/domains/concurrency.md` — concurrency documentation
+- [x] `docs/context/domains/language-slice.md` — updated with taskgroup, spawn,
       chan
 - [ ] `docs/context/domains/stdlib.md` — channel builtins
-- [ ] `docs/context/platform/toolchain-runtime.md` — scheduler, poller, channel
+- [x] `docs/context/platform/toolchain-runtime.md` — scheduler, poller, channel
       runtime, TZif parser, race detector
-- [ ] `docs/context/summary.md` — updated capabilities
-- [ ] `docs/YAR.md` — concurrency reference
-- [ ] `LLM.txt` — concurrency reference
+- [x] `docs/context/summary.md` — updated capabilities
+- [x] `docs/YAR.md` — concurrency reference
+- [x] `LLM.txt` — concurrency reference
 - [ ] `README.md` — updated feature list

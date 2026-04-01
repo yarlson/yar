@@ -2,8 +2,8 @@
 
 Yar is a compiled programming language that targets native executables through
 LLVM. It has explicit error handling, closed enums with exhaustive matching,
-generics, interfaces, and automatic memory management — with no exceptions, no
-implicit coercions, and no hidden control flow.
+generics, interfaces, structured concurrency, and automatic memory management
+with no exceptions, no implicit coercions, and no hidden control flow.
 
 Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 
@@ -65,6 +65,41 @@ $ yar run shapes.yar
 area: 20
 ```
 
+Structured concurrency uses `taskgroup` and typed bounded channels:
+
+```
+package main
+
+fn square(v i32, out chan[i32]) void {
+    chan_send(out, v * v) or |err| {
+        return
+    }
+}
+
+fn main() i32 {
+    out := chan_new[i32](2)
+
+    taskgroup []void {
+        spawn square(2, out)
+        spawn square(3, out)
+    }
+
+    a := chan_recv(out) or |err| {
+        return 1
+    }
+    b := chan_recv(out) or |err| {
+        return 1
+    }
+    print(to_str(a + b) + "\n")
+    return 0
+}
+```
+
+```
+$ yar run squares.yar
+13
+```
+
 ## Design
 
 - Functions that can fail return `!T`. The caller handles it or propagates with
@@ -77,6 +112,8 @@ area: 20
 - Interfaces are named and implicit. A concrete type satisfies an interface by
   providing every required method with an exact signature match.
 - Closures capture by value at creation time.
+- Structured concurrency uses `taskgroup` for scoped spawning and `chan[T]`
+  for bounded FIFO communication.
 - The runtime manages memory automatically. There is no manual `free` and no
   visible garbage collector.
 - The compiler produces LLVM IR and native executables through `clang`.
@@ -88,7 +125,18 @@ area: 20
 
 `bool`, `i32`, `i64`, `str`, `error`, typed pointers (`*T`), structs,
 interfaces, enums, fixed arrays (`[N]T`), slices (`[]T`), maps (`map[K]V`),
-and function types.
+channels (`chan[T]`), and function types.
+
+## Concurrency
+
+- `taskgroup []R { ... }` spawns concurrent calls and yields results in spawn
+  order.
+- `spawn call(...)` is valid only inside a taskgroup body.
+- `chan[T]` is a bounded typed channel created with `chan_new[T](capacity)`.
+- `chan_send`, `chan_recv`, and `chan_close` provide the channel operations.
+- The current implementation uses POSIX threads under the hood.
+- Windows builds compile, but concurrency operations currently fail at runtime
+  with an unsupported message.
 
 ## Standard library
 

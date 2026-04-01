@@ -213,6 +213,12 @@ func (p *Parser) parseFunction(exported bool) *ast.FunctionDecl {
 }
 
 func (p *Parser) parseTypeRef() ast.TypeRef {
+	if p.at(token.Bang) {
+		bang := p.expect(token.Bang, "expected '!'")
+		inner := p.parseTypeRef()
+		return ast.TypeRef{Kind: ast.ErrorableTypeRef, Elem: &inner, Pos: bang.Pos}
+	}
+
 	if p.at(token.Star) {
 		star := p.expect(token.Star, "expected '*'")
 		inner := p.parseTypeRef()
@@ -244,6 +250,14 @@ func (p *Parser) parseTypeRef() ast.TypeRef {
 		p.expect(token.RBracket, "expected ']' after map key type")
 		valueType := p.parseTypeRef()
 		return ast.TypeRef{Kind: ast.MapTypeRef, Key: &keyType, Value: &valueType, Pos: mapTok.Pos}
+	}
+
+	if p.at(token.Chan) {
+		chanTok := p.expect(token.Chan, "expected chan")
+		p.expect(token.LBracket, "expected '[' after chan")
+		elemType := p.parseTypeRef()
+		p.expect(token.RBracket, "expected ']' after chan element type")
+		return ast.TypeRef{Kind: ast.ChanTypeRef, Elem: &elemType, Pos: chanTok.Pos}
 	}
 
 	if p.at(token.Fn) {
@@ -318,6 +332,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseReturn()
 	case token.Match:
 		return p.parseMatch()
+	case token.Spawn:
+		return p.parseSpawn()
 	case token.LBrace:
 		return p.parseBlock()
 	case token.Ident:
@@ -537,6 +553,14 @@ func (p *Parser) parseReturn() ast.Statement {
 	return &ast.ReturnStmt{
 		ReturnPos: returnTok.Pos,
 		Value:     p.parseExpression(),
+	}
+}
+
+func (p *Parser) parseSpawn() ast.Statement {
+	spawnTok := p.expect(token.Spawn, "expected spawn")
+	return &ast.SpawnStmt{
+		SpawnPos: spawnTok.Pos,
+		Call:     p.parseExpression(),
 	}
 }
 
@@ -823,6 +847,8 @@ func (p *Parser) parsePrimary() ast.Expression {
 		return &ast.GroupExpr{Inner: inner}
 	case token.Fn:
 		return p.parseFunctionLiteral()
+	case token.Taskgroup:
+		return p.parseTaskgroupExpr()
 	case token.LBracket:
 		return p.parseSequenceLiteral()
 	case token.Map:
@@ -831,6 +857,17 @@ func (p *Parser) parsePrimary() ast.Expression {
 		p.errorCurrent("expected expression")
 		p.advance()
 		return nil
+	}
+}
+
+func (p *Parser) parseTaskgroupExpr() ast.Expression {
+	taskgroupTok := p.expect(token.Taskgroup, "expected taskgroup")
+	resultType := p.parseTypeRef()
+	body := p.parseBlock()
+	return &ast.TaskgroupExpr{
+		TaskgroupPos: taskgroupTok.Pos,
+		ResultType:   resultType,
+		Body:         body,
 	}
 }
 

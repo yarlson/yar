@@ -25,6 +25,9 @@ func invokeCC(ctx context.Context, target Target, irPath, runtimePath, outputPat
 	if target.Triple != "" {
 		args = append(args, "--target="+target.Triple)
 	}
+	if !strings.Contains(target.Triple, "windows") {
+		args = append(args, "-pthread")
+	}
 	args = append(args, irPath, runtimePath, "-o", outputPath)
 	if strings.Contains(target.Triple, "windows") {
 		args = append(args, "-lws2_32")

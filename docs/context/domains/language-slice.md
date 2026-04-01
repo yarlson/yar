@@ -29,6 +29,8 @@
 - `void`
 - `noreturn`
 - `error`
+- first-class errorable value types (`!T`)
+- channel types (`chan[T]`)
 - function types
 - typed pointer types
 - user-defined struct types
@@ -55,6 +57,7 @@
 - `continue`
 - `return`
 - `match value { case Enum.Case { ... } ... [else { ... }] }`
+- `spawn call(...)` inside a `taskgroup` body
 - Expression statements
 
 ## Expressions
@@ -80,6 +83,7 @@
 - Function calls
 - Function-value calls such as `f(1)`
 - Explicit generic function calls such as `first[i32](values)`
+- `taskgroup []R { ... }`
 - Grouping with parentheses
 - Field access
 - Indexing
@@ -133,9 +137,13 @@
 - Enum case names must be unique within their enum.
 - Payload field names must be unique within an enum case.
 - Parameters cannot use `void`, `noreturn`, or an unknown type.
-- Struct fields, array elements, and slice elements cannot use `void`,
-  `noreturn`, or an unknown type.
+- Struct fields and array elements cannot use `void`, `noreturn`, or an
+  unknown type.
+- Slice elements cannot use `noreturn` or an unknown type. `[]void` is used by
+  taskgroup result annotations.
 - Enum payload fields cannot use `void`, `noreturn`, or an unknown type.
+- Channel element types cannot use `void`, `noreturn`, unknown types, or
+  another channel type.
 - Pointer targets cannot use `void`, `noreturn`, or an unknown type.
 - Direct recursive struct or enum containment is rejected, but recursive shapes
   through `*T` and `[]T` remain valid.
@@ -154,7 +162,7 @@
   `str`, with runtime bounds checking. Omitted start defaults to `0`, omitted
   end defaults to `len(s)`.
 - Equality and inequality are supported for integers, `bool`, `str`, `error`,
-  same-typed pointers, and pointer-vs-`nil`.
+  same-typed pointers, same-typed channels, and pointer-vs-`nil`.
 - Equality and inequality are not supported for enum values.
 - `&&` and `||` require `bool` operands and evaluate the right operand only
   when needed.
@@ -177,6 +185,18 @@
   the start to `0`.
 - `match` requires a non-errorable enum value, each arm must use a case from
   that same enum, and every case must be covered (or an `else` arm present).
+- `taskgroup []R { ... }` is an expression of type `[]R`; the annotation must
+  be a slice type.
+- `spawn` is only valid inside the lexical body of a `taskgroup`, not inside a
+  function literal nested under that body.
+- `return` is not currently allowed inside a taskgroup body.
+- `break` and `continue` may not exit through an enclosing loop outside the
+  current taskgroup body.
+- A spawned expression must be a call, and its return shape must match the
+  taskgroup element type exactly, including `!T` vs `T`.
+- Taskgroup results preserve spawn order.
+- `taskgroup []!T` is valid and yields first-class errorable values that may be
+  handled with `?` or `or |err| { ... }` after indexing or binding.
 - Payload bindings in `match` arms have a generated payload-struct type, and
   `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because
@@ -191,7 +211,9 @@
   `error`, and as the operand of `return` inside an errorable function or a
   function returning `error`.
 - A raw errorable call cannot be used directly as a value; it must be returned
-  directly, propagated with `?`, or handled with `or |err| { ... }`.
+  directly, propagated with `?`, or handled with `or |err| { ... }`. First-
+  class `!T` values produced by constructs such as taskgroup results may be
+  handled later.
 - `?` is only valid on `!T` or `error` expressions and only inside a function
   that can return an error.
 - `or |err| { ... }` is only valid on `!T` or `error` expressions.
@@ -212,6 +234,13 @@
 - `sb_new() i64` — create a string builder (opaque handle)
 - `sb_write(i64, str) void` — append to builder
 - `sb_string(i64) str` — extract built string, reset builder
+- `chan_new[T](i32) chan[T]` — create a bounded channel with explicit element
+  type
+- `chan_send(chan[T], T) !void` — send one value, `error.Closed` on a closed
+  channel
+- `chan_recv(chan[T]) !T` — receive one value, `error.Closed` on a closed and
+  drained channel
+- `chan_close(chan[T]) void` — close a channel
 
 Builtins remain globally available and are not imported.
 

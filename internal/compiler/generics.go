@@ -198,6 +198,8 @@ func (m *genericMonomorphizer) rewriteStatement(stmt ast.Statement, subst map[st
 			elseBody = m.rewriteBlock(s.ElseBody, subst)
 		}
 		return &ast.MatchStmt{MatchPos: s.MatchPos, Value: m.rewriteExpr(s.Value, subst), Arms: arms, ElseBody: elseBody}
+	case *ast.SpawnStmt:
+		return &ast.SpawnStmt{SpawnPos: s.SpawnPos, Call: m.rewriteExpr(s.Call, subst)}
 	case *ast.ExprStmt:
 		return &ast.ExprStmt{Expr: m.rewriteExpr(s.Expr, subst)}
 	default:
@@ -240,6 +242,12 @@ func (m *genericMonomorphizer) rewriteExpr(expr ast.Expression, subst map[string
 			Params:       params,
 			Return:       m.rewriteTypeRef(e.Return, subst),
 			ReturnIsBang: e.ReturnIsBang,
+			Body:         m.rewriteBlock(e.Body, subst),
+		}
+	case *ast.TaskgroupExpr:
+		return &ast.TaskgroupExpr{
+			TaskgroupPos: e.TaskgroupPos,
+			ResultType:   m.rewriteTypeRef(e.ResultType, subst),
 			Body:         m.rewriteBlock(e.Body, subst),
 		}
 	case *ast.UnaryExpr:
@@ -323,6 +331,16 @@ func (m *genericMonomorphizer) rewriteCallExpr(call *ast.CallExpr, subst map[str
 			name := m.instantiateFunction(decl, typeArgs)
 			return &ast.CallExpr{Callee: &ast.IdentExpr{Name: name, NamePos: ident.NamePos}, Args: args}
 		}
+		if ident.Name == "chan_new" {
+			return &ast.CallExpr{
+				Callee: &ast.TypeApplicationExpr{
+					Inner:       &ast.IdentExpr{Name: ident.Name, NamePos: ident.NamePos},
+					LBracketPos: applied.LBracketPos,
+					TypeArgs:    typeArgs,
+				},
+				Args: args,
+			}
+		}
 		if _, ok := m.nonGenericFunctions[ident.Name]; ok || checker.IsBuiltinFunction(ident.Name) {
 			m.diag.Add(applied.LBracketPos, "function %q is not generic", ident.Name)
 			return &ast.CallExpr{Callee: &ast.IdentExpr{Name: ident.Name, NamePos: ident.NamePos}, Args: args}
@@ -342,7 +360,7 @@ func (m *genericMonomorphizer) rewriteCallExpr(call *ast.CallExpr, subst map[str
 
 func (m *genericMonomorphizer) rewriteTypeRef(ref ast.TypeRef, subst map[string]ast.TypeRef) ast.TypeRef {
 	switch ref.Kind {
-	case ast.PointerTypeRef, ast.SliceTypeRef, ast.ArrayTypeRef:
+	case ast.ErrorableTypeRef, ast.PointerTypeRef, ast.SliceTypeRef, ast.ArrayTypeRef, ast.ChanTypeRef:
 		out := ref
 		if ref.Elem != nil {
 			elem := m.rewriteTypeRef(*ref.Elem, subst)

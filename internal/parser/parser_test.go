@@ -819,3 +819,69 @@ fn main() i32 {
 		t.Fatalf("unexpected param type: got %q want %q", got, want)
 	}
 }
+
+func TestParseTaskgroupAndChannelForms(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+fn worker(jobs chan[i32]) !i32 {
+	return chan_recv(jobs)
+}
+
+fn main() []!i32 {
+	results := taskgroup []!i32 {
+		jobs := chan_new[i32](4)
+		spawn worker(jobs)
+		spawn fn() !i32 {
+			return chan_recv(jobs)
+		}()
+	}
+	return results
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	if got, want := program.Functions[0].Params[0].Type.String(), "chan[i32]"; got != want {
+		t.Fatalf("unexpected channel param type: got %q want %q", got, want)
+	}
+	if got, want := program.Functions[1].Return.String(), "[]!i32"; got != want {
+		t.Fatalf("unexpected taskgroup return type: got %q want %q", got, want)
+	}
+
+	stmt, ok := program.Functions[1].Body.Stmts[0].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("expected let statement, got %T", program.Functions[1].Body.Stmts[0])
+	}
+	taskgroup, ok := stmt.Value.(*ast.TaskgroupExpr)
+	if !ok {
+		t.Fatalf("expected taskgroup expression, got %T", stmt.Value)
+	}
+	if got, want := taskgroup.ResultType.String(), "[]!i32"; got != want {
+		t.Fatalf("unexpected taskgroup result type: got %q want %q", got, want)
+	}
+	if got, want := len(taskgroup.Body.Stmts), 3; got != want {
+		t.Fatalf("unexpected taskgroup body statement count: got %d want %d", got, want)
+	}
+	if _, ok := taskgroup.Body.Stmts[1].(*ast.SpawnStmt); !ok {
+		t.Fatalf("expected first spawn statement, got %T", taskgroup.Body.Stmts[1])
+	}
+	secondSpawn, ok := taskgroup.Body.Stmts[2].(*ast.SpawnStmt)
+	if !ok {
+		t.Fatalf("expected second spawn statement, got %T", taskgroup.Body.Stmts[2])
+	}
+	call, ok := secondSpawn.Call.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("expected spawned call expression, got %T", secondSpawn.Call)
+	}
+	callee, ok := call.Callee.(*ast.FunctionLiteralExpr)
+	if !ok {
+		t.Fatalf("expected spawned function literal call, got %T", call.Callee)
+	}
+	if !callee.ReturnIsBang {
+		t.Fatal("expected spawned function literal to be errorable")
+	}
+}

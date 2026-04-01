@@ -74,3 +74,21 @@ func TestSourceIncludesMapKeyHelpers(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceIncludesConcurrencyHelpers(t *testing.T) {
+	t.Parallel()
+
+	for _, want := range []string{
+		"void *yar_taskgroup_new(int32_t elem_size)",
+		"void yar_taskgroup_spawn(void *group_ptr, void *entry_ptr, void *ctx)",
+		"yar_slice yar_taskgroup_wait(void *group_ptr)",
+		"void *yar_chan_new(int32_t elem_size, int32_t capacity)",
+		"int32_t yar_chan_send(void *handle, const void *value_ptr)",
+		"int32_t yar_chan_recv(void *handle, void *out_ptr)",
+		"void yar_chan_close(void *handle)",
+	} {
+		if !strings.Contains(Source(), want) {
+			t.Fatalf("expected runtime source to contain %q", want)
+		}
+	}
+}

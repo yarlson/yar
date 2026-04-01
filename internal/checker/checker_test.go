@@ -992,16 +992,16 @@ fn main() i32 {
 			substr: "function \"len\" is already declared",
 		},
 		{
-			name: "slice element type cannot be void",
+			name: "channel element type cannot be void",
 			src: `
 package main
 
 fn main() i32 {
-	values := []void{}
+	values := chan_new[void](1)
 	return 0
 }
 `,
-			substr: "slice element type \"void\" is not allowed",
+			substr: "channel element type \"void\" is not allowed",
 		},
 		{
 			name: "append value type mismatch",
@@ -1475,6 +1475,270 @@ fn main() i32 {
 			program, _ := parser.Parse(tc.src)
 			if program == nil {
 				t.Fatal("parse failed")
+			}
+
+			_, diags := Check(program)
+			if len(diags) == 0 {
+				t.Fatal("expected checker diagnostics")
+			}
+
+			messages := make([]string, 0, len(diags))
+			for _, diag := range diags {
+				messages = append(messages, diag.Message)
+			}
+			if !strings.Contains(strings.Join(messages, "\n"), tc.substr) {
+				t.Fatalf("expected diagnostic containing %q, got %q", tc.substr, strings.Join(messages, "\n"))
+			}
+		})
+	}
+}
+
+func TestCheckConcurrencyValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn compute(v i32) i32 {
+	return v * 2
+}
+
+fn read_one(ch chan[i32]) !i32 {
+	return chan_recv(ch)
+}
+
+fn main() i32 {
+	ch := chan_new[i32](2)
+	chan_send(ch, 3) or |_| {
+		return 1
+	}
+
+	values := taskgroup []i32 {
+		spawn compute(1)
+		spawn compute(2)
+	}
+
+	results := taskgroup []!i32 {
+		spawn read_one(ch)
+	}
+
+	first := results[0] or |_| {
+		return 2
+	}
+	if first != 3 {
+		return 3
+	}
+	if len(values) != 2 {
+		return 4
+	}
+	chan_close(ch)
+	return values[0] + values[1]
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
+func TestCheckConcurrencyInvalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		src    string
+		substr string
+	}{
+		{
+			name: "spawn outside taskgroup",
+			src: `
+package main
+
+fn work() i32 {
+	return 1
+}
+
+fn main() i32 {
+	spawn work()
+	return 0
+}
+`,
+			substr: "spawn is only valid inside a taskgroup body",
+		},
+		{
+			name: "spawn return type mismatch",
+			src: `
+package main
+
+fn work() i32 {
+	return 1
+}
+
+fn main() i32 {
+	values := taskgroup []str {
+		spawn work()
+	}
+	return 0
+}
+`,
+			substr: "spawned call must return str, got i32",
+		},
+		{
+			name: "spawn must be call",
+			src: `
+package main
+
+fn main() i32 {
+	f := fn() i32 {
+		return 1
+	}
+	values := taskgroup []i32 {
+		spawn f
+	}
+	return 0
+}
+`,
+			substr: "spawn requires a call expression",
+		},
+		{
+			name: "spawn inside closure rejected",
+			src: `
+package main
+
+fn work() i32 {
+	return 1
+}
+
+fn main() i32 {
+	values := taskgroup []i32 {
+		f := fn() void {
+			spawn work()
+			return
+		}
+		f()
+	}
+	return 0
+}
+`,
+			substr: "spawn is not allowed inside a function literal within a taskgroup body",
+		},
+		{
+			name: "channel send type mismatch",
+			src: `
+package main
+
+fn main() i32 {
+	ch := chan_new[i32](1)
+	chan_send(ch, "x")
+	return 0
+}
+`,
+			substr: "argument 2 to \"chan_send\" must be i32, got str",
+		},
+		{
+			name: "unsupported builtin spawn rejected",
+			src: `
+package main
+
+fn main() i32 {
+	values := []i32{1, 2}
+	results := taskgroup []i32 {
+		spawn len(values)
+	}
+	return len(results)
+}
+`,
+			substr: "spawn does not currently support builtin \"len\" directly",
+		},
+		{
+			name: "nested channel type rejected",
+			src: `
+package main
+
+fn main() i32 {
+	ch := chan_new[chan[i32]](1)
+	return 0
+}
+`,
+			substr: "channel element type \"chan[i32]\" is not allowed",
+		},
+		{
+			name: "return inside taskgroup rejected",
+			src: `
+package main
+
+fn work() i32 {
+	return 1
+}
+
+fn main() i32 {
+	values := taskgroup []i32 {
+		spawn work()
+		return 0
+	}
+	return len(values)
+}
+`,
+			substr: "return is not allowed inside a taskgroup body",
+		},
+		{
+			name: "break exiting taskgroup rejected",
+			src: `
+package main
+
+fn work() void {
+	return
+}
+
+fn main() i32 {
+	for true {
+		taskgroup []void {
+			spawn work()
+			break
+		}
+	}
+	return 0
+}
+`,
+			substr: "break cannot exit a taskgroup body",
+		},
+		{
+			name: "continue exiting taskgroup rejected",
+			src: `
+package main
+
+fn work() void {
+	return
+}
+
+fn main() i32 {
+	for true {
+		taskgroup []void {
+			spawn work()
+			continue
+		}
+	}
+	return 0
+}
+`,
+			substr: "continue cannot exit a taskgroup body",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			program, parseDiags := parser.Parse(tc.src)
+			if len(parseDiags) > 0 {
+				t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
 			}
 
 			_, diags := Check(program)

@@ -4,6 +4,8 @@
 
 - A function declared as `!T` returns either a success value of type `T` or an
   error code.
+- The language also has first-class `!T` value types for constructs that carry
+  deferred task results, such as `taskgroup []!T`.
 - A function declared as `error` returns an error code directly.
 - `!void` is valid and carries only the error flag and error code.
 - `error` is a builtin type.
@@ -28,7 +30,7 @@
 
 - Returning `error.Name` is valid inside an errorable function or a function
   returning `error`.
-- A raw `!T` expression is rejected in:
+- A raw errorable call or lookup expression is rejected in:
   - `:=` bindings
   - `var` initializers
   - assignments
@@ -42,6 +44,8 @@
   - plain expression statements
 - A call to an errorable function may be returned directly from a function with
   the same errorable result type.
+- First-class `!T` values, such as `taskgroup []!T` elements, may later be
+  handled with `?` or `or |err| { ... }`.
 - Postfix `?` is propagation sugar only.
 - `or |err| { ... }` is local handling sugar only.
 - Both sugar forms are compile-time surface features that lower into explicit

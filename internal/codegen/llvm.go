@@ -25,19 +25,23 @@ type Generator struct {
 	interfaceGlobals  []string
 	interfaceAdapters []string
 	interfaceImpls    map[string]string
+	taskWrapperNames  map[*ast.SpawnStmt]string
+	taskWrappers      []string
+	nextTaskWrapperID int
 }
 
 func Generate(program *ast.Program, info checker.Info, targetTriple string) (string, error) {
 	g := &Generator{
-		program:        program,
-		info:           info,
-		functions:      builtins(),
-		methods:        make(map[checker.Type]map[string]checker.Signature),
-		stringNames:    make(map[string]string),
-		literalNames:   make(map[*ast.FunctionLiteralExpr]string),
-		emittedLits:    make(map[*ast.FunctionLiteralExpr]bool),
-		usedResultType: make(map[checker.Type]bool),
-		interfaceImpls: make(map[string]string),
+		program:          program,
+		info:             info,
+		functions:        builtins(),
+		methods:          make(map[checker.Type]map[string]checker.Signature),
+		stringNames:      make(map[string]string),
+		literalNames:     make(map[*ast.FunctionLiteralExpr]string),
+		emittedLits:      make(map[*ast.FunctionLiteralExpr]bool),
+		usedResultType:   make(map[checker.Type]bool),
+		interfaceImpls:   make(map[string]string),
+		taskWrapperNames: make(map[*ast.SpawnStmt]string),
 	}
 
 	for _, sig := range info.Functions {
@@ -57,10 +61,25 @@ func Generate(program *ast.Program, info checker.Info, targetTriple string) (str
 		if et.Errorable {
 			g.usedResultType[et.Base] = true
 		}
+		if inner, ok := checker.ParseErrorableType(et.Base); ok {
+			g.usedResultType[inner] = true
+		}
 	}
 	for _, lit := range info.FunctionLiterals {
 		if lit.Signature.Errorable {
 			g.usedResultType[lit.Signature.Return] = true
+		}
+	}
+	for _, typ := range info.Locals {
+		if inner, ok := checker.ParseErrorableType(typ); ok {
+			g.usedResultType[inner] = true
+		}
+	}
+	for _, info := range info.Structs {
+		for _, field := range info.Fields {
+			if inner, ok := checker.ParseErrorableType(field.Type); ok {
+				g.usedResultType[inner] = true
+			}
 		}
 	}
 
@@ -160,6 +179,7 @@ func Generate(program *ast.Program, info checker.Info, targetTriple string) (str
 	}
 	functionIR = append(functionIR, wrapper)
 	functionIR = append(functionIR, g.interfaceAdapters...)
+	functionIR = append(functionIR, g.taskWrappers...)
 
 	for _, global := range g.interfaceGlobals {
 		b.WriteString(global)
@@ -240,6 +260,13 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_net_set_read_deadline(i64, i32)\n")
 	b.WriteString("declare i32 @yar_net_set_write_deadline(i64, i32)\n")
 	b.WriteString("declare i32 @yar_net_resolve(%yar.str, i32, ptr)\n")
+	b.WriteString("declare ptr @yar_taskgroup_new(i32)\n")
+	b.WriteString("declare void @yar_taskgroup_spawn(ptr, ptr, ptr)\n")
+	b.WriteString("declare %yar.slice @yar_taskgroup_wait(ptr)\n")
+	b.WriteString("declare ptr @yar_chan_new(i32, i32)\n")
+	b.WriteString("declare i32 @yar_chan_send(ptr, ptr)\n")
+	b.WriteString("declare i32 @yar_chan_recv(ptr, ptr)\n")
+	b.WriteString("declare void @yar_chan_close(ptr)\n")
 }
 
 func builtins() map[string]checker.Signature {
@@ -298,6 +325,36 @@ func builtins() map[string]checker.Signature {
 			FullName: "sb_string",
 			Params:   []checker.Type{checker.TypeI64},
 			Return:   checker.TypeStr,
+			Builtin:  true,
+		},
+		"chan_new": {
+			Name:     "chan_new",
+			FullName: "chan_new",
+			Params:   []checker.Type{checker.TypeI32},
+			Return:   checker.TypeInvalid,
+			Builtin:  true,
+		},
+		"chan_send": {
+			Name:      "chan_send",
+			FullName:  "chan_send",
+			Params:    []checker.Type{checker.TypeInvalid, checker.TypeInvalid},
+			Return:    checker.TypeVoid,
+			Errorable: true,
+			Builtin:   true,
+		},
+		"chan_recv": {
+			Name:      "chan_recv",
+			FullName:  "chan_recv",
+			Params:    []checker.Type{checker.TypeInvalid},
+			Return:    checker.TypeInvalid,
+			Errorable: true,
+			Builtin:   true,
+		},
+		"chan_close": {
+			Name:     "chan_close",
+			FullName: "chan_close",
+			Params:   []checker.Type{checker.TypeInvalid},
+			Return:   checker.TypeVoid,
 			Builtin:  true,
 		},
 	}
@@ -369,6 +426,9 @@ func (g *Generator) emitMainWrapper() (string, error) {
 }
 
 func (g *Generator) llvmType(typ checker.Type) string {
+	if inner, ok := checker.ParseErrorableType(typ); ok {
+		return g.resultTypeName(inner)
+	}
 	switch typ {
 	case checker.TypeVoid:
 		return "void"
@@ -390,6 +450,9 @@ func (g *Generator) llvmType(typ checker.Type) string {
 		return "ptr"
 	}
 	if _, ok := checker.ParseMapType(typ); ok {
+		return "ptr"
+	}
+	if _, ok := checker.ParseChanType(typ); ok {
 		return "ptr"
 	}
 	if _, ok := checker.ParseFunctionType(typ); ok {
@@ -501,6 +564,12 @@ func (g *Generator) enumPayloadWords(info checker.EnumInfo) int {
 }
 
 func (g *Generator) typeSize(typ checker.Type) int {
+	if inner, ok := checker.ParseErrorableType(typ); ok {
+		if inner == checker.TypeVoid {
+			return 8
+		}
+		return 8 + g.typeSize(inner)
+	}
 	switch typ {
 	case checker.TypeBool:
 		return 1
@@ -530,6 +599,9 @@ func (g *Generator) typeSize(typ checker.Type) int {
 	if _, ok := checker.ParseMapType(typ); ok {
 		return 8
 	}
+	if _, ok := checker.ParseChanType(typ); ok {
+		return 8
+	}
 	if info, ok := g.info.Structs[string(typ)]; ok {
 		size := 0
 		align := 1
@@ -554,6 +626,16 @@ func (g *Generator) typeSize(typ checker.Type) int {
 }
 
 func (g *Generator) typeAlign(typ checker.Type) int {
+	if inner, ok := checker.ParseErrorableType(typ); ok {
+		if inner == checker.TypeVoid {
+			return 4
+		}
+		align := g.typeAlign(inner)
+		if align < 4 {
+			return 4
+		}
+		return align
+	}
 	switch typ {
 	case checker.TypeBool:
 		return 1
@@ -579,6 +661,9 @@ func (g *Generator) typeAlign(typ checker.Type) int {
 		return 8
 	}
 	if _, ok := checker.ParseMapType(typ); ok {
+		return 8
+	}
+	if _, ok := checker.ParseChanType(typ); ok {
 		return 8
 	}
 	if info, ok := g.info.Structs[string(typ)]; ok {
@@ -799,6 +884,7 @@ type functionEmitter struct {
 	terminated   bool
 	scopes       []map[string]localSlot
 	loops        []loopContext
+	taskgroup    *taskgroupEmitContext
 }
 
 type localSlot struct {
@@ -809,6 +895,11 @@ type localSlot struct {
 type loopContext struct {
 	breakLabel    string
 	continueLabel string
+}
+
+type taskgroupEmitContext struct {
+	handle      string
+	elementType checker.Type
 }
 
 func newFunctionEmitter(g *Generator, fn *ast.FunctionDecl, sig checker.Signature) *functionEmitter {
@@ -981,6 +1072,8 @@ func (f *functionEmitter) genStatement(stmt ast.Statement) {
 		f.terminated = true
 	case *ast.ReturnStmt:
 		f.genReturn(s)
+	case *ast.SpawnStmt:
+		f.genSpawn(s)
 	case *ast.ExprStmt:
 		value := f.genExpression(s.Expr)
 		if value.typ == checker.TypeNoReturn {
@@ -1213,6 +1306,87 @@ func (f *functionEmitter) genReturn(stmt *ast.ReturnStmt) {
 	f.terminated = true
 }
 
+func (f *functionEmitter) genSpawn(stmt *ast.SpawnStmt) {
+	if f.taskgroup == nil {
+		panic("spawn outside taskgroup")
+	}
+
+	call, ok := stmt.Call.(*ast.CallExpr)
+	if !ok {
+		panic("spawn requires call")
+	}
+	sig, ok := f.g.info.Calls[call]
+	if !ok {
+		panic("missing spawn call signature")
+	}
+
+	wrapperName := f.g.queueTaskWrapper(stmt, sig)
+	ctxType := f.g.taskWrapperContextType(sig)
+	ctxPtr := f.emitAllocBytes(f.emitTypeSizeLiteral(ctxType), true)
+
+	fieldIndex := 0
+	if sig.ValueCall {
+		callee := f.genExpression(call.Callee)
+		fieldPtr := f.newTemp("task.ctx.field")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", fieldPtr, ctxType, ctxPtr, fieldIndex)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(callee.typ), callee.ref, fieldPtr)
+		fieldIndex++
+	}
+	if sig.Method {
+		selector, ok := call.Callee.(*ast.SelectorExpr)
+		if !ok {
+			panic("method spawn requires selector")
+		}
+		receiver := f.genExpression(selector.Inner)
+		fieldPtr := f.newTemp("task.ctx.field")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", fieldPtr, ctxType, ctxPtr, fieldIndex)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(receiver.typ), receiver.ref, fieldPtr)
+		fieldIndex++
+	}
+	argOffset := 0
+	if sig.Method {
+		argOffset = 1
+	}
+	for i, arg := range call.Args {
+		value := f.genCoercedExpression(arg, sig.Params[i+argOffset])
+		fieldPtr := f.newTemp("task.ctx.field")
+		fmt.Fprintf(&f.builder, "  %%%s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d\n", fieldPtr, ctxType, ctxPtr, fieldIndex)
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(value.typ), value.ref, fieldPtr)
+		fieldIndex++
+	}
+
+	fmt.Fprintf(&f.builder, "  call void @yar_taskgroup_spawn(ptr %s, ptr %s, ptr %s)\n", f.taskgroup.handle, f.g.functionName(wrapperName), ctxPtr)
+}
+
+func (f *functionEmitter) genTaskgroup(expr ast.Expression, taskgroup *ast.TaskgroupExpr) exprValue {
+	group := f.newTemp("taskgroup")
+	elemType := f.taskgroupElementType(taskgroup)
+	elemSize64 := f.emitTypeSize(elemType)
+	elemSize32 := f.newTemp("taskgroup.elem_size")
+	fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %s to i32\n", elemSize32, elemSize64)
+	fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_taskgroup_new(i32 %%%s)\n", group, elemSize32)
+
+	prev := f.taskgroup
+	f.taskgroup = &taskgroupEmitContext{
+		handle:      "%" + group,
+		elementType: elemType,
+	}
+	f.genBlock(taskgroup.Body)
+	f.taskgroup = prev
+
+	result := f.newTemp("taskgroup.result")
+	fmt.Fprintf(&f.builder, "  %%%s = call %%yar.slice @yar_taskgroup_wait(ptr %%%s)\n", result, group)
+	return exprValue{ref: "%" + result, typ: f.exprType(expr)}
+}
+
+func (f *functionEmitter) taskgroupElementType(taskgroup *ast.TaskgroupExpr) checker.Type {
+	slice, ok := checker.ParseSliceType(f.exprType(taskgroup))
+	if !ok {
+		panic("taskgroup requires slice type")
+	}
+	return slice.Elem
+}
+
 type exprValue struct {
 	ref string
 	typ checker.Type
@@ -1249,6 +1423,8 @@ func (f *functionEmitter) genExpression(expr ast.Expression) exprValue {
 		return f.genExpression(e.Inner)
 	case *ast.FunctionLiteralExpr:
 		return f.genFunctionLiteral(e)
+	case *ast.TaskgroupExpr:
+		return f.genTaskgroup(expr, e)
 	case *ast.UnaryExpr:
 		return f.genUnary(expr, e)
 	case *ast.PropagateExpr:
@@ -1683,6 +1859,28 @@ func (f *functionEmitter) genPropagate(expr *ast.PropagateExpr) exprValue {
 		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", success, f.g.resultTypeName(innerType.Base), result.ref)
 		return exprValue{ref: "%" + success, typ: innerType.Base}
 	}
+	if valueType, ok := checker.ParseErrorableType(innerType.Base); ok {
+		result := f.genExpression(expr.Inner)
+		errFlag := f.newTemp("propagate.is_err")
+		errLabel := f.newLabel("propagate.err")
+		okLabel := f.newLabel("propagate.ok")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", errFlag, f.g.resultTypeName(valueType), result.ref)
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, okLabel)
+		f.terminated = true
+
+		errCode := f.newTemp("propagate.err_code")
+		f.emitLabel(errLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(valueType), result.ref)
+		f.emitPropagatedError("%" + errCode)
+
+		f.emitLabel(okLabel)
+		if valueType == checker.TypeVoid {
+			return exprValue{typ: checker.TypeVoid}
+		}
+		success := f.newTemp("propagate.value")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", success, f.g.resultTypeName(valueType), result.ref)
+		return exprValue{ref: "%" + success, typ: valueType}
+	}
 
 	errValue := f.genExpression(expr.Inner)
 	isErr := f.newTemp("propagate.is_err")
@@ -1732,6 +1930,46 @@ func (f *functionEmitter) genHandle(expr *ast.HandleExpr) exprValue {
 		errCode := f.newTemp("handle.err_code")
 		f.emitLabel(errLabel)
 		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(innerType.Base), result.ref)
+		f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, "%"+errCode)
+		if !f.terminated {
+			fmt.Fprintf(&f.builder, "  br label %%%s\n", continueLabel)
+			f.terminated = true
+		}
+
+		f.emitLabel(continueLabel)
+		return exprValue{typ: checker.TypeVoid}
+	}
+	if valueType, ok := checker.ParseErrorableType(innerType.Base); ok {
+		result := f.genExpression(expr.Inner)
+		errFlag := f.newTemp("handle.is_err")
+		errLabel := f.newLabel("handle.err")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 0\n", errFlag, f.g.resultTypeName(valueType), result.ref)
+		if valueType != checker.TypeVoid {
+			okLabel := f.newLabel("handle.ok")
+			fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, okLabel)
+			f.terminated = true
+
+			errCode := f.newTemp("handle.err_code")
+			f.emitLabel(errLabel)
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(valueType), result.ref)
+			f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, "%"+errCode)
+			if !f.terminated {
+				panic("value handler must terminate")
+			}
+
+			f.emitLabel(okLabel)
+			success := f.newTemp("handle.value")
+			fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 2\n", success, f.g.resultTypeName(valueType), result.ref)
+			return exprValue{ref: "%" + success, typ: valueType}
+		}
+
+		continueLabel := f.newLabel("handle.cont")
+		fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", errFlag, errLabel, continueLabel)
+		f.terminated = true
+
+		errCode := f.newTemp("handle.err_code")
+		f.emitLabel(errLabel)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %s %s, 1\n", errCode, f.g.resultTypeName(valueType), result.ref)
 		f.genBlockWithErrorBinding(expr.Handler, expr.ErrName, "%"+errCode)
 		if !f.terminated {
 			fmt.Fprintf(&f.builder, "  br label %%%s\n", continueLabel)
@@ -1889,6 +2127,21 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		panic("missing call signature")
 	}
 
+	if applied, ok := expr.Callee.(*ast.TypeApplicationExpr); ok {
+		if ident, ok := applied.Inner.(*ast.IdentExpr); ok && ident.Name == "chan_new" {
+			elemType, ok := checker.ParseChanType(sig.Return)
+			if !ok {
+				panic("chan_new requires channel return type")
+			}
+			size64 := f.emitTypeSize(elemType.Elem)
+			size32 := f.newTemp("chan.elem_size")
+			handle := f.newTemp("chan.new")
+			fmt.Fprintf(&f.builder, "  %%%s = trunc i64 %s to i32\n", size32, size64)
+			fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_chan_new(i32 %%%s, i32 %s)\n", handle, size32, f.genExpression(expr.Args[0]).ref)
+			return exprValue{ref: "%" + handle, typ: sig.Return}
+		}
+	}
+
 	if sig.Name == "to_str" && sig.Builtin {
 		arg := f.genExpression(expr.Args[0])
 		argType := sig.Params[0]
@@ -2022,6 +2275,33 @@ func (f *functionEmitter) genCall(expr *ast.CallExpr) exprValue {
 		result := f.newTemp("map.keys")
 		fmt.Fprintf(&f.builder, "  %%%s = call %%yar.slice @yar_map_keys(ptr %s)\n", result, mapArg.ref)
 		return exprValue{ref: "%" + result, typ: sig.Return}
+	}
+	if sig.Name == "chan_send" && sig.Builtin {
+		chArg := f.genExpression(expr.Args[0])
+		chType, _ := checker.ParseChanType(chArg.typ)
+		value := f.genCoercedExpression(expr.Args[1], chType.Elem)
+		slot := f.newTemp("chan.send.slot")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(chType.Elem))
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(chType.Elem), value.ref, slot)
+		status := f.newTemp("chan.send.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_chan_send(ptr %s, ptr %%%s)\n", status, chArg.ref, slot)
+		return exprValue{ref: f.emitClosedStatusResult(sig.Return, "%"+status), typ: sig.Return}
+	}
+	if sig.Name == "chan_recv" && sig.Builtin {
+		chArg := f.genExpression(expr.Args[0])
+		chType, _ := checker.ParseChanType(chArg.typ)
+		out := f.newTemp("chan.recv.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(chType.Elem))
+		fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(chType.Elem), f.g.zeroValue(chType.Elem), out)
+		status := f.newTemp("chan.recv.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_chan_recv(ptr %s, ptr %%%s)\n", status, chArg.ref, out)
+		value := f.loadValue("%"+out, chType.Elem)
+		return exprValue{ref: f.emitClosedStatusResultWithValue(sig.Return, "%"+status, value.ref), typ: sig.Return}
+	}
+	if sig.Name == "chan_close" && sig.Builtin {
+		chArg := f.genExpression(expr.Args[0])
+		fmt.Fprintf(&f.builder, "  call void @yar_chan_close(ptr %s)\n", chArg.ref)
+		return exprValue{typ: checker.TypeVoid}
 	}
 	if sig.ValueCall {
 		callee := f.genExpression(expr.Callee)
@@ -2609,6 +2889,93 @@ func (f *functionEmitter) emitStringValue(value string) exprValue {
 	return exprValue{ref: "%" + tmp2, typ: checker.TypeStr}
 }
 
+func (f *functionEmitter) emitSpawnPreparedCall(sig checker.Signature, callee exprValue, args []exprValue) exprValue {
+	if sig.ValueCall {
+		codePtr := f.newTemp("task.closure.code")
+		envPtr := f.newTemp("task.closure.env")
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.closure %s, 0\n", codePtr, callee.ref)
+		fmt.Fprintf(&f.builder, "  %%%s = extractvalue %%yar.closure %s, 1\n", envPtr, callee.ref)
+		llvmArgs := make([]string, 0, len(args)+1)
+		llvmArgs = append(llvmArgs, fmt.Sprintf("ptr %%%s", envPtr))
+		for i, arg := range args {
+			llvmArgs = append(llvmArgs, fmt.Sprintf("%s %s", f.g.llvmType(sig.Params[i]), arg.ref))
+		}
+		callType := f.g.llvmType(sig.Return)
+		if sig.Errorable {
+			callType = f.g.resultTypeName(sig.Return)
+		}
+		if sig.Return == checker.TypeVoid && !sig.Errorable {
+			fmt.Fprintf(&f.builder, "  call void %%%s(%s)\n", codePtr, strings.Join(llvmArgs, ", "))
+			return exprValue{typ: checker.TypeVoid}
+		}
+		result := f.newTemp("task.call")
+		fmt.Fprintf(&f.builder, "  %%%s = call %s %%%s(%s)\n", result, callType, codePtr, strings.Join(llvmArgs, ", "))
+		return exprValue{ref: "%" + result, typ: sig.Return}
+	}
+	if sig.Method {
+		if _, ok := f.g.info.Interfaces[string(sig.Receiver)]; ok {
+			return f.genInterfaceCall(sig, args[0], args[1:])
+		}
+	}
+	if sig.HostIntrinsic {
+		return f.genHostIntrinsicCall(sig, args)
+	}
+	if sig.Builtin {
+		switch sig.Name {
+		case "chan_new":
+			chType, _ := checker.ParseChanType(sig.Return)
+			handle := f.newTemp("chan.new.handle")
+			fmt.Fprintf(&f.builder, "  %%%s = call ptr @yar_chan_new(i32 %d, i32 %s)\n", handle, f.g.typeSize(chType.Elem), args[0].ref)
+			return exprValue{ref: "%" + handle, typ: sig.Return}
+		case "chan_send":
+			chArg := args[0]
+			chType, _ := checker.ParseChanType(chArg.typ)
+			slot := f.newTemp("chan.send.slot")
+			fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", slot, f.g.llvmType(chType.Elem))
+			fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(chType.Elem), args[1].ref, slot)
+			status := f.newTemp("chan.send.status")
+			fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_chan_send(ptr %s, ptr %%%s)\n", status, chArg.ref, slot)
+			return exprValue{ref: f.emitClosedStatusResult(sig.Return, "%"+status), typ: sig.Return}
+		case "chan_recv":
+			chArg := args[0]
+			chType, _ := checker.ParseChanType(chArg.typ)
+			out := f.newTemp("chan.recv.out")
+			fmt.Fprintf(&f.builder, "  %%%s = alloca %s\n", out, f.g.llvmType(chType.Elem))
+			fmt.Fprintf(&f.builder, "  store %s %s, ptr %%%s\n", f.g.llvmType(chType.Elem), f.g.zeroValue(chType.Elem), out)
+			status := f.newTemp("chan.recv.status")
+			fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_chan_recv(ptr %s, ptr %%%s)\n", status, chArg.ref, out)
+			value := f.loadValue("%"+out, chType.Elem)
+			return exprValue{ref: f.emitClosedStatusResultWithValue(sig.Return, "%"+status, value.ref), typ: sig.Return}
+		case "chan_close":
+			fmt.Fprintf(&f.builder, "  call void @yar_chan_close(ptr %s)\n", args[0].ref)
+			return exprValue{typ: checker.TypeVoid}
+		default:
+			panic("unsupported builtin in spawn: " + sig.Name)
+		}
+	}
+	llvmArgs := make([]string, 0, len(args))
+	for i, arg := range args {
+		llvmArgs = append(llvmArgs, fmt.Sprintf("%s %s", f.g.llvmType(sig.Params[i]), arg.ref))
+	}
+	callType := f.g.llvmType(sig.Return)
+	if sig.Errorable {
+		callType = f.g.resultTypeName(sig.Return)
+	}
+	if sig.Return == checker.TypeVoid && !sig.Errorable {
+		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
+		return exprValue{typ: checker.TypeVoid}
+	}
+	if sig.Return == checker.TypeNoReturn {
+		fmt.Fprintf(&f.builder, "  call void %s(%s)\n", f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
+		f.builder.WriteString("  unreachable\n")
+		f.terminated = true
+		return exprValue{typ: checker.TypeNoReturn}
+	}
+	tmp := f.newTemp("task.call")
+	fmt.Fprintf(&f.builder, "  %%%s = call %s %s(%s)\n", tmp, callType, f.g.functionName(sig.FullName), strings.Join(llvmArgs, ", "))
+	return exprValue{ref: "%" + tmp, typ: sig.Return}
+}
+
 func (f *functionEmitter) genErrorToStr(arg exprValue) exprValue {
 	if len(f.g.info.OrderedErrors) == 0 {
 		return f.emitStringValue("error.unknown")
@@ -2659,9 +3026,20 @@ func (f *functionEmitter) emitAllocBytes(size string, zeroed bool) string {
 }
 
 func (f *functionEmitter) emitTypeSize(typ checker.Type) string {
+	if typ == checker.TypeVoid {
+		return "0"
+	}
 	sizePtr := f.newTemp("size.ptr")
 	size := f.newTemp("size")
 	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr null, i32 1\n", sizePtr, f.g.llvmType(typ))
+	fmt.Fprintf(&f.builder, "  %%%s = ptrtoint ptr %%%s to i64\n", size, sizePtr)
+	return "%" + size
+}
+
+func (f *functionEmitter) emitTypeSizeLiteral(typeLiteral string) string {
+	sizePtr := f.newTemp("size.ptr")
+	size := f.newTemp("size")
+	fmt.Fprintf(&f.builder, "  %%%s = getelementptr %s, ptr null, i32 1\n", sizePtr, typeLiteral)
 	fmt.Fprintf(&f.builder, "  %%%s = ptrtoint ptr %%%s to i64\n", size, sizePtr)
 	return "%" + size
 }
@@ -2697,6 +3075,40 @@ func (f *functionEmitter) emitHostStatusResult(fullName string, typ checker.Type
 
 	f.emitLabel(endLabel)
 	result := f.newTemp("host.result")
+	fmt.Fprintf(&f.builder, "  %%%s = phi %s [%s, %%%s], [%s, %%%s]\n", result, f.g.resultTypeName(typ), okResult, okLabel, errResult, errLabel)
+	return "%" + result
+}
+
+func (f *functionEmitter) emitClosedStatusResult(typ checker.Type, status string) string {
+	return f.emitClosedStatusResultWithValue(typ, status, "")
+}
+
+func (f *functionEmitter) emitClosedStatusResultWithValue(typ checker.Type, status, successValue string) string {
+	isOK := f.newTemp("chan.ok")
+	okLabel := f.newLabel("chan.ok")
+	errLabel := f.newLabel("chan.err")
+	endLabel := f.newLabel("chan.end")
+	fmt.Fprintf(&f.builder, "  %%%s = icmp eq i32 %s, 0\n", isOK, status)
+	fmt.Fprintf(&f.builder, "  br i1 %%%s, label %%%s, label %%%s\n", isOK, okLabel, errLabel)
+	f.terminated = true
+
+	f.emitLabel(okLabel)
+	var okResult string
+	if typ == checker.TypeVoid {
+		okResult = f.emitSuccessVoid()
+	} else {
+		okResult = f.emitSuccessResult(typ, successValue)
+	}
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(errLabel)
+	errResult := f.emitErrorCodeResult(typ, fmt.Sprintf("%d", f.mustErrorCode("Closed")))
+	fmt.Fprintf(&f.builder, "  br label %%%s\n", endLabel)
+	f.terminated = true
+
+	f.emitLabel(endLabel)
+	result := f.newTemp("chan.result")
 	fmt.Fprintf(&f.builder, "  %%%s = phi %s [%s, %%%s], [%s, %%%s]\n", result, f.g.resultTypeName(typ), okResult, okLabel, errResult, errLabel)
 	return "%" + result
 }
@@ -2826,6 +3238,12 @@ func (f *functionEmitter) emitEnumValue(enumType checker.Type, enumCase checker.
 }
 
 func (g *Generator) zeroValue(typ checker.Type) string {
+	if inner, ok := checker.ParseErrorableType(typ); ok {
+		if inner == checker.TypeVoid {
+			return "zeroinitializer"
+		}
+		return "zeroinitializer"
+	}
 	switch typ {
 	case checker.TypeBool, checker.TypeI32, checker.TypeI64, checker.TypeError:
 		return "0"
@@ -2850,6 +3268,9 @@ func (g *Generator) zeroValue(typ checker.Type) string {
 		if _, ok := checker.ParseMapType(typ); ok {
 			return "null"
 		}
+		if _, ok := checker.ParseChanType(typ); ok {
+			return "null"
+		}
 		if _, ok := g.info.Enums[string(typ)]; ok {
 			return "zeroinitializer"
 		}
@@ -2869,6 +3290,88 @@ func (g *Generator) queueFunctionLiteral(lit *ast.FunctionLiteralExpr) string {
 	g.literalNames[lit] = name
 	g.literalQueue = append(g.literalQueue, lit)
 	return name
+}
+
+func (g *Generator) queueTaskWrapper(spawn *ast.SpawnStmt, sig checker.Signature) string {
+	if name, ok := g.taskWrapperNames[spawn]; ok {
+		return name
+	}
+	name := fmt.Sprintf("task.wrapper.%d", g.nextTaskWrapperID)
+	g.nextTaskWrapperID++
+	g.taskWrapperNames[spawn] = name
+	g.taskWrappers = append(g.taskWrappers, g.emitTaskWrapper(name, sig))
+	return name
+}
+
+func (g *Generator) taskWrapperContextType(sig checker.Signature) string {
+	fields := make([]string, 0, len(sig.Params)+1)
+	if sig.ValueCall {
+		fields = append(fields, g.llvmType(checker.MakeFunctionType(sig.Params, sig.Return, sig.Errorable)))
+	}
+	if sig.Method {
+		fields = append(fields, g.llvmType(sig.Params[0]))
+		fields = append(fields, g.taskWrapperParamTypes(sig)[1:]...)
+	} else {
+		fields = append(fields, g.taskWrapperParamTypes(sig)...)
+	}
+	if len(fields) == 0 {
+		return "{ }"
+	}
+	return "{ " + strings.Join(fields, ", ") + " }"
+}
+
+func (g *Generator) taskWrapperParamTypes(sig checker.Signature) []string {
+	fields := make([]string, 0, len(sig.Params))
+	for _, param := range sig.Params {
+		fields = append(fields, g.llvmType(param))
+	}
+	return fields
+}
+
+func (g *Generator) emitTaskWrapper(name string, sig checker.Signature) string {
+	emitter := &functionEmitter{
+		g:      g,
+		name:   name,
+		sig:    sig,
+		scopes: []map[string]localSlot{{}},
+	}
+	ctxType := g.taskWrapperContextType(sig)
+	fmt.Fprintf(&emitter.builder, "define void %s(ptr %%ctx, ptr %%result) {\n", g.functionName(name))
+	emitter.builder.WriteString("entry:\n")
+	emitter.currentLabel = "entry"
+
+	fieldIndex := 0
+	var callee exprValue
+	if sig.ValueCall {
+		ptr := emitter.newTemp("task.ctx.field")
+		load := emitter.newTemp("task.callee")
+		fmt.Fprintf(&emitter.builder, "  %%%s = getelementptr inbounds %s, ptr %%ctx, i32 0, i32 %d\n", ptr, ctxType, fieldIndex)
+		fnType := checker.MakeFunctionType(sig.Params, sig.Return, sig.Errorable)
+		fmt.Fprintf(&emitter.builder, "  %%%s = load %s, ptr %%%s\n", load, g.llvmType(fnType), ptr)
+		callee = exprValue{ref: "%" + load, typ: fnType}
+		fieldIndex++
+	}
+
+	args := make([]exprValue, 0, len(sig.Params))
+	for _, param := range sig.Params {
+		ptr := emitter.newTemp("task.ctx.field")
+		load := emitter.newTemp("task.arg")
+		fmt.Fprintf(&emitter.builder, "  %%%s = getelementptr inbounds %s, ptr %%ctx, i32 0, i32 %d\n", ptr, ctxType, fieldIndex)
+		fmt.Fprintf(&emitter.builder, "  %%%s = load %s, ptr %%%s\n", load, g.llvmType(param), ptr)
+		args = append(args, exprValue{ref: "%" + load, typ: param})
+		fieldIndex++
+	}
+
+	value := emitter.emitSpawnPreparedCall(sig, callee, args)
+	switch {
+	case sig.Errorable:
+		fmt.Fprintf(&emitter.builder, "  store %s %s, ptr %%result\n", g.resultTypeName(sig.Return), value.ref)
+	case sig.Return != checker.TypeVoid:
+		fmt.Fprintf(&emitter.builder, "  store %s %s, ptr %%result\n", g.llvmType(sig.Return), value.ref)
+	}
+	emitter.builder.WriteString("  ret void\n")
+	emitter.builder.WriteString("}\n")
+	return emitter.builder.String()
 }
 
 func (g *Generator) closureEnvTypeLiteral(captures []checker.CaptureInfo) string {

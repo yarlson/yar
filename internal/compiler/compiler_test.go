@@ -592,6 +592,54 @@ func TestBuildAndRunInterfaceProgram(t *testing.T) {
 	}
 }
 
+func TestBuildAndRunConcurrencyTaskgroupProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "concurrency_basic", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "4\n9\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestBuildAndRunConcurrencyChannelProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "concurrency_channels", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "13\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestBuildAndRunConcurrencyErrorableProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "concurrency_errors", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "1\nerror.Zero\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestBuildAndRunConcurrencyHostFSProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "concurrency_fs", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "hello\nhello\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestGarbageCollectionFixtureProgram(t *testing.T) {
 	t.Parallel()
 

@@ -70,13 +70,15 @@ Implemented types:
 - fixed-size array types such as `[4]i32` and `[3]User`
 - slice types such as `[]i32` and `[]User`
 - map types such as `map[str]i32` and `map[i32]bool`
+- channel types such as `chan[i32]`
 - function types such as `fn(i32) i32` and `fn(str) !i32`
 
 ### Error-Related Types
 
-- `!T` means a function returns either a success value of type `T` or an error.
+- `!T` means either a success value of type `T` or an error.
 - `!void` is valid and represents an operation that either succeeds or returns an error.
 - Plain `error` is also a valid type for non-`main` functions, parameters, locals, and fields.
+- The compiler also produces first-class `!T` values for taskgroup results such as `taskgroup []!i32 { ... }`.
 
 Current restrictions:
 
@@ -88,8 +90,11 @@ Current restrictions:
 - struct fields cannot use `noreturn`
 - array elements cannot use `void`
 - array elements cannot use `noreturn`
-- slice elements cannot use `void`
 - slice elements cannot use `noreturn`
+- `[]void` is valid and is primarily used as a taskgroup result type
+- channel elements cannot use `void`
+- channel elements cannot use `noreturn`
+- channel elements cannot use another `chan[U]`
 - enum payload fields cannot use `void`
 - enum payload fields cannot use `noreturn`
 - pointer targets cannot use `void`
@@ -524,6 +529,7 @@ Implemented statements:
 - `break`
 - `continue`
 - `return`
+- `spawn call(...)` inside a taskgroup body
 - expression statements
 
 ## Expressions
@@ -541,6 +547,7 @@ Implemented expressions:
 - array literals
 - slice literals
 - function calls
+- `taskgroup []R { ... }`
 - parenthesized expressions
 - field access
 - indexing
@@ -554,6 +561,67 @@ Implemented expressions:
 - binary comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 - postfix error propagation: `expr?`
 - local error handling: `expr or |err| { ... }`
+
+## Concurrency
+
+Structured concurrency is available through taskgroups and bounded channels.
+
+### Taskgroups
+
+`taskgroup []R { ... }` is an expression that spawns concurrent calls and
+returns a result slice in spawn order.
+
+```yar
+fn square(v i32) i32 {
+    return v * v
+}
+
+fn main() i32 {
+    values := taskgroup []i32 {
+        spawn square(2)
+        spawn square(3)
+    }
+    print(to_str(values[0]) + "\n")
+    print(to_str(values[1]) + "\n")
+    return 0
+}
+```
+
+Taskgroup rules:
+
+- the annotation must be a slice type
+- each `spawn` target must be a call expression
+- the spawned call must return the taskgroup element type exactly
+- `spawn` is only valid inside the taskgroup body
+- `spawn` is rejected inside a function literal nested under that taskgroup body
+- `return` is not currently allowed inside a taskgroup body
+- `break` and `continue` may not exit through an enclosing loop outside the taskgroup body
+- tasks start when `spawn` executes, but the taskgroup expression waits for all tasks before yielding its result
+- `taskgroup []void` is valid for side-effecting tasks
+- `taskgroup []!T` is valid and yields first-class errorable values
+
+### Channels
+
+`chan[T]` is a builtin bounded FIFO channel type.
+
+```yar
+jobs := chan_new[i32](4)
+results := chan_new[i32](4)
+```
+
+Channel builtins:
+
+- `chan_new[T](capacity i32) chan[T]`
+- `chan_send(ch chan[T], value T) !void`
+- `chan_recv(ch chan[T]) !T`
+- `chan_close(ch chan[T]) void`
+
+Channel rules:
+
+- channel element types may not be `void`, `noreturn`, or another channel type
+- channels support `==` and `!=` identity comparison
+- `chan_send` and `chan_recv` use `error.Closed` for closed-channel failures
+- the current implementation supports concurrency on POSIX targets; Windows reports a runtime failure if these operations are used
 
 ### Integer Literals
 
@@ -698,7 +766,7 @@ Additional rule for value-producing `!T`:
 
 ## Raw Errorable Values
 
-Raw errorable expressions cannot be used directly in:
+Raw errorable call expressions cannot be used directly in:
 
 - `:=` declarations
 - `var` initializers
@@ -717,6 +785,9 @@ They must be handled immediately with one of:
 - direct `return`
 - `?`
 - `or |err| { ... }`
+
+First-class `!T` values produced by the language, such as `taskgroup []!T`
+elements after indexing, may be handled later with `?` or `or |err| { ... }`.
 
 ## Return Rules
 
@@ -740,6 +811,10 @@ Builtins are fixed by the compiler:
 - `sb_new() i64` — create a new string builder (returns opaque handle)
 - `sb_write(i64, str) void` — append a string to the builder
 - `sb_string(i64) str` — extract the built string and reset the builder
+- `chan_new[T](i32) chan[T]` — create a bounded channel
+- `chan_send(chan[T], T) !void` — send one value
+- `chan_recv(chan[T]) !T` — receive one value
+- `chan_close(chan[T]) void` — close a channel
 
 They are not user-overridable.
 

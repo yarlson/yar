@@ -38,6 +38,9 @@ compilation results instead of as a hard process error.
 errorable function — A function declared with `!` before its return type, such
 as `!i32` or `!void`.
 
+errorable value type — A first-class `!T` value shape, currently produced by
+language constructs such as `taskgroup []!T` results.
+
 error value — A value of builtin type `error`, typically introduced by
 returning `error.Name` or by the binder in an `or |err| { ... }` handler.
 
@@ -80,6 +83,16 @@ stdlib packages and rejected in user code by the package lowerer.
 
 slice — A runtime-managed dynamic sequence type `[]T` backed by a pointer,
 length, and capacity descriptor.
+
+taskgroup — A structured-concurrency expression `taskgroup []R { ... }` that
+spawns calls, waits for them to finish, and yields a result slice in spawn
+order.
+
+spawn — A statement inside a taskgroup body that starts one concurrent call
+whose return shape must match the taskgroup element type.
+
+channel — A bounded builtin `chan[T]` value used for FIFO communication
+between tasks.
 
 map — A runtime-managed hash table type `map[K]V` with key types restricted to
 `bool`, `i32`, `i64`, and `str`.

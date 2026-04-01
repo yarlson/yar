@@ -66,11 +66,14 @@ const (
 	Return
 	Match
 	Case
+	Taskgroup
+	Spawn
 	True
 	False
 	Nil
 	Error
 	Map
+	Chan
 )
 
 func (k Kind) String() string {
@@ -191,6 +194,10 @@ func (k Kind) String() string {
 		return "match"
 	case Case:
 		return "case"
+	case Taskgroup:
+		return "taskgroup"
+	case Spawn:
+		return "spawn"
 	case True:
 		return "true"
 	case False:
@@ -201,6 +208,8 @@ func (k Kind) String() string {
 		return "error"
 	case Map:
 		return "map"
+	case Chan:
+		return "chan"
 	default:
 		return fmt.Sprintf("token(%d)", k)
 	}

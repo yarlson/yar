@@ -57,8 +57,9 @@ fn main() i32 {
 | `[N]T` | `[3]i32{1, 2, 3}` |
 | `[]T` | `[]i32{1, 2}` |
 | `map[K]V` | `map[str]i32{"a": 1}` |
+| `chan[T]` | `chan[i32]` |
 | `fn(T) R` | `fn(i32) i32` |
-| `!T` | errorable return |
+| `!T` | errorable value / return |
 | struct | `struct S { field T }` |
 | enum | `enum E { A, B { val i32 } }` |
 | interface | `interface I { method() T }` |
@@ -302,6 +303,19 @@ for i := 0; i < 10; i += 1 {
 
 No `while`, no range-based for, no `for..in`.
 
+Concurrency adds:
+
+```yar
+results := taskgroup []i32 {
+    spawn square(2)
+    spawn square(3)
+}
+```
+
+- `taskgroup []R { ... }` is an expression returning `[]R`
+- `spawn call(...)` is valid only inside a taskgroup body
+- `taskgroup []void` and `taskgroup []!T` are valid
+
 ## Operators
 
 Arithmetic: `+`, `-`, `*`, `/`, `%`
@@ -354,7 +368,8 @@ fn handle() !i32 {
 - `or |err| { ... }` handles error locally; block must terminate control flow when used in value position
 - `error.Name` creates named error values
 - `error` is a valid type for variables, parameters, fields
-- Raw errorable values cannot be used directly in expressions; must use `?`, `or`, or `return`
+- Raw errorable call expressions cannot be used directly in expressions; must use `?`, `or`, or `return`
+- First-class `!T` values produced by the language, such as taskgroup result elements, may later be handled with `?` or `or`
 
 `!void` functions use bare `return` for success:
 
@@ -379,7 +394,33 @@ to_str(i32|i64|bool|str|error) str  // convert to string
 sb_new() i64                         // create string builder (opaque handle)
 sb_write(i64, str) void              // append string to builder
 sb_string(i64) str                   // extract built string, reset builder
+chan_new[T](i32) chan[T]             // create bounded channel
+chan_send(chan[T], T) !void          // send one value
+chan_recv(chan[T]) !T                // receive one value
+chan_close(chan[T]) void             // close a channel
 ```
+
+## Concurrency
+
+```yar
+jobs := chan_new[i32](4)
+results := chan_new[i32](4)
+
+taskgroup []void {
+    spawn producer(jobs)
+    spawn worker(jobs, results)
+}
+```
+
+- `spawn` requires a call expression
+- spawned call return type must match the taskgroup element type exactly
+- `spawn` is rejected inside a function literal nested under the same taskgroup
+- `return` is rejected inside a taskgroup body
+- `break` / `continue` cannot jump out through an enclosing loop outside the taskgroup
+- channels are bounded FIFO values
+- `chan_send` / `chan_recv` report `error.Closed` on closed-channel failure
+- channels support `==` and `!=` identity comparison
+- current implementation uses POSIX threads; Windows concurrency calls fail at runtime
 
 ## Standard Library
 
@@ -718,5 +759,5 @@ Cache: `~/.cache/yar/deps/` (override with `YAR_CACHE`).
 - No import aliases
 - No `while` or range-for
 - Methods are not first-class values
-- Errorable values must be handled immediately (`?`, `or`, or `return`)
-- `void`/`noreturn` cannot be used in parameters, fields, or array/slice elements
+- Raw errorable call expressions must be handled immediately (`?`, `or`, or `return`)
+- `void`/`noreturn` cannot be used in parameters, fields, array elements, or channel elements; `[]void` is used for taskgroup results

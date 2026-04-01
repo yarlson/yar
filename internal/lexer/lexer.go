@@ -395,6 +395,10 @@ func lookupKeyword(text string) token.Kind {
 		return token.Match
 	case "case":
 		return token.Case
+	case "taskgroup":
+		return token.Taskgroup
+	case "spawn":
+		return token.Spawn
 	case "true":
 		return token.True
 	case "false":
@@ -405,6 +409,8 @@ func lookupKeyword(text string) token.Kind {
 		return token.Error
 	case "map":
 		return token.Map
+	case "chan":
+		return token.Chan
 	default:
 		return token.Ident
 	}

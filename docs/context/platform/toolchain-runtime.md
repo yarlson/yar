@@ -28,6 +28,8 @@
   requested platform, including the appropriate sysroot and system libraries.
 - `yar run` rejects cross-compilation targets since the built binary cannot
   execute on the host.
+- Non-Windows builds that use the runtime concurrency helpers also link with
+  `-pthread`.
 
 ## Embedded Runtime
 
@@ -38,6 +40,9 @@
 - The runtime uses `#ifdef _WIN32` conditionals to support both POSIX and
   Windows platforms from a single source file. `clang` defines `_WIN32`
   automatically when targeting a Windows triple.
+- Concurrency support is currently implemented only on POSIX targets. Windows
+  builds compile, but the concurrency runtime entry points fail with an
+  explicit runtime error when called.
 
 ## Runtime Surface
 
@@ -72,6 +77,26 @@
 - `YAR_GC_HEAP_TARGET_BYTES` optionally overrides the initial managed-heap
   target used to decide when automatic collection should run; this is mainly a
   runtime/testing knob, not a language feature.
+- Heap metadata is guarded by a mutex when taskgroup worker threads are active.
+  The current collector suppresses collection while concurrent tasks are
+  running and resumes normal collection after they join.
+
+### Concurrency Runtime
+
+- `yar_taskgroup_new(int32_t elem_size)` allocates a taskgroup handle.
+- `yar_taskgroup_spawn(void *group, void *entry, void *ctx)` records one task
+  and starts it on a native POSIX thread immediately.
+- `yar_taskgroup_wait(void *group)` joins all started tasks and returns a
+  runtime-managed result slice whose element order matches spawn order.
+- `yar_chan_new(int32_t elem_size, int32_t capacity)` allocates a bounded FIFO
+  channel.
+- `yar_chan_send(void *handle, const void *value_ptr)` blocks while the channel
+  buffer is full and returns a non-zero status when the channel is closed.
+- `yar_chan_recv(void *handle, void *out_ptr)` blocks while the channel is
+  empty and open, and returns a non-zero status when the channel is closed and
+  drained.
+- `yar_chan_close(void *handle)` closes the channel and wakes blocked senders
+  and receivers.
 
 ### Slice Runtime
 

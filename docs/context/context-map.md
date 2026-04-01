@@ -13,6 +13,8 @@
 
 - [domains/compiler-pipeline.md](domains/compiler-pipeline.md) — Internal stage
   boundaries, package loading, lowering, and code-generation responsibilities.
+- [domains/concurrency.md](domains/concurrency.md) — Taskgroup semantics,
+  channel operations, runtime behavior, and current platform limits.
 - [domains/language-slice.md](domains/language-slice.md) — Supported
   source-level constructs, types, and semantic limits.
 - [domains/error-model.md](domains/error-model.md) — Error values, propagation

@@ -825,7 +825,7 @@ func canonicalDeclName(pkg *ast.Package, name string) string {
 
 func (l *packageLowerer) rewriteTypeRef(pkg *ast.Package, ref ast.TypeRef, typeParams map[string]struct{}) ast.TypeRef {
 	switch ref.Kind {
-	case ast.PointerTypeRef, ast.ArrayTypeRef, ast.SliceTypeRef:
+	case ast.ErrorableTypeRef, ast.PointerTypeRef, ast.ArrayTypeRef, ast.SliceTypeRef, ast.ChanTypeRef:
 		out := ref
 		if ref.Elem != nil {
 			elem := l.rewriteTypeRef(pkg, *ref.Elem, typeParams)
@@ -976,6 +976,8 @@ func (l *packageLowerer) rewriteStatement(pkg *ast.Package, stmt ast.Statement, 
 		return &ast.ContinueStmt{ContinuePos: s.ContinuePos}
 	case *ast.ReturnStmt:
 		return &ast.ReturnStmt{ReturnPos: s.ReturnPos, Value: l.rewriteExpr(pkg, s.Value, typeParams)}
+	case *ast.SpawnStmt:
+		return &ast.SpawnStmt{SpawnPos: s.SpawnPos, Call: l.rewriteExpr(pkg, s.Call, typeParams)}
 	case *ast.ExprStmt:
 		return &ast.ExprStmt{Expr: l.rewriteExpr(pkg, s.Expr, typeParams)}
 	default:
@@ -1018,6 +1020,12 @@ func (l *packageLowerer) rewriteExpr(pkg *ast.Package, expr ast.Expression, type
 			Params:       params,
 			Return:       l.rewriteTypeRef(pkg, e.Return, typeParams),
 			ReturnIsBang: e.ReturnIsBang,
+			Body:         l.rewriteBlock(pkg, e.Body, typeParams),
+		}
+	case *ast.TaskgroupExpr:
+		return &ast.TaskgroupExpr{
+			TaskgroupPos: e.TaskgroupPos,
+			ResultType:   l.rewriteTypeRef(pkg, e.ResultType, typeParams),
 			Body:         l.rewriteBlock(pkg, e.Body, typeParams),
 		}
 	case *ast.TypeApplicationExpr:

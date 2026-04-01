@@ -14,6 +14,7 @@
 #else
 #  include <dirent.h>
 #  include <fcntl.h>
+#  include <pthread.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
@@ -83,11 +84,44 @@ static size_t yar_gc_heap_target = 1024 * 1024;
 static int yar_gc_configured = 0;
 static int yar_gc_collecting = 0;
 static void *yar_gc_stack_top = NULL;
+#ifndef _WIN32
+static pthread_mutex_t yar_gc_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t yar_task_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int yar_runtime_active_tasks = 0;
+#endif
 
 static void yar_gc_mark_range(const void *start, const void *end);
 static void yar_gc_mark_pointer(const void *candidate);
 static void yar_gc_mark_block(yar_gc_block *block);
 static void yar_gc_grow_target(size_t min_live_bytes);
+
+#ifndef _WIN32
+static void yar_runtime_task_started(void) {
+    pthread_mutex_lock(&yar_task_mutex);
+    yar_runtime_active_tasks++;
+    pthread_mutex_unlock(&yar_task_mutex);
+}
+
+static void yar_runtime_task_finished(void) {
+    pthread_mutex_lock(&yar_task_mutex);
+    if (yar_runtime_active_tasks > 0) {
+        yar_runtime_active_tasks--;
+    }
+    pthread_mutex_unlock(&yar_task_mutex);
+}
+
+static int yar_runtime_tasks_active(void) {
+    int active;
+    pthread_mutex_lock(&yar_task_mutex);
+    active = yar_runtime_active_tasks;
+    pthread_mutex_unlock(&yar_task_mutex);
+    return active;
+}
+#else
+static void yar_runtime_task_started(void) {}
+static void yar_runtime_task_finished(void) {}
+static int yar_runtime_tasks_active(void) { return 0; }
+#endif
 
 static void yar_gc_configure(void) {
     const char *value;
@@ -139,7 +173,15 @@ static yar_gc_block *yar_gc_find_block(const void *candidate) {
 }
 
 static int yar_gc_owns_pointer(const void *candidate) {
-    return yar_gc_find_block(candidate) != NULL;
+    int owned;
+#ifndef _WIN32
+    pthread_mutex_lock(&yar_gc_mutex);
+#endif
+    owned = yar_gc_find_block(candidate) != NULL;
+#ifndef _WIN32
+    pthread_mutex_unlock(&yar_gc_mutex);
+#endif
+    return owned;
 }
 
 static void yar_gc_mark_block(yar_gc_block *block) {
@@ -257,6 +299,12 @@ static void yar_gc_maybe_collect(size_t incoming_size) {
     if (yar_gc_stack_top == NULL) {
         yar_gc_stack_top = (void *)&stack_marker;
     }
+    if (yar_runtime_tasks_active() > 0) {
+        if (required > yar_gc_heap_target) {
+            yar_gc_grow_target(required);
+        }
+        return;
+    }
     if (required <= yar_gc_heap_target || yar_gc_collecting) {
         return;
     }
@@ -280,6 +328,9 @@ static void *yar_gc_alloc_bytes(size_t size, int zeroed) {
         size = 1;
     }
 
+#ifndef _WIN32
+    pthread_mutex_lock(&yar_gc_mutex);
+#endif
     yar_gc_maybe_collect(size);
 
     total_size = sizeof(yar_gc_block) + size;
@@ -301,6 +352,9 @@ static void *yar_gc_alloc_bytes(size_t size, int zeroed) {
     if (zeroed) {
         memset(yar_gc_data(block), 0, size);
     }
+#ifndef _WIN32
+    pthread_mutex_unlock(&yar_gc_mutex);
+#endif
     return yar_gc_data(block);
 }
 
@@ -325,6 +379,264 @@ void *yar_alloc(long long size) {
     }
     return yar_gc_alloc_bytes((size_t)size, 0);
 }
+
+/* --- taskgroup and channel runtime --- */
+
+#ifdef _WIN32
+
+void *yar_taskgroup_new(int32_t elem_size) {
+    (void)elem_size;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+    return NULL;
+}
+
+void yar_taskgroup_spawn(void *group_ptr, void *entry_ptr, void *ctx) {
+    (void)group_ptr;
+    (void)entry_ptr;
+    (void)ctx;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+}
+
+yar_slice yar_taskgroup_wait(void *group_ptr) {
+    (void)group_ptr;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+    return yar_empty_slice();
+}
+
+void *yar_chan_new(int32_t elem_size, int32_t capacity) {
+    (void)elem_size;
+    (void)capacity;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+    return NULL;
+}
+
+int32_t yar_chan_send(void *handle, const void *value_ptr) {
+    (void)handle;
+    (void)value_ptr;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+    return 1;
+}
+
+int32_t yar_chan_recv(void *handle, void *out_ptr) {
+    (void)handle;
+    (void)out_ptr;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+    return 1;
+}
+
+void yar_chan_close(void *handle) {
+    (void)handle;
+    static const char message[] = "runtime failure: concurrency is not supported on windows yet\n";
+    yar_runtime_fail(message, sizeof(message) - 1);
+}
+
+#else
+
+typedef void (*yar_task_entry)(void *ctx, void *result_out);
+
+typedef struct {
+    yar_task_entry entry;
+    void *ctx;
+    void *result;
+} yar_task_record;
+
+typedef struct {
+    int32_t elem_size;
+    int32_t count;
+    int32_t cap;
+    pthread_t *threads;
+    yar_task_record *records;
+} yar_taskgroup;
+
+static void *yar_taskgroup_thread_main(void *arg) {
+    yar_task_record *record = (yar_task_record *)arg;
+    record->entry(record->ctx, record->result);
+    yar_runtime_task_finished();
+    return NULL;
+}
+
+static void yar_taskgroup_grow(yar_taskgroup *group) {
+    int32_t new_cap = group->cap == 0 ? 4 : group->cap * 2;
+    pthread_t *new_threads = (pthread_t *)realloc(group->threads, (size_t)new_cap * sizeof(pthread_t));
+    yar_task_record *new_records = (yar_task_record *)realloc(group->records, (size_t)new_cap * sizeof(yar_task_record));
+    if (new_threads == NULL || new_records == NULL) {
+        free(new_threads);
+        free(new_records);
+        yar_trap_oom();
+    }
+    group->threads = new_threads;
+    group->records = new_records;
+    group->cap = new_cap;
+}
+
+void *yar_taskgroup_new(int32_t elem_size) {
+    yar_taskgroup *group = (yar_taskgroup *)calloc(1, sizeof(yar_taskgroup));
+    if (group == NULL) {
+        yar_trap_oom();
+    }
+    if (elem_size < 0) {
+        static const char message[] = "runtime failure: invalid taskgroup element size\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    group->elem_size = elem_size;
+    return group;
+}
+
+void yar_taskgroup_spawn(void *group_ptr, void *entry_ptr, void *ctx) {
+    yar_taskgroup *group = (yar_taskgroup *)group_ptr;
+    yar_task_record *record;
+    if (group == NULL || entry_ptr == NULL) {
+        static const char message[] = "runtime failure: invalid taskgroup spawn\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    if (group->count == group->cap) {
+        yar_taskgroup_grow(group);
+    }
+    record = &group->records[group->count];
+    record->entry = (yar_task_entry)entry_ptr;
+    record->ctx = ctx;
+    record->result = NULL;
+    if (group->elem_size > 0) {
+        record->result = calloc(1, (size_t)group->elem_size);
+        if (record->result == NULL) {
+            yar_trap_oom();
+        }
+    }
+    yar_runtime_task_started();
+    if (pthread_create(&group->threads[group->count], NULL, yar_taskgroup_thread_main, record) != 0) {
+        yar_runtime_task_finished();
+        static const char message[] = "runtime failure: pthread_create failed\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    group->count++;
+}
+
+yar_slice yar_taskgroup_wait(void *group_ptr) {
+    yar_taskgroup *group = (yar_taskgroup *)group_ptr;
+    yar_slice out = yar_empty_slice();
+    int32_t i;
+    if (group == NULL) {
+        return out;
+    }
+    for (i = 0; i < group->count; i++) {
+        (void)pthread_join(group->threads[i], NULL);
+    }
+    out.len = group->count;
+    out.cap = group->count;
+    if (group->elem_size > 0 && group->count > 0) {
+        size_t total_size = (size_t)group->elem_size * (size_t)group->count;
+        char *buffer = (char *)yar_alloc_zeroed((long long)total_size);
+        out.ptr = buffer;
+        for (i = 0; i < group->count; i++) {
+            memcpy(buffer + (size_t)i * (size_t)group->elem_size, group->records[i].result, (size_t)group->elem_size);
+            free(group->records[i].result);
+        }
+    }
+    free(group->threads);
+    free(group->records);
+    free(group);
+    return out;
+}
+
+typedef struct {
+    int32_t elem_size;
+    int32_t capacity;
+    int32_t count;
+    int32_t head;
+    int32_t tail;
+    int32_t closed;
+    unsigned char *buffer;
+    pthread_mutex_t mu;
+    pthread_cond_t can_send;
+    pthread_cond_t can_recv;
+} yar_chan;
+
+void *yar_chan_new(int32_t elem_size, int32_t capacity) {
+    yar_chan *ch;
+    if (elem_size < 0 || capacity <= 0) {
+        static const char message[] = "runtime failure: invalid channel capacity\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    ch = (yar_chan *)yar_alloc_zeroed((long long)sizeof(yar_chan));
+    ch->elem_size = elem_size;
+    ch->capacity = capacity;
+    if (elem_size > 0) {
+        ch->buffer = (unsigned char *)yar_alloc_zeroed((long long)((size_t)elem_size * (size_t)capacity));
+    }
+    if (pthread_mutex_init(&ch->mu, NULL) != 0 ||
+        pthread_cond_init(&ch->can_send, NULL) != 0 ||
+        pthread_cond_init(&ch->can_recv, NULL) != 0) {
+        static const char message[] = "runtime failure: channel initialization failed\n";
+        yar_runtime_fail(message, sizeof(message) - 1);
+    }
+    return ch;
+}
+
+int32_t yar_chan_send(void *handle, const void *value_ptr) {
+    yar_chan *ch = (yar_chan *)handle;
+    if (ch == NULL) {
+        return 1;
+    }
+    pthread_mutex_lock(&ch->mu);
+    while (!ch->closed && ch->count == ch->capacity) {
+        pthread_cond_wait(&ch->can_send, &ch->mu);
+    }
+    if (ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        return 1;
+    }
+    if (ch->elem_size > 0) {
+        memcpy(ch->buffer + ((size_t)ch->tail * (size_t)ch->elem_size), value_ptr, (size_t)ch->elem_size);
+    }
+    ch->tail = (ch->tail + 1) % ch->capacity;
+    ch->count++;
+    pthread_cond_signal(&ch->can_recv);
+    pthread_mutex_unlock(&ch->mu);
+    return 0;
+}
+
+int32_t yar_chan_recv(void *handle, void *out_ptr) {
+    yar_chan *ch = (yar_chan *)handle;
+    if (ch == NULL) {
+        return 1;
+    }
+    pthread_mutex_lock(&ch->mu);
+    while (ch->count == 0 && !ch->closed) {
+        pthread_cond_wait(&ch->can_recv, &ch->mu);
+    }
+    if (ch->count == 0 && ch->closed) {
+        pthread_mutex_unlock(&ch->mu);
+        return 1;
+    }
+    if (ch->elem_size > 0) {
+        memcpy(out_ptr, ch->buffer + ((size_t)ch->head * (size_t)ch->elem_size), (size_t)ch->elem_size);
+    }
+    ch->head = (ch->head + 1) % ch->capacity;
+    ch->count--;
+    pthread_cond_signal(&ch->can_send);
+    pthread_mutex_unlock(&ch->mu);
+    return 0;
+}
+
+void yar_chan_close(void *handle) {
+    yar_chan *ch = (yar_chan *)handle;
+    if (ch == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&ch->mu);
+    ch->closed = 1;
+    pthread_cond_broadcast(&ch->can_send);
+    pthread_cond_broadcast(&ch->can_recv);
+    pthread_mutex_unlock(&ch->mu);
+}
+
+#endif
 
 static int32_t yar_host_argc = 0;
 static char **yar_host_argv = NULL;

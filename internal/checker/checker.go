@@ -167,17 +167,23 @@ type Checker struct {
 }
 
 type functionContext struct {
-	signature Signature
-	parent    *functionContext
-	literal   *ast.FunctionLiteralExpr
-	scopes    []map[string]localBinding
-	loopDepth int
+	signature  Signature
+	parent     *functionContext
+	literal    *ast.FunctionLiteralExpr
+	scopes     []map[string]localBinding
+	loopDepth  int
+	taskgroups []taskgroupContext
 }
 
 type localBinding struct {
 	typ   Type
 	owner *functionContext
 	node  ast.Node
+}
+
+type taskgroupContext struct {
+	result    Type
+	loopDepth int
 }
 
 type coercedIntegers struct {
@@ -204,6 +210,10 @@ type MapType struct {
 	Value Type
 }
 
+type ChanType struct {
+	Elem Type
+}
+
 type FunctionType struct {
 	Params    []Type
 	Return    Type
@@ -222,8 +232,16 @@ func MakePointerType(elem Type) Type {
 	return Type("*" + string(elem))
 }
 
+func MakeErrorableType(elem Type) Type {
+	return Type("!" + string(elem))
+}
+
 func MakeMapType(key, value Type) Type {
 	return Type("map[" + string(key) + "]" + string(value))
+}
+
+func MakeChanType(elem Type) Type {
+	return Type("chan[" + string(elem) + "]")
 }
 
 func MakeFunctionType(params []Type, ret Type, errorable bool) Type {
@@ -237,6 +255,18 @@ func MakeFunctionType(params []Type, ret Type, errorable bool) Type {
 	}
 	text += string(ret)
 	return Type(text)
+}
+
+func ParseErrorableType(typ Type) (Type, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "!") {
+		return TypeInvalid, false
+	}
+	elem := Type(text[1:])
+	if elem == TypeInvalid {
+		return TypeInvalid, false
+	}
+	return elem, true
 }
 
 func ParseMapType(typ Type) (MapType, bool) {
@@ -262,6 +292,30 @@ func ParseMapType(typ Type) (MapType, bool) {
 		}
 	}
 	return MapType{}, false
+}
+
+func ParseChanType(typ Type) (ChanType, bool) {
+	text := string(typ)
+	if !strings.HasPrefix(text, "chan[") || !strings.HasSuffix(text, "]") {
+		return ChanType{}, false
+	}
+	depth := 0
+	for i := 4; i < len(text); i++ {
+		switch text[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 && i == len(text)-1 {
+				elem := Type(text[5:i])
+				if elem == TypeInvalid {
+					return ChanType{}, false
+				}
+				return ChanType{Elem: elem}, true
+			}
+		}
+	}
+	return ChanType{}, false
 }
 
 func ParseArrayType(typ Type) (ArrayType, bool) {
@@ -408,7 +462,7 @@ func methodReceiverBaseType(typ Type) (Type, bool) {
 func IsBuiltinFunction(name string) bool {
 	switch name {
 	case "print", "panic", "len", "append", "has", "delete", "keys", "chr", "i32_to_i64", "i64_to_i32", "to_str",
-		"sb_new", "sb_write", "sb_string":
+		"sb_new", "sb_write", "sb_string", "chan_new", "chan_send", "chan_recv", "chan_close":
 		return true
 	default:
 		return false
@@ -543,6 +597,36 @@ func Check(program *ast.Program) (Info, []diag.Diagnostic) {
 				FullName: "sb_string",
 				Params:   []Type{TypeI64},
 				Return:   TypeStr,
+				Builtin:  true,
+			},
+			"chan_new": {
+				Name:     "chan_new",
+				FullName: "chan_new",
+				Params:   []Type{TypeI32},
+				Return:   TypeInvalid,
+				Builtin:  true,
+			},
+			"chan_send": {
+				Name:      "chan_send",
+				FullName:  "chan_send",
+				Params:    []Type{TypeInvalid, TypeInvalid},
+				Return:    TypeVoid,
+				Errorable: true,
+				Builtin:   true,
+			},
+			"chan_recv": {
+				Name:      "chan_recv",
+				FullName:  "chan_recv",
+				Params:    []Type{TypeInvalid},
+				Return:    TypeInvalid,
+				Errorable: true,
+				Builtin:   true,
+			},
+			"chan_close": {
+				Name:     "chan_close",
+				FullName: "chan_close",
+				Params:   []Type{TypeInvalid},
+				Return:   TypeVoid,
 				Builtin:  true,
 			},
 		},
@@ -870,10 +954,16 @@ func (c *Checker) checkTypeCycles() {
 }
 
 func (c *Checker) typeDependencies(typ Type) []string {
+	if errType, ok := ParseErrorableType(typ); ok {
+		return c.typeDependencies(errType)
+	}
 	if array, ok := ParseArrayType(typ); ok {
 		return c.typeDependencies(array.Elem)
 	}
 	if _, ok := ParseSliceType(typ); ok {
+		return nil
+	}
+	if _, ok := ParseChanType(typ); ok {
 		return nil
 	}
 	if _, ok := ParsePointerType(typ); ok {
@@ -1047,13 +1137,25 @@ func (c *Checker) checkStatement(stmt ast.Statement) {
 	case *ast.BreakStmt:
 		if c.current.loopDepth == 0 {
 			c.diag.Add(s.BreakPos, "break can only be used inside a loop")
+		} else if len(c.current.taskgroups) > 0 {
+			group := c.current.taskgroups[len(c.current.taskgroups)-1]
+			if c.current.loopDepth == group.loopDepth {
+				c.diag.Add(s.BreakPos, "break cannot exit a taskgroup body")
+			}
 		}
 	case *ast.ContinueStmt:
 		if c.current.loopDepth == 0 {
 			c.diag.Add(s.ContinuePos, "continue can only be used inside a loop")
+		} else if len(c.current.taskgroups) > 0 {
+			group := c.current.taskgroups[len(c.current.taskgroups)-1]
+			if c.current.loopDepth == group.loopDepth {
+				c.diag.Add(s.ContinuePos, "continue cannot exit a taskgroup body")
+			}
 		}
 	case *ast.ReturnStmt:
 		c.checkReturn(s)
+	case *ast.SpawnStmt:
+		c.checkSpawnStatement(s)
 	case *ast.ExprStmt:
 		exprType := c.checkExpression(s.Expr)
 		if exprType.Errorable {
@@ -1207,6 +1309,9 @@ func (c *Checker) checkAssignmentTarget(target ast.Expression) Type {
 }
 
 func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
+	if len(c.current.taskgroups) > 0 {
+		c.diag.Add(stmt.ReturnPos, "return is not allowed inside a taskgroup body")
+	}
 	sig := c.current.signature
 	if sig.Return == TypeNoReturn {
 		c.diag.Add(stmt.ReturnPos, "noreturn functions cannot return")
@@ -1249,6 +1354,58 @@ func (c *Checker) checkReturn(stmt *ast.ReturnStmt) {
 	if value.Base != sig.Return {
 		c.diag.Add(stmt.Value.Pos(), "cannot return %s from function returning %s", value.Base, sig.Return)
 	}
+}
+
+func (c *Checker) checkSpawnStatement(stmt *ast.SpawnStmt) {
+	if c.current == nil || len(c.current.taskgroups) == 0 {
+		if c.hasEnclosingTaskgroup(c.current) {
+			c.diag.Add(stmt.SpawnPos, "spawn is not allowed inside a function literal within a taskgroup body")
+		} else {
+			c.diag.Add(stmt.SpawnPos, "spawn is only valid inside a taskgroup body")
+		}
+		c.checkExpression(stmt.Call)
+		return
+	}
+
+	call, ok := stmt.Call.(*ast.CallExpr)
+	if !ok {
+		c.diag.Add(stmt.SpawnPos, "spawn requires a call expression")
+		c.checkExpression(stmt.Call)
+		return
+	}
+
+	result := c.checkExpression(call)
+	sig, ok := c.info.Calls[call]
+	if ok && sig.Builtin && sig.Name != "chan_new" && sig.Name != "chan_send" && sig.Name != "chan_recv" && sig.Name != "chan_close" {
+		c.diag.Add(stmt.Call.Pos(), "spawn does not currently support builtin %q directly; wrap it in a function literal", sig.Name)
+	}
+	group := c.current.taskgroups[len(c.current.taskgroups)-1]
+	want := group.result
+	switch inner, ok := ParseErrorableType(want); {
+	case ok:
+		if !result.Errorable || result.Base != inner {
+			c.diag.Add(stmt.Call.Pos(), "spawned call must return %s, got %s", want, formatExprType(result))
+		}
+	case result.Errorable || result.Base != want:
+		c.diag.Add(stmt.Call.Pos(), "spawned call must return %s, got %s", want, formatExprType(result))
+	}
+}
+
+func (c *Checker) checkTaskgroupExpr(expr ast.Expression, taskgroup *ast.TaskgroupExpr) ExprType {
+	resultType := c.resolveTypeRef(taskgroup.ResultType)
+	sliceType, ok := ParseSliceType(resultType)
+	if !ok {
+		c.diag.Add(taskgroup.ResultType.Pos, "taskgroup result type must be a slice type")
+		return ExprType{Base: TypeInvalid}
+	}
+
+	c.current.taskgroups = append(c.current.taskgroups, taskgroupContext{result: sliceType.Elem, loopDepth: c.current.loopDepth})
+	c.checkBlock(taskgroup.Body)
+	c.current.taskgroups = c.current.taskgroups[:len(c.current.taskgroups)-1]
+
+	et := ExprType{Base: resultType}
+	c.info.ExprTypes[expr] = et
+	return et
 }
 
 func (c *Checker) checkExpression(expr ast.Expression) ExprType {
@@ -1299,6 +1456,8 @@ func (c *Checker) checkExpression(expr ast.Expression) ExprType {
 		return et
 	case *ast.FunctionLiteralExpr:
 		return c.checkFunctionLiteral(expr, e)
+	case *ast.TaskgroupExpr:
+		return c.checkTaskgroupExpr(expr, e)
 	case *ast.TypeApplicationExpr:
 		c.diag.Add(e.LBracketPos, "type arguments are not valid in expression position")
 		return ExprType{Base: TypeInvalid}
@@ -1720,6 +1879,50 @@ func (c *Checker) checkMapLiteral(expr ast.Expression, lit *ast.MapLiteralExpr) 
 }
 
 func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
+	if applied, ok := call.Callee.(*ast.TypeApplicationExpr); ok {
+		if ident, ok := applied.Inner.(*ast.IdentExpr); ok && ident.Name == "chan_new" {
+			if len(applied.TypeArgs) != 1 {
+				c.diag.Add(applied.LBracketPos, "generic builtin %q expects 1 type argument, got %d", ident.Name, len(applied.TypeArgs))
+				return ExprType{Base: TypeInvalid}
+			}
+			if len(call.Args) != 1 {
+				c.diag.Add(ident.NamePos, "function %q expects 1 arguments, got %d", ident.Name, len(call.Args))
+				return ExprType{Base: TypeInvalid}
+			}
+			elemType := c.resolveTypeRef(applied.TypeArgs[0])
+			if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+				c.diag.Add(applied.TypeArgs[0].Pos, "channel element type %q is not allowed", applied.TypeArgs[0].String())
+				return ExprType{Base: TypeInvalid}
+			}
+			if _, ok := ParseChanType(elemType); ok {
+				c.diag.Add(applied.TypeArgs[0].Pos, "channel element type %q is not allowed", applied.TypeArgs[0].String())
+				return ExprType{Base: TypeInvalid}
+			}
+			capacityType := c.checkExpression(call.Args[0])
+			if capacityType.Errorable {
+				c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+				return ExprType{Base: TypeInvalid}
+			}
+			capacityType = c.coerceValue(call.Args[0], capacityType, TypeI32)
+			if capacityType.Base != TypeI32 {
+				c.diag.Add(call.Args[0].Pos(), "argument 1 to %q must be i32, got %s", ident.Name, capacityType.Base)
+				return ExprType{Base: TypeInvalid}
+			}
+			resultType := MakeChanType(elemType)
+			sig := Signature{
+				Name:     ident.Name,
+				FullName: ident.Name,
+				Params:   []Type{TypeI32},
+				Return:   resultType,
+				Builtin:  true,
+			}
+			c.info.Calls[call] = sig
+			et := ExprType{Base: resultType}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
+	}
+
 	name, namePos, ok := callName(call.Callee)
 	if ok && name == "len" {
 		if len(call.Args) != 1 {
@@ -1877,6 +2080,80 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 		resultType := MakeSliceType(mapType.Key)
 		et := ExprType{Base: resultType}
 		c.info.Calls[call] = Signature{Name: name, FullName: name, Params: []Type{mapArg.Base}, Return: resultType, Builtin: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "chan_send" {
+		if len(call.Args) != 2 {
+			c.diag.Add(namePos, "function %q expects 2 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		chArg := c.checkExpression(call.Args[0])
+		if chArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		chType, ok := ParseChanType(chArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "chan_send requires a channel as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		valueArg := c.checkExpression(call.Args[1])
+		if valueArg.Errorable {
+			c.diag.Add(call.Args[1].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		valueArg = c.coerceValue(call.Args[1], valueArg, chType.Elem)
+		if valueArg.Base != chType.Elem {
+			c.diag.Add(call.Args[1].Pos(), "argument 2 to %q must be %s, got %s", name, chType.Elem, valueArg.Base)
+			return ExprType{Base: TypeInvalid}
+		}
+		c.useErrorName("Closed")
+		sig := Signature{Name: name, FullName: name, Params: []Type{chArg.Base, chType.Elem}, Return: TypeVoid, Errorable: true, Builtin: true}
+		c.info.Calls[call] = sig
+		et := ExprType{Base: TypeVoid, Errorable: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "chan_recv" {
+		if len(call.Args) != 1 {
+			c.diag.Add(namePos, "function %q expects 1 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		chArg := c.checkExpression(call.Args[0])
+		if chArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		chType, ok := ParseChanType(chArg.Base)
+		if !ok {
+			c.diag.Add(call.Args[0].Pos(), "chan_recv requires a channel as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		c.useErrorName("Closed")
+		sig := Signature{Name: name, FullName: name, Params: []Type{chArg.Base}, Return: chType.Elem, Errorable: true, Builtin: true}
+		c.info.Calls[call] = sig
+		et := ExprType{Base: chType.Elem, Errorable: true}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
+	if ok && name == "chan_close" {
+		if len(call.Args) != 1 {
+			c.diag.Add(namePos, "function %q expects 1 arguments, got %d", name, len(call.Args))
+			return ExprType{Base: TypeInvalid}
+		}
+		chArg := c.checkExpression(call.Args[0])
+		if chArg.Errorable {
+			c.diag.Add(call.Args[0].Pos(), "errorable value cannot be passed as an argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		if _, ok := ParseChanType(chArg.Base); !ok {
+			c.diag.Add(call.Args[0].Pos(), "chan_close requires a channel as its first argument")
+			return ExprType{Base: TypeInvalid}
+		}
+		sig := Signature{Name: name, FullName: name, Params: []Type{chArg.Base}, Return: TypeVoid, Builtin: true}
+		c.info.Calls[call] = sig
+		et := ExprType{Base: TypeVoid}
 		c.info.ExprTypes[expr] = et
 		return et
 	}
@@ -2191,6 +2468,11 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 			c.diag.Add(binary.OpPos, "comparison operands must have the same type")
 			return ExprType{Base: TypeInvalid}
 		}
+		if _, ok := ParseChanType(left.Base); ok {
+			et := ExprType{Base: TypeBool}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
 		if _, ok := c.info.Enums[string(left.Base)]; ok {
 			c.diag.Add(binary.OpPos, "comparison is not supported for enum values in v0.4")
 			return ExprType{Base: TypeInvalid}
@@ -2220,6 +2502,21 @@ func (c *Checker) checkBinary(expr ast.Expression, binary *ast.BinaryExpr) ExprT
 
 func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 	switch ref.Kind {
+	case ast.ErrorableTypeRef:
+		if ref.Elem == nil {
+			c.diag.Add(ref.Pos, "errorable type is missing an element type")
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(*ref.Elem)
+		if elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "errorable value type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		if _, ok := ParseErrorableType(elemType); ok {
+			c.diag.Add(ref.Pos, "nested errorable value types are not allowed")
+			return TypeInvalid
+		}
+		return MakeErrorableType(elemType)
 	case ast.PointerTypeRef:
 		if ref.Elem == nil {
 			c.diag.Add(ref.Pos, "pointer type is missing an element type")
@@ -2237,7 +2534,7 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 			return TypeInvalid
 		}
 		elemType := c.resolveTypeRef(*ref.Elem)
-		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+		if elemType == TypeNoReturn || elemType == TypeInvalid {
 			c.diag.Add(ref.Pos, "slice element type %q is not allowed", ref.Elem.String())
 			return TypeInvalid
 		}
@@ -2258,6 +2555,21 @@ func (c *Checker) resolveTypeRef(ref ast.TypeRef) Type {
 			return TypeInvalid
 		}
 		return MakeMapType(keyType, valueType)
+	case ast.ChanTypeRef:
+		if ref.Elem == nil {
+			c.diag.Add(ref.Pos, "channel type is missing an element type")
+			return TypeInvalid
+		}
+		elemType := c.resolveTypeRef(*ref.Elem)
+		if elemType == TypeVoid || elemType == TypeNoReturn || elemType == TypeInvalid {
+			c.diag.Add(ref.Pos, "channel element type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		if _, ok := ParseChanType(elemType); ok {
+			c.diag.Add(ref.Pos, "channel element type %q is not allowed", ref.Elem.String())
+			return TypeInvalid
+		}
+		return MakeChanType(elemType)
 	case ast.ArrayTypeRef:
 		if ref.ArrayLen < 0 || ref.ArrayLen > 2147483647 {
 			c.diag.Add(ref.Pos, "array length %d is out of range", ref.ArrayLen)
@@ -2590,6 +2902,15 @@ func (c *Checker) checkPropagate(expr ast.Expression, propagate *ast.PropagateEx
 		c.info.ExprTypes[expr] = et
 		return et
 	}
+	if innerValue, ok := ParseErrorableType(inner.Base); ok {
+		if !c.currentCanPropagateError() {
+			c.diag.Add(propagate.QuestionPos, "cannot use ? in a function that cannot return an error")
+			return ExprType{Base: TypeInvalid}
+		}
+		et := ExprType{Base: innerValue}
+		c.info.ExprTypes[expr] = et
+		return et
+	}
 	if inner.Base == TypeError {
 		if !c.currentCanPropagateError() {
 			c.diag.Add(propagate.QuestionPos, "cannot use ? in a function that cannot return an error")
@@ -2613,6 +2934,22 @@ func (c *Checker) checkHandle(expr ast.Expression, handle *ast.HandleExpr) ExprT
 			return ExprType{Base: TypeInvalid}
 		}
 		et := ExprType{Base: inner.Base}
+		c.info.ExprTypes[expr] = et
+		return et
+	case isErrorableValueType(inner.Base):
+		valueType, _ := ParseErrorableType(inner.Base)
+		if valueType != TypeVoid {
+			c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
+			if !c.blockTerminatesControlFlow(handle.Handler) {
+				c.diag.Add(handle.OrPos, "or handler for a value result must terminate control flow")
+				return ExprType{Base: TypeInvalid}
+			}
+			et := ExprType{Base: valueType}
+			c.info.ExprTypes[expr] = et
+			return et
+		}
+		c.checkBlockWithErrorBinding(handle.Handler, handle.ErrName)
+		et := ExprType{Base: TypeVoid}
 		c.info.ExprTypes[expr] = et
 		return et
 	case inner.Errorable:
@@ -2698,6 +3035,18 @@ func (c *Checker) checkFunctionLiteral(expr ast.Expression, lit *ast.FunctionLit
 
 func formatErrorName(name string) string {
 	return fmt.Sprintf("error.%s", name)
+}
+
+func formatExprType(exprType ExprType) string {
+	if exprType.Errorable {
+		return "!" + string(exprType.Base)
+	}
+	return string(exprType.Base)
+}
+
+func isErrorableValueType(typ Type) bool {
+	_, ok := ParseErrorableType(typ)
+	return ok
 }
 
 func isPointerType(typ Type) bool {
@@ -3087,6 +3436,15 @@ func (c *Checker) currentCanPropagateError() bool {
 		return false
 	}
 	return c.current.signature.Errorable || c.current.signature.Return == TypeError
+}
+
+func (c *Checker) hasEnclosingTaskgroup(ctx *functionContext) bool {
+	for current := ctx; current != nil; current = current.parent {
+		if len(current.taskgroups) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func enumPayloadTypeName(enumName, caseName string) Type {

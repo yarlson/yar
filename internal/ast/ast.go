@@ -43,10 +43,12 @@ type TypeRefKind int
 
 const (
 	NamedTypeRef TypeRefKind = iota
+	ErrorableTypeRef
 	PointerTypeRef
 	ArrayTypeRef
 	SliceTypeRef
 	MapTypeRef
+	ChanTypeRef
 	FunctionTypeRef
 )
 
@@ -66,6 +68,11 @@ type TypeRef struct {
 
 func (r TypeRef) String() string {
 	switch r.Kind {
+	case ErrorableTypeRef:
+		if r.Elem == nil {
+			return "!"
+		}
+		return "!" + r.Elem.String()
 	case PointerTypeRef:
 		if r.Elem == nil {
 			return "*"
@@ -90,6 +97,11 @@ func (r TypeRef) String() string {
 			value = r.Value.String()
 		}
 		return "map[" + key + "]" + value
+	case ChanTypeRef:
+		if r.Elem == nil {
+			return "chan[]"
+		}
+		return "chan[" + r.Elem.String() + "]"
 	case FunctionTypeRef:
 		params := make([]string, 0, len(r.Params))
 		for _, param := range r.Params {
@@ -360,6 +372,17 @@ func (s *ExprStmt) Pos() token.Position {
 
 func (*ExprStmt) stmtNode() {}
 
+type SpawnStmt struct {
+	SpawnPos token.Position
+	Call     Expression
+}
+
+func (s *SpawnStmt) Pos() token.Position {
+	return s.SpawnPos
+}
+
+func (*SpawnStmt) stmtNode() {}
+
 type IdentExpr struct {
 	Name    string
 	NamePos token.Position
@@ -472,6 +495,18 @@ func (e *FunctionLiteralExpr) Pos() token.Position {
 }
 
 func (*FunctionLiteralExpr) exprNode() {}
+
+type TaskgroupExpr struct {
+	TaskgroupPos token.Position
+	ResultType   TypeRef
+	Body         *BlockStmt
+}
+
+func (e *TaskgroupExpr) Pos() token.Position {
+	return e.TaskgroupPos
+}
+
+func (*TaskgroupExpr) exprNode() {}
 
 type UnaryExpr struct {
 	Operator token.Kind
