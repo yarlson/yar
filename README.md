@@ -1,5 +1,9 @@
 # Yar
 
+<p align="center">
+  <img src="assets/yar-banner.jpg" alt="Yar — The Yar Code" width="600">
+</p>
+
 Yar is a compiled programming language that targets native executables through
 LLVM. It has explicit error handling, closed enums with exhaustive matching,
 generics, interfaces, structured concurrency, and automatic memory management
