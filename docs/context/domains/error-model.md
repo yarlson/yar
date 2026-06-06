@@ -78,6 +78,9 @@
 - Networking intrinsics contribute stable host error names when they are used:
   `AddrInUse`, `Closed`, `ConnectionRefused`, `ConnectionReset`, `IO`,
   `InvalidArgument`, `NotFound`, `PermissionDenied`, and `Timeout`.
+- The pure-Yar `http` stdlib package contributes `error.InvalidRequest` when a
+  received HTTP request cannot be parsed or exceeds the package's v1 request
+  body limit.
 - These names join user-declared `error.Name` values in one program-wide
   error-code table.
 

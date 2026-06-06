@@ -557,6 +557,47 @@ net.resolve(host str, port i32) !net.Addr    // DNS resolution
 
 Errors: `error.ConnectionRefused`, `error.Timeout`, `error.AddrInUse`, `error.ConnectionReset`, `error.NotFound` (DNS), `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`, `error.Closed`
 
+### http
+
+Types:
+
+```
+http.Request { method str, path str, headers map[str]str, body str }
+http.Response { status i32, headers map[str]str, body str }
+```
+
+Functions:
+
+```
+http.text(status i32, body str) http.Response
+http.serve(addr net.Addr, handler fn(http.Request) !http.Response) !void
+```
+
+`http.serve` listens on a TCP address, accepts connections, reads one HTTP/1.1
+request per connection, calls the handler, writes one response, and closes the
+connection. Handler errors become `500 Internal Server Error` responses and the
+server keeps accepting. Malformed requests receive `400 Bad Request`. Header
+names in `Request.headers` are lowercase. There is no keep-alive, router, query
+parser, middleware, auth, TLS, or stdlib session/JWT support.
+
+Example:
+
+```yar
+import "http"
+import "net"
+
+fn handle(req http.Request) !http.Response {
+    return http.text(200, "hello\n")
+}
+
+fn main() !i32 {
+    http.serve(net.Addr{host: "127.0.0.1", port: 8080}, fn(req http.Request) !http.Response {
+        return handle(req)
+    })?
+    return 0
+}
+```
+
 ### testing
 
 Type: `testing.T { name str, failed bool, messages []str }`

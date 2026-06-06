@@ -102,6 +102,20 @@ common boilerplate without adding new semantic models:
 - stdlib additions: `strings.split`, `strings.trim`, `strings.to_lower`,
   `strings.to_upper`
 
+## v0.3.2 capability: tiny native HTTP services (implemented)
+
+The `http` stdlib package adds a minimal HTTP/1.1 server wrapper over `net`.
+It is intentionally scoped to small native service demos:
+
+- `http.Request` and `http.Response`
+- `http.text(status, body)`
+- `http.serve(net.Addr, fn(http.Request) !http.Response)`
+- one request per connection
+- handler errors become `500` responses
+
+Non-goals remain explicit: no router, keep-alive, query parser, middleware,
+auth, TLS, or HTTP client.
+
 ---
 
 ## Accepted foundation: heap-backed feature memory model

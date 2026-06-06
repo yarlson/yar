@@ -252,7 +252,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `process`, `env`, `stdio`, `net`, and `testing`.
+  `path`, `fs`, `process`, `env`, `stdio`, `net`, `http`, and `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and
@@ -271,6 +271,13 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 - `process.Result` has `exit_code i32`, `stdout str`, and `stderr str`.
 - `env.lookup(str)` returns `!str`.
 - `stdio.eprint(str)` writes to stderr and returns `void`.
+- `net` provides TCP networking primitives for listening, accepting,
+  connecting, reading, writing, closing, inspecting addresses, setting
+  timeouts, and DNS resolution.
+- `http` provides `Request`, `Response`, `text`, and `serve` for small
+  HTTP/1.1 servers. `serve` accepts one request per connection, closes the
+  connection after writing the response, and converts handler errors to `500`
+  responses while continuing to accept new connections.
 - Host process/environment failures surface through ordinary `error` values
   using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and
   `IO`.

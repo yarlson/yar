@@ -154,7 +154,11 @@ channels (`chan[T]`), and function types.
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
 | `net`     | TCP networking (listen, connect, read, write)         |
+| `http`    | Minimal HTTP/1.1 server helpers over TCP              |
 | `testing` | Test assertions and framework                         |
+
+See [`examples/http_server`](examples/http_server/) for a minimal native HTTP
+service.
 
 ## Install
 

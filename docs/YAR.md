@@ -1060,6 +1060,52 @@ Networking errors surface through ordinary YAR errors using the names:
 Current implementation note: the host networking runtime uses BSD sockets on
 Unix-like systems and Winsock2 on Windows. SIGPIPE is suppressed on POSIX.
 
+### `http`
+
+```
+import "http"
+```
+
+Types:
+
+- `http.Request { method str, path str, headers map[str]str, body str }`
+- `http.Response { status i32, headers map[str]str, body str }`
+
+Available functions:
+
+- `http.text(status i32, body str) http.Response` — create a text/plain
+  response
+- `http.serve(addr net.Addr, handler fn(http.Request) !http.Response) !void` —
+  listen, accept connections, parse one request per connection, call the
+  handler, write one response, and close the connection
+
+Example:
+
+```yar
+import "http"
+import "net"
+
+fn handle(req http.Request) !http.Response {
+    return http.text(200, "hello\n")
+}
+
+fn main() !i32 {
+    http.serve(net.Addr{host: "127.0.0.1", port: 8080}, fn(req http.Request) !http.Response {
+        return handle(req)
+    })?
+    return 0
+}
+```
+
+Current v1 behavior:
+
+- request header names are normalized to lowercase
+- `Content-Length` bodies are read up to 65536 bytes
+- malformed requests receive `400 Bad Request`
+- handler errors receive `500 Internal Server Error`
+- connections are closed after one response
+- there is no keep-alive, router, query parser, middleware, auth, or TLS
+
 ### `testing`
 
 ```

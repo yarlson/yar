@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	gonet "net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1160,6 +1162,102 @@ func TestStdlibNetFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestStdlibHTTPFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_http", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "http ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
+func TestStdlibHTTPServeResponds(t *testing.T) {
+	port := freeTCPPort(t)
+	src := fmt.Sprintf(`package main
+
+import "http"
+import "net"
+
+fn handle(req http.Request) !http.Response {
+    if req.method != "POST" {
+        return http.text(405, "bad method\n")
+    }
+    content_type := req.headers["content-type"]?
+    return http.text(200, req.path + ":" + content_type + ":" + req.body)
+}
+
+fn main() !i32 {
+    http.serve(net.Addr{host: "127.0.0.1", port: %d}, fn(req http.Request) !http.Response {
+        return handle(req)
+    })?
+    return 0
+}
+`, port)
+
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "main.yar")
+	writeSourceFile(t, srcPath, src)
+
+	outPath := filepath.Join(tmpDir, "server")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := BuildPath(ctx, srcPath, hostTarget(), outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.CommandContext(ctx, outPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				t.Logf("kill HTTP test server: %v", err)
+			}
+		}
+		if err := cmd.Wait(); err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Logf("wait for HTTP test server: %v", err)
+			}
+		}
+	}()
+
+	conn := dialEventually(t, "127.0.0.1", port)
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request := "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello"
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := string(response)
+	for _, want := range []string{
+		"HTTP/1.1 200 OK\r\n",
+		"content-length: 22\r\n",
+		"content-type: text/plain; charset=utf-8\r\n",
+		"\r\n/echo:text/plain:hello",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("response missing %q:\n%s\nserver output:\n%s", want, got, output.String())
+		}
+	}
+}
+
 func TestCompilePathLowersHostFilesystemDecls(t *testing.T) {
 	t.Parallel()
 
@@ -1800,6 +1898,43 @@ func writeSourceFile(t *testing.T, path, src string) {
 	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+
+	var listenConfig gonet.ListenConfig
+	listener, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	addr, ok := listener.Addr().(*gonet.TCPAddr)
+	if !ok {
+		t.Fatalf("expected TCPAddr, got %T", listener.Addr())
+	}
+	return addr.Port
+}
+
+func dialEventually(t *testing.T, host string, port int) gonet.Conn {
+	t.Helper()
+
+	addr := gonet.JoinHostPort(host, fmt.Sprintf("%d", port))
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		conn, err := (&gonet.Dialer{}).DialContext(ctx, "tcp", addr)
+		cancel()
+		if err == nil {
+			return conn
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("server did not accept connections on %s: %v", addr, lastErr)
+	return nil
 }
 
 func joinDiagnosticMessages(diags []diag.Diagnostic) string {
