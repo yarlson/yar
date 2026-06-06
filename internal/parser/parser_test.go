@@ -546,6 +546,38 @@ fn main() i32 {
 	}
 }
 
+func TestParseBareForLoop(t *testing.T) {
+	t.Parallel()
+
+	program, diags := Parse(`
+package main
+
+fn main() i32 {
+	for {
+		break
+	}
+	return 0
+}
+`)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+
+	loop, ok := program.Functions[0].Body.Stmts[0].(*ast.ForStmt)
+	if !ok {
+		t.Fatalf("expected for statement, got %T", program.Functions[0].Body.Stmts[0])
+	}
+	if loop.Init != nil {
+		t.Fatalf("expected no init clause, got %T", loop.Init)
+	}
+	if loop.Cond != nil {
+		t.Fatalf("expected no condition, got %T", loop.Cond)
+	}
+	if loop.Post != nil {
+		t.Fatalf("expected no post clause, got %T", loop.Post)
+	}
+}
+
 func TestParseBoolOperatorPrecedence(t *testing.T) {
 	t.Parallel()
 

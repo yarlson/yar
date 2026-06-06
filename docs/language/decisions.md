@@ -68,6 +68,14 @@ Status: accepted
 `&&` and `||` are supported for `bool` operands and lower to explicit
 short-circuit control flow rather than eager evaluation.
 
+### Bare `for` loops
+
+Status: accepted
+
+`for { ... }` is an unconditional loop form equivalent to a true condition.
+It reuses existing `break` and `continue` semantics and does not introduce a
+separate `while` keyword.
+
 ### Imports and multi-file packages
 
 Status: accepted

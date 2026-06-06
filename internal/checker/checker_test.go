@@ -228,6 +228,31 @@ fn main() i32 {
 	}
 }
 
+func TestCheckBareForLoopValid(t *testing.T) {
+	t.Parallel()
+
+	src := `
+package main
+
+fn main() i32 {
+	for {
+		break
+	}
+	return 0
+}
+`
+
+	program, parseDiags := parser.Parse(src)
+	if len(parseDiags) > 0 {
+		t.Fatalf("unexpected parse diagnostics: %+v", parseDiags)
+	}
+
+	_, diags := Check(program)
+	if len(diags) > 0 {
+		t.Fatalf("unexpected checker diagnostics: %+v", diags)
+	}
+}
+
 func TestCheckBoolOperatorsWithPropagateValid(t *testing.T) {
 	t.Parallel()
 

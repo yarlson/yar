@@ -192,6 +192,23 @@ func TestBoolOperatorFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestInfiniteForFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile(fixturePath("infinite_for"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := buildAndRun(t, string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "3\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestSliceFixtureProgram(t *testing.T) {
 	t.Parallel()
 

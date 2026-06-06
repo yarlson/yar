@@ -51,6 +51,7 @@
 - Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (desugars to assignment
   with binary expression)
 - `if`, `else`, and `else if`
+- `for { ... }`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
 - `break`

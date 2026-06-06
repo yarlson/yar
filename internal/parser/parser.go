@@ -442,6 +442,13 @@ func (p *Parser) parseIf() ast.Statement {
 func (p *Parser) parseFor() ast.Statement {
 	forTok := p.expect(token.For, "expected for")
 
+	if p.at(token.LBrace) {
+		return &ast.ForStmt{
+			ForPos: forTok.Pos,
+			Body:   p.parseBlock(),
+		}
+	}
+
 	if p.at(token.Var) || (p.at(token.Ident) && p.peek().Kind == token.ColonAssign) {
 		init := p.parseForClauseStmt(true)
 		if p.at(token.Semicolon) {

@@ -1173,9 +1173,7 @@ func (c *Checker) checkFor(stmt *ast.ForStmt) {
 	if stmt.Init != nil {
 		c.checkForClauseStatement(stmt.Init)
 	}
-	if stmt.Cond == nil {
-		c.diag.Add(stmt.ForPos, "for loop requires a condition")
-	} else {
+	if stmt.Cond != nil {
 		c.checkCondition(stmt.Cond, "for condition must be bool", "for condition cannot be errorable")
 	}
 	if stmt.Post != nil {

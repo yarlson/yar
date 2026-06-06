@@ -524,6 +524,7 @@ Implemented statements:
 - `if`
 - `if` / `else`
 - `else if`
+- `for { ... }`
 - `for cond { ... }`
 - `for init; cond; post { ... }`
 - `break`
