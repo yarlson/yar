@@ -34,3 +34,5 @@
 
 - [platform/toolchain-runtime.md](platform/toolchain-runtime.md) — External
   toolchain dependency and embedded runtime boundary.
+- [platform/ci-cd.md](platform/ci-cd.md) — GitHub Actions CI gates, tag-based
+  release CD, GoReleaser artifacts, and release operator path.

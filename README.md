@@ -296,6 +296,13 @@ go test -race -count=1 -v -timeout=120s ./...
 golangci-lint run --fix ./...
 ```
 
+CI runs those gates on pull requests and pushes to `main`, with Linux and macOS
+coverage for the native `clang` build boundary. Release packaging is validated
+with a GoReleaser snapshot dry run.
+
+Version tags matching `v*` publish GitHub Release assets through GoReleaser.
+Manual release workflow runs are snapshot-only and do not publish.
+
 ```text
 cmd/yar/          CLI entry point
 internal/

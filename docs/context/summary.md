@@ -86,3 +86,6 @@ executable.
 - Embedded C runtime source for builtin functions, host integration, and shared allocation / garbage-collection helpers, with `#ifdef _WIN32` conditionals for Windows platform support
 - Embedded Yar standard library compiled through the same frontend as user code
 - Go tests that validate compilation, executable output, panic behavior, unhandled errors, package imports, strings, maps, slices, pointers, enums, stdlib packages, host filesystem and process behavior, and toolchain/runtime boundaries
+- GitHub Actions CI for linting, Linux/macOS race tests, and release packaging
+  dry runs
+- GoReleaser-based GitHub Release CD for version tags
