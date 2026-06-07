@@ -71,7 +71,8 @@
 ## Host-Backed Error Names
 
 - Filesystem intrinsics contribute stable host error names when they are used:
-  `AlreadyExists`, `IO`, `InvalidPath`, `NotFound`, and `PermissionDenied`.
+  `AlreadyExists`, `Closed`, `IO`, `InvalidArgument`, `InvalidPath`,
+  `NotFound`, and `PermissionDenied`.
 - Process and environment intrinsics contribute stable host error names when
   they are used: `IO`, `InvalidArgument`, `NotFound`, and
   `PermissionDenied`.

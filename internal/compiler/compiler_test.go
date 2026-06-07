@@ -1174,6 +1174,18 @@ func TestStdlibHTTPFixtureProgram(t *testing.T) {
 	}
 }
 
+func TestStdlibIOFixtureProgram(t *testing.T) {
+	t.Parallel()
+
+	output, err := buildAndRunPath(t, filepath.Join("..", "..", "testdata", "stdlib_io", "main.yar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output, "io ok\n"; got != want {
+		t.Fatalf("unexpected program output: got %q want %q", got, want)
+	}
+}
+
 func TestStdlibHTTPServeResponds(t *testing.T) {
 	port := freeTCPPort(t)
 	src := fmt.Sprintf(`package main

@@ -483,7 +483,8 @@ func IsHostIntrinsic(file, fullName string) bool {
 		return false
 	}
 	switch fullName {
-	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir",
+		"fs.open_read_handle", "fs.open_write_handle", "fs.read_handle", "fs.write_handle", "fs.close_handle":
 		return true
 	case "process.args", "process.run", "process.run_inherit", "env.lookup", "stdio.eprint":
 		return true
@@ -2333,10 +2334,13 @@ func (c *Checker) checkCall(expr ast.Expression, call *ast.CallExpr) ExprType {
 
 func (c *Checker) registerHostErrorNames(fullName string) {
 	switch fullName {
-	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir",
+		"fs.open_read_handle", "fs.open_write_handle", "fs.read_handle", "fs.write_handle", "fs.close_handle":
 		for _, name := range []string{
 			"AlreadyExists",
+			"Closed",
 			"IO",
+			"InvalidArgument",
 			"InvalidPath",
 			"NotFound",
 			"PermissionDenied",

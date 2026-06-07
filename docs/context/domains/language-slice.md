@@ -252,20 +252,26 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `process`, `env`, `stdio`, `net`, `http`, and `testing`.
+  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
+  `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and
   `ext` for host-style path manipulation.
 - `fs` provides explicit-error text file and directory operations: `read_file`,
   `write_file`, `read_dir`, `stat`, `mkdir_all`, `remove_all`, and `temp_dir`.
+  It also provides streaming `File` handles through `open_read`, `open_write`,
+  and `read` / `write` / `close` methods.
 - `fs.read_dir` returns `[]fs.DirEntry`, where `DirEntry` has `name str` and
   `is_dir bool`.
 - `fs.stat` returns `!fs.EntryKind`, where `EntryKind` cases are `File`,
   `Directory`, and `Other`.
 - Host filesystem failures surface through ordinary `error` values using stable
-  names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and
-  `IO`.
+  names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`,
+  `InvalidArgument`, `Closed`, and `IO`.
+- `io` defines stream interfaces (`Reader`, `Writer`, `Closer`,
+  `ReadCloser`, `WriteCloser`, and `ReadWriter`) plus `copy`, `read_all`, and
+  `close_quiet`.
 - `process.args()` returns `[]str`, `process.run([]str)` returns
   `!process.Result`, and `process.run_inherit([]str)` returns `!i32`.
 - `process.Result` has `exit_code i32`, `stdout str`, and `stderr str`.
@@ -273,7 +279,8 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 - `stdio.eprint(str)` writes to stderr and returns `void`.
 - `net` provides TCP networking primitives for listening, accepting,
   connecting, reading, writing, closing, inspecting addresses, setting
-  timeouts, and DNS resolution.
+  timeouts, and DNS resolution. It also provides `Conn` and `Listener` wrapper
+  structs with methods that satisfy the `io` stream interfaces.
 - `http` provides `Request`, `Response`, `text`, and `serve` for small
   HTTP/1.1 servers. `serve` accepts one request per connection, closes the
   connection after writing the response, and converts handler errors to `500`

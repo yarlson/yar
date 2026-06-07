@@ -137,9 +137,18 @@ long long b_len)` allocates and returns a new string containing the
   tree.
 - `yar_fs_temp_dir(yar_str prefix, yar_str *out)` creates one temporary
   directory under `TMPDIR` or `/tmp`.
+- `yar_fs_open_read(yar_str path, int64_t *out)` opens a file for streaming
+  reads and returns an opaque file handle.
+- `yar_fs_open_write(yar_str path, int64_t *out)` creates or truncates a file
+  for streaming writes and returns an opaque file handle.
+- `yar_fs_read_handle(int64_t handle, int32_t max_bytes, yar_str *out)` reads
+  up to `max_bytes` from an open file handle and returns empty string on EOF.
+- `yar_fs_write_handle(int64_t handle, yar_str data, int32_t *out)` writes data
+  to an open file handle and returns bytes written.
+- `yar_fs_close_handle(int64_t handle)` closes an open file handle.
 - Runtime filesystem status codes map in code generation to stable YAR error
-  names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`, and
-  `IO`.
+  names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`,
+  `InvalidArgument`, `Closed`, and `IO`.
 - On POSIX, the implementation uses `stat`, `opendir`, `mkdir`, `remove`, and
   `mkstemp`. On Windows, the implementation uses Win32 APIs
   (`CreateFileA`, `FindFirstFileA`, `CreateDirectoryA`,

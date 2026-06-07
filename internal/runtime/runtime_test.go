@@ -38,6 +38,11 @@ func TestSourceIncludesFilesystemHelpers(t *testing.T) {
 		"yar_fs_mkdir_all(yar_str path)",
 		"yar_fs_remove_all(yar_str path)",
 		"yar_fs_temp_dir(yar_str prefix, yar_str *out)",
+		"yar_fs_open_read(yar_str path, int64_t *out)",
+		"yar_fs_open_write(yar_str path, int64_t *out)",
+		"yar_fs_read_handle(int64_t raw_handle, int32_t max_bytes, yar_str *out)",
+		"yar_fs_write_handle(int64_t raw_handle, yar_str data, int32_t *out)",
+		"yar_fs_close_handle(int64_t raw_handle)",
 	} {
 		if !strings.Contains(Source(), want) {
 			t.Fatalf("expected runtime source to contain %q", want)

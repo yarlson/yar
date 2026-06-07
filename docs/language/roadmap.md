@@ -116,6 +116,19 @@ It is intentionally scoped to small native service demos:
 Non-goals remain explicit: no router, keep-alive, query parser, middleware,
 auth, TLS, or HTTP client.
 
+## v0.3.3 capability: streaming resources (implemented)
+
+The `io` stdlib package and streaming resource wrappers establish a shared
+blocking stream model:
+
+- `io.Reader`, `io.Writer`, `io.Closer`, and combined stream interfaces
+- `io.copy`, `io.read_all`, and `io.close_quiet`
+- `fs.File` handles from `fs.open_read` and `fs.open_write`
+- `net.Conn` and `net.Listener` wrappers around the existing TCP handles
+
+This is the foundation for future HTTP request/response streaming without
+adding ownership syntax, `defer`, async/await, or allocator controls.
+
 ---
 
 ## Accepted foundation: heap-backed feature memory model
@@ -173,7 +186,6 @@ compiler and tooling programs become practical end to end.
 
 ### v0.5 likely non-goals
 
-- a full stream or descriptor API
 - shell syntax or pipelines
 - full map iterator protocols
 - advanced module or package-manager design

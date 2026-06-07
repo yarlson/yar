@@ -15,7 +15,7 @@ func TestHasSort(t *testing.T) {
 }
 
 func TestHasHostPackages(t *testing.T) {
-	for _, pkg := range []string{"fs", "path", "http"} {
+	for _, pkg := range []string{"fs", "io", "path", "http"} {
 		if !Has(pkg) {
 			t.Fatalf("expected %s to be a stdlib package", pkg)
 		}
@@ -73,6 +73,7 @@ func TestReadFileHostPackages(t *testing.T) {
 		file string
 	}{
 		{pkg: "fs", file: "fs.yar"},
+		{pkg: "io", file: "io.yar"},
 		{pkg: "path", file: "path.yar"},
 		{pkg: "http", file: "http.yar"},
 	} {

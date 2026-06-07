@@ -149,11 +149,12 @@ channels (`chan[T]`), and function types.
 | `conv`    | Numeric and byte/string conversions                   |
 | `sort`    | In-place sorting for slices                           |
 | `path`    | Path normalization and joining                        |
-| `fs`      | Text file and directory operations                    |
+| `fs`      | Text file, directory, and streaming file operations   |
+| `io`      | Stream interfaces and copy/read helpers               |
 | `process` | Argv access and child-process execution               |
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
-| `net`     | TCP networking (listen, connect, read, write)         |
+| `net`     | TCP networking and stream wrappers                    |
 | `http`    | Minimal HTTP/1.1 server helpers over TCP              |
 | `testing` | Test assertions and framework                         |
 

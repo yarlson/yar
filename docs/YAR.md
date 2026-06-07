@@ -938,6 +938,7 @@ Types:
 
 - `fs.DirEntry { name str, is_dir bool }`
 - `fs.EntryKind { File, Directory, Other }`
+- `fs.File { handle i64 }`
 
 Available functions:
 
@@ -948,6 +949,15 @@ Available functions:
 - `fs.mkdir_all(path str) !void`
 - `fs.remove_all(path str) !void`
 - `fs.temp_dir(prefix str) !str`
+- `fs.open_read(path str) !fs.File`
+- `fs.open_write(path str) !fs.File`
+
+Methods on `fs.File`:
+
+- `read(max_bytes i32) !str` — read up to `max_bytes`; returns empty string on
+  EOF
+- `write(data str) !i32` — write data and return bytes written
+- `close() !void` — close the host file handle
 
 Filesystem errors surface through ordinary YAR errors using the names:
 
@@ -955,11 +965,34 @@ Filesystem errors surface through ordinary YAR errors using the names:
 - `error.PermissionDenied`
 - `error.AlreadyExists`
 - `error.InvalidPath`
+- `error.InvalidArgument`
+- `error.Closed`
 - `error.IO`
 
 Current implementation note: the host filesystem runtime uses POSIX APIs on
 Unix-like systems and Win32 APIs on Windows. `fs.temp_dir` uses `TMPDIR` or
 `/tmp` on Unix and `GetTempPath` on Windows.
+
+### `io`
+
+```
+import "io"
+```
+
+Interfaces:
+
+- `io.Reader { read(max_bytes i32) !str }`
+- `io.Writer { write(data str) !i32 }`
+- `io.Closer { close() !void }`
+- `io.ReadCloser { read(max_bytes i32) !str, close() !void }`
+- `io.WriteCloser { write(data str) !i32, close() !void }`
+- `io.ReadWriter { read(max_bytes i32) !str, write(data str) !i32 }`
+
+Available functions:
+
+- `io.copy(dst io.Writer, src io.Reader, chunk_size i32) !i64`
+- `io.read_all(src io.Reader, chunk_size i32, max_bytes i32) !str`
+- `io.close_quiet(c io.Closer) void`
 
 ### `process`
 
@@ -1020,6 +1053,8 @@ import "net"
 Types:
 
 - `net.Addr { host str, port i32 }`
+- `net.Conn { handle i64 }`
+- `net.Listener { handle i64 }`
 
 Available functions:
 
@@ -1042,6 +1077,24 @@ Available functions:
   milliseconds; 0 disables
 - `net.resolve(host str, port i32) !net.Addr` — DNS resolution; returns first
   result
+- `net.listen_stream(host str, port i32) !net.Listener`
+- `net.connect_stream(host str, port i32) !net.Conn`
+
+Methods on `net.Listener`:
+
+- `accept() !net.Conn`
+- `addr() !net.Addr`
+- `close() !void`
+
+Methods on `net.Conn`:
+
+- `read(max_bytes i32) !str`
+- `write(data str) !i32`
+- `close() !void`
+- `local_addr() !net.Addr`
+- `remote_addr() !net.Addr`
+- `set_read_deadline(millis i32) !void`
+- `set_write_deadline(millis i32) !void`
 
 Listeners and connections use opaque `i64` handles. All calls are blocking.
 

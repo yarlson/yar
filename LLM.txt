@@ -505,9 +505,40 @@ fs.stat(path) !fs.EntryKind
 fs.mkdir_all(path) !void
 fs.remove_all(path) !void
 fs.temp_dir(prefix) !str
+fs.open_read(path) !fs.File
+fs.open_write(path) !fs.File
 ```
 
-Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.IO`
+`fs.File { handle i64 }` has methods:
+
+```
+read(max_bytes i32) !str
+write(data str) !i32
+close() !void
+```
+
+Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.InvalidArgument`, `error.Closed`, `error.IO`
+
+### io
+
+Interfaces:
+
+```
+io.Reader      { read(max_bytes i32) !str }
+io.Writer      { write(data str) !i32 }
+io.Closer      { close() !void }
+io.ReadCloser  { read(max_bytes i32) !str, close() !void }
+io.WriteCloser { write(data str) !i32, close() !void }
+io.ReadWriter  { read(max_bytes i32) !str, write(data str) !i32 }
+```
+
+Functions:
+
+```
+io.copy(dst io.Writer, src io.Reader, chunk_size i32) !i64
+io.read_all(src io.Reader, chunk_size i32, max_bytes i32) !str
+io.close_quiet(c io.Closer) void
+```
 
 ### process
 
@@ -535,7 +566,13 @@ stdio.eprint(msg) void  // write to stderr
 
 ### net
 
-Type: `net.Addr { host str, port i32 }`
+Types:
+
+```
+net.Addr { host str, port i32 }
+net.Conn { handle i64 }
+net.Listener { handle i64 }
+```
 
 Listeners and connections are opaque `i64` handles. All calls are blocking.
 
@@ -553,6 +590,28 @@ net.remote_addr(conn i64) !net.Addr          // remote endpoint
 net.set_read_deadline(conn i64, millis i32) !void   // 0 = no timeout
 net.set_write_deadline(conn i64, millis i32) !void  // 0 = no timeout
 net.resolve(host str, port i32) !net.Addr    // DNS resolution
+net.listen_stream(host str, port i32) !net.Listener
+net.connect_stream(host str, port i32) !net.Conn
+```
+
+`net.Listener` methods:
+
+```
+accept() !net.Conn
+addr() !net.Addr
+close() !void
+```
+
+`net.Conn` methods:
+
+```
+read(max_bytes i32) !str
+write(data str) !i32
+close() !void
+local_addr() !net.Addr
+remote_addr() !net.Addr
+set_read_deadline(millis i32) !void
+set_write_deadline(millis i32) !void
 ```
 
 Errors: `error.ConnectionRefused`, `error.Timeout`, `error.AddrInUse`, `error.ConnectionReset`, `error.NotFound` (DNS), `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`, `error.Closed`

@@ -244,6 +244,11 @@ func (g *Generator) writeRuntimeDecls(b *strings.Builder) {
 	b.WriteString("declare i32 @yar_fs_mkdir_all(%yar.str)\n")
 	b.WriteString("declare i32 @yar_fs_remove_all(%yar.str)\n")
 	b.WriteString("declare i32 @yar_fs_temp_dir(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_open_read(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_open_write(%yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_read_handle(i64, i32, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_write_handle(i64, %yar.str, ptr)\n")
+	b.WriteString("declare i32 @yar_fs_close_handle(i64)\n")
 	b.WriteString("declare ptr @yar_sb_new()\n")
 	b.WriteString("declare void @yar_sb_write(ptr, ptr, i64)\n")
 	b.WriteString("declare %yar.str @yar_sb_string(ptr)\n")
@@ -2577,6 +2582,42 @@ func (f *functionEmitter) genHostIntrinsicCall(sig checker.Signature, args []exp
 		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_temp_dir(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
 		value := f.loadValue("%"+out, checker.TypeStr)
 		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.open_read_handle":
+		out := f.newTemp("fs.open_read_handle.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
+		fmt.Fprintf(&f.builder, "  store i64 0, ptr %%%s\n", out)
+		status := f.newTemp("fs.open_read_handle.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_open_read(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI64)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.open_write_handle":
+		out := f.newTemp("fs.open_write_handle.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
+		fmt.Fprintf(&f.builder, "  store i64 0, ptr %%%s\n", out)
+		status := f.newTemp("fs.open_write_handle.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_open_write(%%yar.str %s, ptr %%%s)\n", status, args[0].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI64)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.read_handle":
+		out := f.newTemp("fs.read_handle.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca %%yar.str\n", out)
+		fmt.Fprintf(&f.builder, "  store %%yar.str zeroinitializer, ptr %%%s\n", out)
+		status := f.newTemp("fs.read_handle.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_read_handle(i64 %s, i32 %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeStr)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.write_handle":
+		out := f.newTemp("fs.write_handle.out")
+		fmt.Fprintf(&f.builder, "  %%%s = alloca i32\n", out)
+		fmt.Fprintf(&f.builder, "  store i32 0, ptr %%%s\n", out)
+		status := f.newTemp("fs.write_handle.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_write_handle(i64 %s, %%yar.str %s, ptr %%%s)\n", status, args[0].ref, args[1].ref, out)
+		value := f.loadValue("%"+out, checker.TypeI32)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, value.ref), typ: sig.Return}
+	case "fs.close_handle":
+		status := f.newTemp("fs.close_handle.status")
+		fmt.Fprintf(&f.builder, "  %%%s = call i32 @yar_fs_close_handle(i64 %s)\n", status, args[0].ref)
+		return exprValue{ref: f.emitHostStatusResult(sig.FullName, sig.Return, "%"+status, ""), typ: sig.Return}
 	case "net.listen":
 		out := f.newTemp("net.listen.out")
 		fmt.Fprintf(&f.builder, "  %%%s = alloca i64\n", out)
@@ -3121,11 +3162,14 @@ func (f *functionEmitter) emitHostErrorCode(fullName, status string) string {
 		name   string
 	}
 	switch fullName {
-	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir":
+	case "fs.read_file", "fs.write_file", "fs.read_dir", "fs.stat", "fs.mkdir_all", "fs.remove_all", "fs.temp_dir",
+		"fs.open_read_handle", "fs.open_write_handle", "fs.read_handle", "fs.write_handle", "fs.close_handle":
 		items = []struct {
 			status int
 			name   string
 		}{
+			{status: 7, name: "Closed"},
+			{status: 6, name: "InvalidArgument"},
 			{status: 4, name: "InvalidPath"},
 			{status: 3, name: "AlreadyExists"},
 			{status: 2, name: "PermissionDenied"},
