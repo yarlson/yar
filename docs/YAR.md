@@ -16,6 +16,22 @@ updated.
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
 - Cross-compilation via `YAR_OS` and `YAR_ARCH` environment variables
 
+Current implementation note: the shipped CLI is the Rust 2024 `yar` binary from
+`crates/yar-cli`. It supports `check`, `emit-ir`, `build`, host `run`, host
+`test`, `init`, and dependency manifest, lock, fetch, and update commands. The
+Rust compiler path enforces package export visibility for imported declarations
+and exported API types, and its LLVM emitter has clang-accepted coverage for
+every current `testdata/**/main.yar` entry program, including host-backed `fs`,
+`process`, `env`, `stdio`, and `net` runtime calls. Native paths link a Rust
+runtime archive resolved from `YAR_RUNTIME_ARCHIVE`, a
+`libyar_runtime.a`/`yar_runtime.lib` file next to the `yar` executable, or the
+workspace `target/release` archive after building `crates/yar-runtime`. Cross
+builds require
+`YAR_RUNTIME_ARCHIVE` to point at a runtime archive for the selected target;
+the sibling and workspace runtime archive fallbacks are host-only. The legacy
+embedded C runtime and Go CLI entrypoint have been removed from the shipped
+surface; native builds use the Rust runtime only.
+
 ## File Shape
 
 A valid entry package:

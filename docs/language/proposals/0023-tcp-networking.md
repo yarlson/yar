@@ -149,7 +149,7 @@ None.
 
 ### Runtime impact
 
-- ~400 lines of new C code in `runtime_source.txt`.
+- TCP helper implementations in `crates/yar-runtime`.
 - BSD sockets on POSIX, Winsock2 on Windows.
 - `yar_net_ensure_init()` for one-time Winsock/SIGPIPE setup.
 - Windows builds link `-lws2_32`.
@@ -240,14 +240,15 @@ minimal compiler complexity, following established patterns.
 
 ## 14. Implementation Checklist
 
-- [x] `internal/stdlib/packages/net/net.yar` — Yar source declarations
-- [x] `internal/checker/checker.go` — host intrinsic registration, error names
-- [x] `internal/codegen/llvm.go` — LLVM declarations, intrinsic codegen, error
+- [x] `stdlib/packages/net/net.yar` — Yar source declarations
+- [x] `crates/yar-compiler/src/checker.rs` — host intrinsic registration, error
+      names
+- [x] `crates/yar-compiler/src/codegen.rs` — LLVM declarations, intrinsic codegen, error
       mapping
-- [x] `internal/runtime/runtime_source.txt` — C runtime implementation
-- [x] `internal/compiler/cc.go` — Windows `-lws2_32` linking
+- [x] `crates/yar-runtime/src/net.rs` — Rust runtime implementation
+- [x] `crates/yar-compiler/src/compile.rs` — Windows `-lws2_32` linking
 - [x] `testdata/stdlib_net/main.yar` — integration test fixture
-- [x] `internal/compiler/compiler_test.go` — test function
+- [x] Rust compiler and CLI tests — test function
 - [x] `docs/context/domains/stdlib.md` — net package documentation
 - [x] `docs/context/domains/error-model.md` — net error names
 - [x] `docs/context/platform/toolchain-runtime.md` — net runtime surface

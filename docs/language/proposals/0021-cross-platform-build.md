@@ -5,8 +5,7 @@ Status: accepted
 ## 1. Summary
 
 Add cross-compilation support via `YAR_OS` and `YAR_ARCH` environment variables
-and port the embedded C runtime to support Windows alongside POSIX platforms
-using conditional compilation.
+and support Windows alongside POSIX platforms at the runtime boundary.
 
 The implemented version provides:
 
@@ -16,8 +15,14 @@ The implemented version provides:
   windows/amd64
 - host platform detection as default target
 - cross-compilation validation (prevents running cross-compiled binaries)
-- conditional compilation in the C runtime for Win32 and POSIX APIs
+- target-specific runtime archives for Win32 and POSIX APIs
 - platform-aware executable naming (`.exe` suffix for Windows)
+
+Current implementation note: host builds link the Rust runtime. The
+Rust CLI supports cross builds when `YAR_RUNTIME_ARCHIVE` points at a runtime
+archive for the selected target. The legacy embedded C runtime has been
+removed; Go CLI cross builds are not supported until that wrapper can consume
+target-specific Rust runtime archives.
 
 ## 2. Motivation
 
@@ -92,8 +97,8 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 - cross-compiled binaries cannot be executed by `yar run` or `yar test`
 - the target triple is passed to LLVM IR generation and to `clang` for linking
 - Windows targets produce executables with the `.exe` suffix
-- the C runtime uses `#ifdef _WIN32` conditional compilation to select between
-  Win32 and POSIX implementations of host-backed functions
+- the selected runtime archive must provide host-backed functions for the
+  target platform
 
 ### Target triple mapping
 
@@ -103,7 +108,7 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 | darwin  | arm64 | aarch64-apple-darwin      |
 | linux   | amd64 | x86_64-unknown-linux-gnu  |
 | linux   | arm64 | aarch64-unknown-linux-gnu |
-| windows | amd64 | x86_64-pc-windows-msvc    |
+| windows | amd64 | x86_64-pc-windows-gnu     |
 
 ## 5. Type Rules
 
@@ -193,9 +198,8 @@ environments.
 ## 13. Decision
 
 Accepted and implemented. Cross-compilation uses `YAR_OS` and `YAR_ARCH`
-environment variables with a fixed target triple mapping. The C runtime uses
-conditional compilation to support both Win32 and POSIX APIs from a single
-source file.
+environment variables with a fixed target triple mapping. Native builds link a
+Rust runtime archive for the selected target.
 
 ## 14. Implementation Checklist
 

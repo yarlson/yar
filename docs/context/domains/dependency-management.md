@@ -62,17 +62,18 @@ Local packages shadow dependencies. Dependencies shadow stdlib.
 - `yar fetch` downloads all dependencies from `yar.lock` to the cache.
 - `yar lock` regenerates `yar.lock` from `yar.toml`.
 - `yar update [alias]` re-resolves dependencies and updates `yar.lock`.
+- The Rust CLI under `crates/yar-cli` supports `init`, `add`, `remove`,
+  `fetch`, `lock`, and `update` for local path and git dependencies. The Rust
+  package loader can consume local path dependencies and locked cache paths
+  during package loading.
 
 ## Infrastructure
 
-- `internal/deps/manifest.go` parses and writes `yar.toml`.
-- `internal/deps/lockfile.go` parses and writes `yar.lock`.
-- `internal/deps/fetch.go` handles git cloning, caching, and hash computation.
-- `internal/deps/resolve.go` walks transitive dependencies and detects conflicts.
-- `internal/deps/index.go` provides the `Index` type consumed by
-  `internal/compiler/packages.go` during package loading.
-- `internal/compiler/packages.go` integrates the dependency index into
-  `packageLoader` via the `depIndex` field and `loadDepIndex()` function.
+- `crates/yar-compiler/src/manifest.rs` is the Rust manifest, lock, cache,
+  fetch, hash, and recursive dependency resolver implementation used by the
+  Rust CLI and package loader.
+- `crates/yar-compiler/src/package.rs` builds a Rust dependency index from
+  local path dependencies and locked cache paths during package loading.
 
 ## Constraints
 

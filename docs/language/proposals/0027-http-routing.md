@@ -248,7 +248,7 @@ added later without changing route matching.
 
 ## 10. Implementation Notes
 
-The router should be pure Yar code in `internal/stdlib/packages/http/http.yar`.
+The router should be pure Yar code in `stdlib/packages/http/http.yar`.
 
 The simplest acceptable implementation stores routes in registration order and
 performs a linear scan in `handle`. That is enough for the current stdlib scale

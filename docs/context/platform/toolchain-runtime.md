@@ -3,17 +3,45 @@
 ## External Dependency
 
 - Native builds depend on `clang` being available on `PATH`.
-- The Go compiler emits textual LLVM IR and delegates machine-code generation
+- The Rust compiler emits textual LLVM IR and delegates machine-code generation
   and linking to `clang`.
-- The `CC` environment variable overrides the default compiler command;
-  `findCC()` in `internal/compiler/cc.go` checks `CC` first, then falls back to
-  `clang`.
+- `crates/yar-compiler` is the Rust 2024 compiler rewrite path. Its current
+  implemented slice covers token, diagnostic, AST, lexer, parser,
+  package-graph loading/lowering, monomorphization, checker metadata, and a
+  core function-body checker subset including ordinary calls, method calls,
+  function literals, function-value calls, closure capture restrictions,
+  taskgroups/spawn, typed channel builtins, interface calls/coercion, enum match
+  validation, single-field enum positional constructors, loop
+  `break`/`continue`, noreturn call flow, field/index/slice access, typed
+  aggregate literals, map lookup propagation, and local `or` handling. Native
+  build orchestration is available through `crates/yar-cli`, and GoReleaser
+  release artifacts package that Rust CLI. `crates/yar-cli` provides `check`,
+  `emit-ir`, `build`, host `run`, host `test`, `init`, and dependency
+  manifest, lock, fetch, and update commands. The Rust LLVM emitter currently
+  has clang-accepted coverage for
+  every checked-in `testdata/**/main.yar` entry program. That coverage includes
+  scalar/control-flow, strings, character literals, fixed arrays, structs,
+  slice descriptors/literals/indexing/slicing/append, map literals,
+  lookup/assignment, `len`, `has`, `delete`, `keys`, function literals,
+  function values, closure calls, concrete method calls, interface calls,
+  taskgroups/spawn wrappers for user-function and function-value calls, channel
+  builtin runtime calls, direct `fs`, `process`, `env`, `stdio`, and `net`
+  host-intrinsic runtime calls, captured closure environments, pointer
+  operations, enum match lowering with payload constructors, and
+  stdlib-internal builtins.
+- The `CC` environment variable overrides the default compiler command; the
+  Rust CLI checks `CC` first, then falls back to `clang`.
 - When the compiler is not found, the error message names the missing command
   and suggests installing clang or setting `CC`.
 - On Windows, temporary executables produced by `Run` and `RunPath` use a
   `.exe` suffix so the OS can execute them.
 - The default output name for `build` is `a.out` on Unix and `a.exe` on
   Windows.
+- Native build paths link the Rust runtime. The Rust CLI resolves a
+  runtime archive from `YAR_RUNTIME_ARCHIVE` when set, from a
+  `libyar_runtime.a`/`yar_runtime.lib` file next to the `yar` executable when
+  present, or from the workspace `target/release` archive after building
+  `crates/yar-runtime`.
 
 ## Cross-Compilation
 
@@ -24,19 +52,35 @@
   `target triple` directive.
 - Supported targets: `darwin/amd64`, `darwin/arm64`, `linux/amd64`,
   `linux/arm64`, `windows/amd64`.
+- `windows/amd64` maps to `x86_64-pc-windows-gnu`, matching the Windows Rust
+  release artifact and packaged `libyar_runtime.a`.
 - Cross-compilation requires a `clang` installation that can target the
   requested platform, including the appropriate sysroot and system libraries.
+- Rust CLI cross builds require `YAR_RUNTIME_ARCHIVE` to point at a static
+  runtime archive for the selected target. Without an explicit archive, the
+  Rust CLI only uses sibling executable and workspace runtime archive fallbacks
+  for host builds.
 - `yar run` rejects cross-compilation targets since the built binary cannot
   execute on the host.
 - Non-Windows builds that use the runtime concurrency helpers also link with
   `-pthread`.
 
-## Embedded Runtime
+## Runtime Implementations
 
-- The runtime implementation lives in `internal/runtime/runtime_source.txt` and
-  is embedded into the Go binary with `go:embed`.
-- The build step materializes that source into a temporary `runtime.c` file
-  rather than requiring cgo or a checked-in compiled artifact.
+- `crates/yar-runtime` is the Rust 2024 runtime crate. It builds as an `rlib`
+  for tests and as a `staticlib` for the native link boundary.
+- The Rust crate exports C ABI symbols with the existing `yar_*` names for the
+  helpers it has ported. The ported surface currently includes low-level I/O,
+  trap, allocation, bounds-checking, string conversion / concatenation, map,
+  string-builder, taskgroup, channel, argv capture, environment lookup,
+  child-process execution, and filesystem and TCP networking helpers.
+- Host `build`, `run`, and `test` commands can build `crates/yar-runtime` with
+  Cargo and link the generated IR against `target/release/libyar_runtime.a`
+  when no explicit or sibling runtime archive is available.
+- `YAR_RUNTIME_ARCHIVE` points the Rust CLI at a prebuilt runtime static
+  archive. This is the packaging hook for released Rust CLI archives; if it is
+  unset, an archive next to the `yar` executable is used before falling back to
+  the source workspace build path.
 - The runtime uses `#ifdef _WIN32` conditionals to support both POSIX and
   Windows platforms from a single source file. `clang` defines `_WIN32`
   automatically when targeting a Windows triple.

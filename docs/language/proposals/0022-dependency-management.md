@@ -160,18 +160,18 @@ packages.
 
 None.
 
-### New package: `internal/deps/`
+### Dependency implementation
 
-- `manifest.go` — parse and write `yar.toml`
-- `lockfile.go` — parse and write `yar.lock`
-- `fetch.go` — git clone to cache, SHA-256 hash computation, verification
-- `resolve.go` — transitive resolution, conflict detection
-- `index.go` — alias-to-path lookup for the package loader
+- `crates/yar-compiler/src/manifest.rs` — parse and write `yar.toml`
+- `crates/yar-compiler/src/manifest.rs` — parse and write `yar.lock`
+- `crates/yar-compiler/src/manifest.rs` — git clone to cache, SHA-256 hash
+  computation, verification, transitive resolution, and conflict detection
+- `crates/yar-compiler/src/package.rs` — alias-to-path lookup for the package
+  loader
 
 ### External dependency
 
-- `github.com/BurntSushi/toml` for TOML parsing (first third-party Go
-  dependency in the project).
+- `toml` for TOML parsing.
 
 ## 8. Interactions
 
@@ -245,7 +245,7 @@ hosts.
 | Lowering/codegen complexity | None                                                                  |
 | Compiler loader complexity  | Low — one new resolution step between local and stdlib                |
 | CLI complexity              | Medium — six new commands                                             |
-| New package complexity      | Medium — `internal/deps/` with five source files                      |
+| Dependency implementation   | Medium — manifest, lockfile, fetch, resolve, and package-index logic  |
 | External dependency         | Low — one stable TOML parsing library                                 |
 | Runtime complexity          | None                                                                  |
 | Diagnostics complexity      | Low — error messages for missing lock files, conflicts                |
@@ -272,14 +272,15 @@ in the package loader.
 
 ## 14. Implementation Checklist
 
-- [x] `internal/deps/manifest.go` — yar.toml parsing
-- [x] `internal/deps/lockfile.go` — yar.lock parsing and writing
-- [x] `internal/deps/fetch.go` — git clone, caching, hashing
-- [x] `internal/deps/resolve.go` — transitive resolution, conflict detection
-- [x] `internal/deps/index.go` — alias-to-path index
-- [x] compiler integration in `internal/compiler/packages.go`
-- [x] CLI commands in `cmd/yar/main.go`
-- [x] unit tests for `internal/deps/`
+- [x] `crates/yar-compiler/src/manifest.rs` — yar.toml parsing
+- [x] `crates/yar-compiler/src/manifest.rs` — yar.lock parsing and writing
+- [x] `crates/yar-compiler/src/manifest.rs` — git clone, caching, hashing
+- [x] `crates/yar-compiler/src/manifest.rs` — transitive resolution, conflict
+      detection
+- [x] `crates/yar-compiler/src/package.rs` — alias-to-path index and compiler
+      integration
+- [x] CLI commands in `crates/yar-cli/src/main.rs`
+- [x] unit tests in `crates/yar-compiler`
 - [x] integration test with local path dependency fixture
 - [x] `docs/context/` updates
 - [x] `docs/YAR.md` update

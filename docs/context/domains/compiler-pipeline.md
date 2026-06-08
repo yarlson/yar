@@ -2,25 +2,24 @@
 
 ## Responsibility Split
 
-- `cmd/yar` is thin CLI wiring. It parses command names and basic arguments,
-  compiles an entry file or package directory, formats diagnostics, and sets a
-  timeout for `build`, `run`, and `test`.
-- `internal/token` defines the token type set, token values, and source
-  positions used by the lexer, parser, and downstream stages.
-- `internal/diag` defines the diagnostic type and accumulator used to collect
-  source-positioned parse and semantic problems.
-- `internal/ast` defines all AST node types plus the `Program`, `Package`, and
-  `PackageGraph` containers used by single-file and package-graph compilation.
-- `internal/compiler` is the orchestration boundary. It exposes:
-  - `Compile(src)` for in-memory single-file parse, semantic check, and IR generation used by focused tests
-  - `CompilePath(path)` for entry-path resolution, package loading, graph lowering, semantic check, and IR generation from disk
-  - `Build(ctx, src, outputPath)` / `Run(ctx, src)` for in-memory single-file build helpers
-  - `BuildPath(ctx, path, outputPath)` / `RunPath(ctx, path)` for path-based package builds from disk
-  - `CompileTestPath(path)` / `TestPath(ctx, path)` for test discovery, runner generation, and test execution from `_test.yar` files
-- `internal/lexer` tokenizes source text, including control-flow, aggregate,
+- `crates/yar-cli` is the shipped CLI wiring. It parses command names and basic
+  arguments, compiles an entry file or package directory through
+  `crates/yar-compiler`, formats diagnostics, resolves runtime archives, and
+  sets a timeout for `build`, `run`, and `test`.
+- `crates/yar-compiler/src/token.rs` defines the token type set, token values,
+  and source positions used by the lexer, parser, and downstream stages.
+- `crates/yar-compiler/src/diag.rs` defines the diagnostic type and accumulator
+  used to collect source-positioned parse and semantic problems.
+- `crates/yar-compiler/src/ast.rs` defines all AST node types plus the
+  `Program`, `Package`, and `PackageGraph` containers used by single-file and
+  package-graph compilation.
+- `crates/yar-compiler/src/compile.rs` is the orchestration boundary. It
+  exposes `compile_source`, `compile_path`, `compile_test_path`, test discovery,
+  and test runner generation.
+- `crates/yar-compiler/src/lexer.rs` tokenizes source text, including control-flow, aggregate,
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.
-- `internal/parser` builds file ASTs, including top-level `struct`,
+- `crates/yar-compiler/src/parser.rs` builds file ASTs, including top-level `struct`,
   `interface`, `enum`, `fn`, and receiver-style method declarations, optional
   `pub` export markers, explicit generic type parameter and type argument
   syntax, `import` declarations, function-literal and function-type syntax,
@@ -28,19 +27,20 @@
   constructors, pointer types, `nil`, index and slice postfix forms,
   generalized lvalue forms such as `(*ptr).field`, method-call selector
   syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
-- `internal/compiler/packages.go` resolves the package graph. It loads local
+- `crates/yar-compiler/src/package.rs` resolves the package graph. It loads local
   `.yar` files from disk, consults the dependency index built from `yar.toml`
   and `yar.lock` for external packages, falls back to embedded stdlib packages
-  when both local and dependency paths are missing, validates package names and
-  import cycles, and lowers the graph into one combined `ast.Program` by
-  rewriting package-local and imported symbols to canonical names.
-- `internal/deps` provides dependency management infrastructure including
+  when both local and dependency paths are missing, validates package names, and
+  checks import cycles.
+- `crates/yar-compiler/src/manifest.rs` provides dependency management infrastructure including
   `yar.toml` and `yar.lock` parsing, git-based fetching, content-addressed
   caching, transitive resolution with conflict detection, and the alias-to-path
   `Index` consumed by the package loader.
-- `internal/compiler/generics.go` monomorphizes explicit generic struct and
+- `crates/yar-compiler/src/lower.rs` lowers the package graph into one combined
+  `Program` by rewriting package-local and imported symbols to canonical names.
+- `crates/yar-compiler/src/mono.rs` monomorphizes explicit generic struct and
   function instantiations into ordinary declarations before checking.
-- `internal/checker` validates struct, interface, enum, function, method, and
+- `crates/yar-compiler/src/checker.rs` validates struct, interface, enum, function, method, and
   function literal shape, tracks scopes, resolves builtin and rewritten user
   function signatures, resolves user-defined, enum, array, slice, map,
   pointer, function, and interface types, assigns expression types, records
@@ -50,7 +50,7 @@
   and assignment-target rules, validates slice indexing/slicing and `append`,
   validates map key type restrictions, indexing, and `keys`, validates
   error-sugar legality, and records ordered error names.
-- `internal/codegen` lowers the checked AST into LLVM IR, expanding concrete
+- `crates/yar-compiler/src/codegen.rs` lowers the checked AST into LLVM IR, expanding concrete
   method calls into ordinary function calls with an explicit receiver argument,
   lowering interface values to boxed-data-plus-method-table pairs and
   interface-method calls to indirect dispatch through those tables, lowering
@@ -65,17 +65,15 @@
   native `main` wrapper around `yar.main`, initializing the runtime GC stack
   boundary there, and declaring the shared runtime allocation helpers used by
   heap-backed features.
-- `internal/runtime` exposes embedded runtime C source to the build step,
-  including builtin I/O, panic behavior, string operations, slice bounds
-  checks, map operations and key enumeration, host filesystem and process
-  shims, and the shared allocation / conservative-GC boundary.
-- `internal/stdlib` embeds the standard library written in Yar and provides
-  lookup functions for the package loader.
+- `stdlib/packages` contains the standard library written in Yar. The Rust
+  package loader embeds those files and uses them as the final fallback after
+  local and dependency imports.
 
 ## Stage Contracts
 
 - `Compile` returns a `Unit` only when parse and semantic checking succeed.
-- Diagnostics stop code generation but do not count as Go errors.
+- Diagnostics stop code generation but are reported as Yar diagnostics rather
+  than host-language errors.
 - `Compile` works on one already-loaded source string. `CompilePath` is the
   path-based entrypoint that supports packages, imports, stdlib fallback, and
   export validation.
@@ -116,12 +114,11 @@
 - Pointer-taking of locals and parameters is implemented conservatively by
   storing local slots in runtime-managed storage so returned or retained
   addresses stay valid without a separate escape-analysis pass.
-- Native linking happens after IR generation by writing `main.ll` and
-  `runtime.c` into a temporary directory and invoking `clang`.
+- Native linking happens after IR generation by writing `main.ll`, selecting a
+  Rust runtime archive, and invoking `clang`.
 - When a cross-compilation target is specified via `YAR_OS`/`YAR_ARCH`, the
   generated IR includes a `target triple` directive and `clang` receives a
-  `--target=<triple>` flag. The embedded C runtime uses `#ifdef _WIN32`
-  conditionals to compile for both POSIX and Windows targets.
+  `--target=<triple>` flag. Cross builds require `YAR_RUNTIME_ARCHIVE`.
 
 ## Generated Entry Boundary
 

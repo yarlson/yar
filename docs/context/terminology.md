@@ -12,8 +12,8 @@ program — The lowered, checked compilation unit produced from the entry packag
 graph rooted at `package main`.
 
 package graph — The directed acyclic graph of packages rooted at the entry
-`package main`, resolved by `internal/compiler` before lowering into a single
-checked program.
+`package main`, resolved by `crates/yar-compiler` before lowering into a
+single checked program.
 
 canonical name — A lowered declaration name derived from the package path or
 package name, used to merge multiple packages into one checked AST without
@@ -75,8 +75,8 @@ unhandled error — An errorable `main` result that reaches the generated native
 wrapper, which prints an error message and exits with code `1`.
 
 stdlib — The embedded standard library of Yar packages (`strings`, `utf8`,
-`conv`, `sort`, `path`, `fs`, `process`, `env`, `stdio`, `testing`) compiled
-through the same pipeline as user code.
+`conv`, `sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`,
+`testing`) compiled through the same pipeline as user code.
 
 internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to
 stdlib packages and rejected in user code by the package lowerer.

@@ -716,12 +716,12 @@ data on which patterns are common.
 
 This section documents every existing builtin and stdlib function, whether it
 is safe under concurrent execution, and what runtime changes are required. The
-audit covers the C runtime (`runtime_source.txt`), all host intrinsics, and
-all stdlib packages.
+audit covers `crates/yar-runtime`, all host intrinsics, and all stdlib
+packages.
 
 ### Runtime global state: mandatory changes
 
-The C runtime has six global variables that control the garbage collector:
+The runtime has six global variables that control the garbage collector:
 
 - `yar_gc_blocks` — linked list of all GC-managed allocations
 - `yar_gc_bytes` — total allocated bytes
@@ -1286,7 +1286,7 @@ its own inner `taskgroup`.
 
 ### Timezone thread safety: parse TZif files in Yar runtime
 
-**Decision**: implement a TZif file parser in the C runtime that reads the
+**Decision**: implement a TZif file parser in the runtime that reads the
 system timezone database directly, producing an immutable timezone offset table.
 Do not use `setenv`/`tzset`/`localtime_r` for named timezone conversion.
 
@@ -1466,43 +1466,45 @@ This section tracks the implementation status against the original plan.
 
 ### Phase 1: Runtime foundation (no language changes)
 
-- [ ] `internal/runtime/yar_context_amd64.S` — amd64 context switch assembly
-- [ ] `internal/runtime/yar_context_arm64.S` — arm64 context switch assembly
-- [ ] `internal/runtime/yar_context.c` — context init, setjmp/longjmp fallback
-- [ ] `internal/runtime/yar_scheduler.c` — thread pool, run queues, work
+- [ ] `crates/yar-runtime/src/` — amd64 context switch assembly
+- [ ] `crates/yar-runtime/src/` — arm64 context switch assembly
+- [ ] `crates/yar-runtime/src/` — context init, setjmp/longjmp fallback
+- [ ] `crates/yar-runtime/src/` — thread pool, run queues, work
       stealing, task lifecycle
-- [ ] `internal/runtime/yar_netpoll_epoll.c` — Linux network poller
-- [ ] `internal/runtime/yar_netpoll_kqueue.c` — macOS/BSD network poller
-- [ ] `internal/runtime/yar_netpoll_iocp.c` — Windows network poller
-- [ ] `internal/runtime/yar_iopool.c` — blocking I/O thread pool
-- [ ] `internal/runtime/yar_channel.c` — channel implementation
-- [ ] `internal/runtime/yar_tz.c` — TZif parser, thread-safe timezone
+- [ ] `crates/yar-runtime/src/` — Linux network poller
+- [ ] `crates/yar-runtime/src/` — macOS/BSD network poller
+- [ ] `crates/yar-runtime/src/` — Windows network poller
+- [ ] `crates/yar-runtime/src/` — blocking I/O thread pool
+- [ ] `crates/yar-runtime/src/concurrency.rs` — channel implementation
+- [ ] `crates/yar-runtime/src/` — TZif parser, thread-safe timezone
       conversion (replaces setenv/tzset in time.date_in)
-- [ ] `internal/runtime/runtime_source.txt` — GC multi-stack scanning,
+- [ ] `crates/yar-runtime/src/memory.rs` — GC multi-stack scanning,
       stop-the-world barrier, task stack registration
-- [ ] `internal/runtime/runtime_source.txt` — modify yar*net*\* for non-blocking
+- [ ] `crates/yar-runtime/src/net.rs` — modify yar*net*\* for non-blocking
       mode with poller integration
-- [ ] `internal/runtime/runtime_source.txt` — modify yar*fs*_, yar*process*_
-      for I/O thread pool submission
+- [ ] `crates/yar-runtime/src/filesystem.rs` and
+      `crates/yar-runtime/src/host.rs` — modify yar*fs*_, yar*process*_ for
+      I/O thread pool submission
 
 ### Phase 2: Language surface
 
-- [x] `internal/token/token.go` — new keywords: `taskgroup`, `spawn`, `chan`
-- [x] `internal/ast/ast.go` — new AST nodes: `TaskgroupExpr`, `SpawnStmt`,
+- [x] `crates/yar-compiler/src/token.rs` — new keywords: `taskgroup`, `spawn`,
+      `chan`
+- [x] `crates/yar-compiler/src/ast.rs` — new AST nodes: `TaskgroupExpr`, `SpawnStmt`,
       `ChanType`
-- [x] `internal/parser/parser.go` — parse taskgroup, spawn, chan type
-- [x] `internal/checker/checker.go` — taskgroup type rules, spawn validation,
+- [x] `crates/yar-compiler/src/parser.rs` — parse taskgroup, spawn, chan type
+- [x] `crates/yar-compiler/src/checker.rs` — taskgroup type rules, spawn validation,
       channel builtin registration, `chan[T]` type
-- [x] `internal/codegen/llvm.go` — taskgroup lowering, channel handle codegen,
+- [x] `crates/yar-compiler/src/codegen.rs` — taskgroup lowering, channel handle codegen,
       spawn descriptor construction, task function wrapper generation
 
 ### Phase 3: Race detector
 
-- [ ] `internal/codegen/llvm.go` — conditional TSan instrumentation when
+- [ ] `crates/yar-compiler/src/codegen.rs` — conditional TSan instrumentation when
       `-race` flag is active
-- [ ] `internal/compiler/compiler.go` — `-race` flag handling, TSan runtime
+- [ ] `crates/yar-compiler/src/compile.rs` — `-race` flag handling, TSan runtime
       library linking
-- [ ] `internal/runtime/yar_tsan.c` — TSan annotation helpers for GC barriers,
+- [ ] `crates/yar-runtime/src/` — TSan annotation helpers for GC barriers,
       channel operations, task creation/join
 
 ### Phase 4: Tests and documentation
@@ -1512,7 +1514,7 @@ This section tracks the implementation status against the original plan.
 - [x] `testdata/concurrency_errors/main.yar` — error propagation test
 - [ ] `testdata/concurrency_net/main.yar` — concurrent TCP server test
 - [ ] `testdata/concurrency_race/main.yar` — race detector validation
-- [x] `internal/compiler/compiler_test.go` — concurrency test functions
+- [x] Rust compiler and CLI tests — concurrency test functions
 - [x] `docs/context/domains/concurrency.md` — concurrency documentation
 - [x] `docs/context/domains/language-slice.md` — updated with taskgroup, spawn,
       chan

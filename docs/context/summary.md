@@ -2,32 +2,24 @@
 
 ## What
 
-`yar` is a single-project Go compiler CLI for a small source language. It reads
-an entry `.yar` file or package directory, resolves a package graph rooted
-there, lowers that graph into one checked program, emits textual LLVM IR, and
-can invoke `clang` with an embedded runtime to produce or run a native
-executable.
+`yar` is a Rust 2024 compiler CLI for a small source language. The shipped
+Rust CLI reads an entry `.yar` file or package
+directory, resolves a package graph rooted there, lowers that graph into one
+checked program, emits textual LLVM IR, and invokes `clang` with the Rust
+runtime static library to produce or run a native executable.
 
 ## Architecture
 
-- `cmd/yar` exposes the `check`, `emit-ir`, `build`, `run`, `test`, `init`, `add`, `remove`, `fetch`, `lock`, and `update` commands.
-- `internal/token` defines the token set and source positions shared across stages.
-- `internal/diag` defines source-positioned diagnostics.
-- `internal/ast` defines the file AST plus the `Package` and `PackageGraph` structures used during package loading and lowering.
-- `internal/compiler` resolves entry paths, loads local packages, consults the dependency index for external packages declared in `yar.toml`, falls back to embedded stdlib packages when local and dependency imports are missing, validates the import graph, rewrites package-local and imported symbols to canonical names, monomorphizes explicit generic instantiations, and orchestrates checking, IR generation, native linking, and execution.
-- `internal/deps` provides git-based dependency management: `yar.toml` manifest parsing, `yar.lock` lock file generation, git clone-based fetching to a global cache, SHA-256 content hashing, transitive dependency resolution with conflict detection, and an alias-to-path index consumed by the package loader.
-- `internal/lexer` tokenizes source text into a token stream with lexical diagnostics.
-- `internal/parser` builds file ASTs, including imports, generic type parameters and explicit type arguments, structs, interfaces, enums, methods, function literals and function types, loops, `match`, aggregate literals, pointers, `taskgroup` expressions, `spawn` statements, channel types, and error-handling sugar.
-- `internal/checker` owns semantic validation, scope tracking, struct, interface, and enum metadata, function, method, interface-method, and closure signatures, lexical capture analysis, builtin and host-intrinsic signatures, integer literal coercion, taskgroup/spawn validation, channel builtin typing, and program-wide error-code assignment.
-- `internal/codegen` lowers the checked AST into textual LLVM IR, expanding concrete method calls into ordinary function calls with an explicit receiver argument, lowering interface values to boxed-data-plus-method-table pairs with dynamic dispatch, lowering function values to code-pointer-plus-environment closures, expanding error sugar, lowering `taskgroup` and channel operations to runtime helpers, emitting task wrapper functions for spawned calls, lowering enum `match`, short-circuit boolean logic, aggregate values, loops, host-backed stdlib calls, the generated native `main` wrapper, and the shared runtime allocation and GC helpers.
-- `internal/runtime` embeds the C runtime source that provides builtin I/O, panic behavior, string operations, map helpers, taskgroup and channel primitives, host filesystem and process calls, environment lookup, stderr output, argv capture, and the runtime-managed allocation plus conservative garbage-collection boundary used during linking.
-- `internal/stdlib` embeds the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and `testing`) and provides lookup functions for the package loader.
+- `crates/yar-cli` exposes the `check`, `emit-ir`, `build`, `run`, `test`, `init`, `add`, `remove`, `fetch`, `lock`, and `update` commands.
+- `crates/yar-compiler` is the Rust 2024 compiler crate. It defines token, diagnostic, AST, lexer, parser, package-graph loading, package-lowering, monomorphization, semantic checking, dependency manifests/locks, and LLVM emission. Its package loader resolves entry files/directories, local imports, dependency index entries, stdlib fallback, package names, and import cycles; its lowerer enforces builtin shadowing and package export visibility and rewrites package graphs into one canonical program with package-qualified declarations and imported function/type/enum-case references; its monomorphizer clones explicit generic struct and function instantiations into ordinary declarations and reports local generic call diagnostics with source-level names; its checker validates declarations and function bodies across the checked-in `testdata` corpus. Rust codegen emits clang-accepted LLVM for every checked-in `testdata/**/main.yar` entry program, including host-intrinsic stdlib calls, closures, interfaces, taskgroups, channels, pointers, enums, error handling, and the native main wrapper. `crates/yar-cli` provides the shipped Rust CLI for `check`, `emit-ir`, `build`, host `run`, host `test`, `init`, dependency manifest, lock, fetch, and update commands, and dependency-index package loading; its native build path supports cross targets when `YAR_RUNTIME_ARCHIVE` points at a target runtime archive, while sibling executable and workspace runtime archive fallbacks are host-only; release artifacts package the Rust CLI with a sibling runtime archive.
+- `crates/yar-runtime` is the Rust 2024 runtime crate. It currently exports and tests C ABI-compatible low-level helpers, map and string-builder helpers, taskgroup and channel helpers, argv capture, environment lookup, child-process execution, filesystem helpers, and TCP networking helpers. The shipped Rust CLI links this runtime; the legacy embedded C runtime has been removed.
+- `stdlib/packages` contains the standard library written in Yar (`strings`, `utf8`, `conv`, `sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and `testing`) and is embedded by the Rust package loader.
 
 ## Core Flow
 
 - `check` resolves an entry file or package directory, runs `compiler.CompilePath`, and prints formatted diagnostics to stderr.
 - `emit-ir` runs the same package loading, lowering, checking, and code-generation pipeline and writes LLVM IR to stdout.
-- `build` compiles the entry package graph, writes IR and runtime C source into a temporary directory, and invokes `clang` to produce a native binary.
+- `build` compiles the entry package graph, writes IR and a selected runtime input into a temporary directory, and invokes `clang` to produce a native binary.
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
 - `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
 - `init` creates a `yar.toml` manifest in the current directory.
@@ -47,13 +39,13 @@ executable.
 - String operations include `len(str)`, `str == str`, `str != str`, `str + str`, `s[i]`, `s[i:j]`, `s[i:]`, and `s[:j]`.
 - Builtins are fixed in the compiler and runtime: `print(str)`, `panic(str)`, `len(array-or-slice-or-map-or-str)`, `append(slice, value)`, `has(map, key)`, `delete(map, key)`, `keys(map)`, `to_str(i32-or-i64-or-bool-or-str-or-error)`, string builder builtins `sb_new()`, `sb_write(handle, str)`, `sb_string(handle)`, and channel builtins `chan_new[T](capacity)`, `chan_send(ch, value)`, `chan_recv(ch)`, and `chan_close(ch)`. Three additional builtins (`chr`, `i32_to_i64`, `i64_to_i32`) are internal to the standard library and not available to user code.
 - The embedded stdlib is imported like normal packages. `sort` provides in-place ascending helpers for `[]str`, `[]i32`, and `[]i64`; `path` provides pure path helpers; `fs` exposes host-backed text file and directory operations plus streaming file handles with explicit `error` behavior; `io` defines stream interfaces and chunked copy/read helpers; `process` exposes the raw host argv plus child-process execution; `env` exposes environment lookup; `stdio` provides stderr output; `net` provides TCP networking primitives (listen, accept, connect, read, write, close, address info, timeouts, DNS resolution) with opaque handles, blocking I/O, and stream wrapper types; `http` provides a minimal HTTP/1.1 server wrapper over `net`; and `testing` provides test assertions using generic functions with `to_str`-based failure messages.
-- The executable boundary is native code produced by `clang`; the Go code does not interpret programs directly.
+- The executable boundary is native code produced by `clang`; the compiler does not interpret programs directly.
 
 ## Capabilities
 
 - Parse and type-check source programs and surface source-positioned diagnostics.
 - Emit textual LLVM IR without building a native executable.
-- Build and run native executables backed by an embedded runtime C source.
+- Build and run native executables backed by the Rust runtime static library.
 - Propagate errors with direct `return` or postfix `?`.
 - Handle errors locally with `or |err| { ... }`.
 - Run structured concurrent tasks with `taskgroup` and communicate through
@@ -81,12 +73,12 @@ executable.
 
 ## Tech Stack
 
-- Go 1.26 module with a single CLI entrypoint
+- Rust 2024 workspace containing the shipped CLI, compiler rewrite, and runtime crates
 - Custom lexer, parser, checker, and LLVM IR generator
 - External `clang` invocation for compile and link, overridable via `CC`; cross-compilation targets specified via `YAR_OS` and `YAR_ARCH` environment variables
-- Embedded C runtime source for builtin functions, host integration, and shared allocation / garbage-collection helpers, with `#ifdef _WIN32` conditionals for Windows platform support
+- Rust runtime static library for native linking
 - Embedded Yar standard library compiled through the same frontend as user code
-- Go tests that validate compilation, executable output, panic behavior, unhandled errors, package imports, strings, maps, slices, pointers, enums, stdlib packages, host filesystem and process behavior, and toolchain/runtime boundaries
-- GitHub Actions CI for linting, Linux/macOS race tests, and release packaging
+- Rust tests that validate compiler slices and the runtime crate's exported ABI helpers, plus Rust CLI verifier scripts that native-build and run checked-in `testdata/**/main.yar` fixtures
+- GitHub Actions CI for formatting, linting, Linux/macOS tests, and release packaging
   dry runs
 - GoReleaser-based GitHub Release CD for version tags

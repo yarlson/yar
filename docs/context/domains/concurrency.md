@@ -52,8 +52,8 @@
 
 - The current implementation uses native POSIX threads, not the M:N scheduler
   explored in the original proposal.
-- Taskgroup and channel helpers live in `internal/runtime/runtime_source.txt`
-  and are linked into every native build.
+- Taskgroup and channel helpers live in `crates/yar-runtime` for native build
+  paths.
 - Non-Windows builds pass `-pthread` during linking.
 - Windows currently has runtime stubs that fail with a clear
   "concurrency is not supported on windows yet" runtime error.

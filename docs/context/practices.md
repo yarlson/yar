@@ -1,11 +1,12 @@
 # Practices
 
-- The repository is organized as a single-project Go module with one
-  user-facing runtime process: the `yar` CLI.
+- The repository is organized around a Rust 2024 `yar` CLI and Rust compiler
+  crates.
 - Compilation is staged as package loading, package-graph lowering, semantic
   checking, LLVM IR generation, and optional native linking.
 - Parse and semantic failures are returned as diagnostics; infrastructure
-  failures such as file I/O or `clang` execution are returned as Go errors.
+  failures such as file I/O or `clang` execution are returned as host-language
+  errors.
 - Entry programs must declare `package main`.
 - A user-defined `main` function is required, and it must return `i32` or
   `!i32`.
@@ -82,8 +83,7 @@
   accesses their functionality through the `conv` stdlib package.
 - Map indexing returns an errorable value and uses `error.MissingKey` when the
   key is absent. `keys(map)` returns a snapshot slice of the current keys.
-- The runtime C source is embedded in the Go binary and materialized into a
-  temporary file during native builds.
+- Native builds link the Rust runtime archive from `crates/yar-runtime`.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
   storage, and other heap-backed features. The current runtime reclaims
   unreachable heap-backed objects with a conservative collector. Allocation

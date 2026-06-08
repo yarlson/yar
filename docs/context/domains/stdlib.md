@@ -3,8 +3,8 @@
 ## Design
 
 - The standard library is written in Yar, not C or Go.
-- Stdlib packages are embedded into the Go compiler binary using `go:embed` via
-  the `internal/stdlib` package.
+- Stdlib packages are embedded into the Rust compiler with `include_str!` from
+  `crates/yar-compiler/src/package.rs`.
 - Stdlib packages are imported with bare paths like any user package:
   `import "strings"`.
 - Resolution order is local packages first, embedded stdlib second. A local
@@ -18,12 +18,11 @@
 
 ## Infrastructure
 
-- `internal/stdlib/stdlib.go` provides `Has`, `ReadDir`, and `ReadFile` for the
-  package loader.
-- `internal/stdlib/packages/<pkg>/<file>.yar` is the canonical location for
+- `crates/yar-compiler/src/package.rs` provides the stdlib lookup table.
+- `stdlib/packages/<pkg>/<file>.yar` is the canonical location for
   stdlib source files.
-- `internal/compiler/packages.go` calls `loadStdlibPackage` as a fallback when
-  `os.ReadDir` fails with `os.ErrNotExist` for an import path.
+- The Rust package loader calls `read_stdlib_package` as a fallback when a
+  local or dependency import path is absent.
 - Both local and stdlib packages share the same import-resolution path.
 - Stdlib packages can import other stdlib packages.
 - Stdlib packages may use the internal builtins `chr`, `i32_to_i64`, and
