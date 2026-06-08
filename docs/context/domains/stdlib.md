@@ -2,7 +2,7 @@
 
 ## Design
 
-- The standard library is written in Yar, not C or Go.
+- The standard library is written in Yar, not host-language code.
 - Stdlib packages are embedded into the Rust compiler with `include_str!` from
   `crates/yar-compiler/src/package.rs`.
 - Stdlib packages are imported with bare paths like any user package:

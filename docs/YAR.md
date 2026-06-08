@@ -28,9 +28,8 @@ runtime archive resolved from `YAR_RUNTIME_ARCHIVE`, a
 workspace `target/release` archive after building `crates/yar-runtime`. Cross
 builds require
 `YAR_RUNTIME_ARCHIVE` to point at a runtime archive for the selected target;
-the sibling and workspace runtime archive fallbacks are host-only. The legacy
-embedded C runtime and Go CLI entrypoint have been removed from the shipped
-surface; native builds use the Rust runtime only.
+the sibling and workspace runtime archive fallbacks are host-only. Native builds
+use the Rust runtime only.
 
 ## File Shape
 

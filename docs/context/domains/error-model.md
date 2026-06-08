@@ -105,6 +105,6 @@
 - If the wrapper sees an unknown code, it prints `unhandled error` followed by
   a newline and exits with code `1`.
 - Unhandled-error messages are emitted through the runtime `print` path, so
-  they currently go to stdout.
+  they are currently written to stdout.
 - `panic(str)` writes the message to stderr, flushes stderr, and exits with
   code `1`.

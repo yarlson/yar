@@ -18,11 +18,9 @@ The implemented version provides:
 - target-specific runtime archives for Win32 and POSIX APIs
 - platform-aware executable naming (`.exe` suffix for Windows)
 
-Current implementation note: host builds link the Rust runtime. The
-Rust CLI supports cross builds when `YAR_RUNTIME_ARCHIVE` points at a runtime
-archive for the selected target. The legacy embedded C runtime has been
-removed; Go CLI cross builds are not supported until that wrapper can consume
-target-specific Rust runtime archives.
+Current implementation note: host builds link the Rust runtime. The Rust CLI
+supports cross builds when `YAR_RUNTIME_ARCHIVE` points at a runtime archive for
+the selected target. The legacy embedded C runtime has been removed.
 
 ## 2. Motivation
 
@@ -37,8 +35,7 @@ Cross-compilation support requires two things:
 2. a runtime that compiles correctly for the target platform's system APIs
 
 Environment variables were chosen over CLI flags because they compose naturally
-with existing build workflows, can be set once for a session, and follow the
-convention established by Go's `GOOS`/`GOARCH`.
+with existing build workflows and can be set once for a session.
 
 Windows support was the primary driver because it required porting all
 host-backed runtime functions (filesystem, process, environment) from POSIX to
@@ -89,7 +86,7 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 ## 4. Semantics
 
 - when neither `YAR_OS` nor `YAR_ARCH` is set, the compiler targets the host
-  platform detected via Go's `runtime.GOOS` and `runtime.GOARCH`
+  platform detected by the Rust CLI
 - when both are set, the compiler looks up the LLVM target triple from a fixed
   mapping
 - setting only one variable is an error
@@ -158,7 +155,7 @@ No new syntax. Target selection is entirely through environment variables.
 - CLI flags (`--os`, `--arch`) instead of environment variables
   - must be passed on every invocation
   - do not compose as naturally with shell workflows
-  - Go's `GOOS`/`GOARCH` convention is well-established
+  - environment variables are already common in build workflows
 - separate runtime source files per platform
   - simpler per-file but harder to keep in sync
   - conditional compilation keeps related logic adjacent
