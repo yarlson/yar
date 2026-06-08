@@ -2,12 +2,11 @@
 
 ## Purpose
 
-YAR is a small compiled language with a Go-like feel, a stricter type discipline,
+YAR is a small compiled language with a direct feel, a stricter type discipline,
 explicit error handling, and a bias toward simple semantics and fast compilation.
 
-It should feel familiar to someone who likes Go’s readability and directness, but
-it should permit a somewhat more refined surface where the added refinement pays
-for itself in clarity and safety.
+It should feel readable and direct, but it should permit a somewhat more refined
+surface where the added refinement pays for itself in clarity and safety.
 
 ## Non-Goals
 
@@ -40,8 +39,8 @@ The language should earn new surface area slowly.
 
 ### 4. Strict where it helps
 
-The language may choose stricter rules than Go when those rules improve
-correctness, reduce ambiguity, or simplify reasoning.
+The language may choose stricter rules when those rules improve correctness,
+reduce ambiguity, or simplify reasoning.
 
 ### 5. Sugar must be honest
 
@@ -87,8 +86,8 @@ YAR should generally avoid:
 
 ## Type Philosophy
 
-YAR should have a stronger, more explicit type discipline than Go where that
-improves the language.
+YAR should have a strong, explicit type discipline where that improves the
+language.
 
 The type system should aim to be:
 

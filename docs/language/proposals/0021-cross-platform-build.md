@@ -5,8 +5,7 @@ Status: accepted
 ## 1. Summary
 
 Add cross-compilation support via `YAR_OS` and `YAR_ARCH` environment variables
-and port the embedded C runtime to support Windows alongside POSIX platforms
-using conditional compilation.
+and support Windows alongside POSIX platforms at the runtime boundary.
 
 The implemented version provides:
 
@@ -16,8 +15,12 @@ The implemented version provides:
   windows/amd64
 - host platform detection as default target
 - cross-compilation validation (prevents running cross-compiled binaries)
-- conditional compilation in the C runtime for Win32 and POSIX APIs
+- target-specific runtime archives for Win32 and POSIX APIs
 - platform-aware executable naming (`.exe` suffix for Windows)
+
+Current implementation note: host builds link the Rust runtime. The Rust CLI
+supports cross builds when `YAR_RUNTIME_ARCHIVE` points at a runtime archive for
+the selected target. The legacy embedded C runtime has been removed.
 
 ## 2. Motivation
 
@@ -32,8 +35,7 @@ Cross-compilation support requires two things:
 2. a runtime that compiles correctly for the target platform's system APIs
 
 Environment variables were chosen over CLI flags because they compose naturally
-with existing build workflows, can be set once for a session, and follow the
-convention established by Go's `GOOS`/`GOARCH`.
+with existing build workflows and can be set once for a session.
 
 Windows support was the primary driver because it required porting all
 host-backed runtime functions (filesystem, process, environment) from POSIX to
@@ -84,7 +86,7 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 ## 4. Semantics
 
 - when neither `YAR_OS` nor `YAR_ARCH` is set, the compiler targets the host
-  platform detected via Go's `runtime.GOOS` and `runtime.GOARCH`
+  platform detected by the Rust CLI
 - when both are set, the compiler looks up the LLVM target triple from a fixed
   mapping
 - setting only one variable is an error
@@ -92,8 +94,8 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 - cross-compiled binaries cannot be executed by `yar run` or `yar test`
 - the target triple is passed to LLVM IR generation and to `clang` for linking
 - Windows targets produce executables with the `.exe` suffix
-- the C runtime uses `#ifdef _WIN32` conditional compilation to select between
-  Win32 and POSIX implementations of host-backed functions
+- the selected runtime archive must provide host-backed functions for the
+  target platform
 
 ### Target triple mapping
 
@@ -103,7 +105,7 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 | darwin  | arm64 | aarch64-apple-darwin      |
 | linux   | amd64 | x86_64-unknown-linux-gnu  |
 | linux   | arm64 | aarch64-unknown-linux-gnu |
-| windows | amd64 | x86_64-pc-windows-msvc    |
+| windows | amd64 | x86_64-pc-windows-gnu     |
 
 ## 5. Type Rules
 
@@ -153,7 +155,7 @@ No new syntax. Target selection is entirely through environment variables.
 - CLI flags (`--os`, `--arch`) instead of environment variables
   - must be passed on every invocation
   - do not compose as naturally with shell workflows
-  - Go's `GOOS`/`GOARCH` convention is well-established
+  - environment variables are already common in build workflows
 - separate runtime source files per platform
   - simpler per-file but harder to keep in sync
   - conditional compilation keeps related logic adjacent
@@ -193,9 +195,8 @@ environments.
 ## 13. Decision
 
 Accepted and implemented. Cross-compilation uses `YAR_OS` and `YAR_ARCH`
-environment variables with a fixed target triple mapping. The C runtime uses
-conditional compilation to support both Win32 and POSIX APIs from a single
-source file.
+environment variables with a fixed target triple mapping. Native builds link a
+Rust runtime archive for the selected target.
 
 ## 14. Implementation Checklist
 

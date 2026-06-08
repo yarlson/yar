@@ -280,7 +280,7 @@ FFI.
 ### Keep host I/O outside the language entirely
 
 Rejected because a self-hosted frontend still needs to load packages and emit
-artifacts from Yar code, not from a permanently privileged Go wrapper.
+artifacts from Yar code, not from a permanently privileged host wrapper.
 
 ### Add file I/O as builtins only
 

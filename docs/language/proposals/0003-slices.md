@@ -20,8 +20,8 @@ The smallest useful version is:
 
 Fixed arrays are useful, but they are too rigid for many practical programs.
 
-Frontend self-hosting creates especially strong pressure here. The current Go
-frontend repeatedly grows variable-length collections such as:
+Frontend work creates especially strong pressure here. The compiler frontend
+repeatedly grows variable-length collections such as:
 
 - token lists
 - diagnostics

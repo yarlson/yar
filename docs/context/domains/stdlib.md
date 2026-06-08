@@ -2,9 +2,9 @@
 
 ## Design
 
-- The standard library is written in Yar, not C or Go.
-- Stdlib packages are embedded into the Go compiler binary using `go:embed` via
-  the `internal/stdlib` package.
+- The standard library is written in Yar, not host-language code.
+- Stdlib packages are embedded into the Rust compiler with `include_str!` from
+  `crates/yar-compiler/src/package.rs`.
 - Stdlib packages are imported with bare paths like any user package:
   `import "strings"`.
 - Resolution order is local packages first, embedded stdlib second. A local
@@ -18,12 +18,11 @@
 
 ## Infrastructure
 
-- `internal/stdlib/stdlib.go` provides `Has`, `ReadDir`, and `ReadFile` for the
-  package loader.
-- `internal/stdlib/packages/<pkg>/<file>.yar` is the canonical location for
+- `crates/yar-compiler/src/package.rs` provides the stdlib lookup table.
+- `stdlib/packages/<pkg>/<file>.yar` is the canonical location for
   stdlib source files.
-- `internal/compiler/packages.go` calls `loadStdlibPackage` as a fallback when
-  `os.ReadDir` fails with `os.ErrNotExist` for an import path.
+- The Rust package loader calls `read_stdlib_package` as a fallback when a
+  local or dependency import path is absent.
 - Both local and stdlib packages share the same import-resolution path.
 - Stdlib packages can import other stdlib packages.
 - Stdlib packages may use the internal builtins `chr`, `i32_to_i64`, and
@@ -135,6 +134,15 @@ Functions:
 - `mkdir_all(path str) !void`
 - `remove_all(path str) !void`
 - `temp_dir(prefix str) !str`
+- `open_read(path str) !File`
+- `open_write(path str) !File`
+
+Methods on `File`:
+
+- `read(max_bytes i32) !str` — read up to `max_bytes`; returns empty string on
+  EOF
+- `write(data str) !i32` — write data and return bytes written
+- `close() !void` — close the file handle
 
 Errors:
 
@@ -142,6 +150,35 @@ Errors:
 - `error.PermissionDenied`
 - `error.AlreadyExists`
 - `error.InvalidPath`
+- `error.InvalidArgument`
+- `error.Closed`
+- `error.IO`
+
+### `io`
+
+Stream interfaces and small stream helpers.
+
+Interfaces:
+
+- `Reader { read(max_bytes i32) !str }`
+- `Writer { write(data str) !i32 }`
+- `Closer { close() !void }`
+- `ReadCloser { read(max_bytes i32) !str, close() !void }`
+- `WriteCloser { write(data str) !i32, close() !void }`
+- `ReadWriter { read(max_bytes i32) !str, write(data str) !i32 }`
+
+Functions:
+
+- `copy(dst Writer, src Reader, chunk_size i32) !i64` — copy from `src` to
+  `dst` in bounded chunks
+- `read_all(src Reader, chunk_size i32, max_bytes i32) !str` — read a stream
+  into a string up to an explicit maximum
+- `close_quiet(c Closer) void` — close and ignore the close error
+
+Errors:
+
+- `error.InvalidArgument`
+- `error.LimitExceeded`
 - `error.IO`
 
 ### `process`
@@ -195,6 +232,8 @@ Host-backed TCP networking primitives.
 Types:
 
 - `Addr { host str, port i32 }`
+- `Conn { handle i64 }`
+- `Listener { handle i64 }`
 
 Functions:
 
@@ -219,6 +258,26 @@ Functions:
   milliseconds; 0 disables the timeout
 - `resolve(host str, port i32) !Addr` — DNS resolution; returns the first
   resolved address
+- `listen_stream(host str, port i32) !Listener` — listen and wrap the listener
+  handle
+- `connect_stream(host str, port i32) !Conn` — connect and wrap the connection
+  handle
+
+Methods on `Listener`:
+
+- `accept() !Conn`
+- `addr() !Addr`
+- `close() !void`
+
+Methods on `Conn`:
+
+- `read(max_bytes i32) !str`
+- `write(data str) !i32`
+- `close() !void`
+- `local_addr() !Addr`
+- `remote_addr() !Addr`
+- `set_read_deadline(millis i32) !void`
+- `set_write_deadline(millis i32) !void`
 
 Errors:
 

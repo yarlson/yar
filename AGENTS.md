@@ -9,14 +9,14 @@ For implementation work in this repository, follow this order:
 3. write or update tests first when practical; prefer TDD for new behavior, bug fixes, and regressions
 4. implement
 5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change
-6. run `golangci-lint run --fix ./...` and `go test -race -count=1 -v -timeout=120s ./...`
+6. run `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
 7. fix issues from lint and tests
 8. update `docs/context/`
 9. update `docs/YAR.md`, `LLM.txt`
 10. update `docs/language`
 11. use `/review` slash command from `~/.claude/commands/review.md` or `review` skill to review the code
 12. fix all found issues
-13. run `golangci-lint run --fix ./...` and `go test -race -count=1 -v -timeout=120s ./...`
+13. run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
 14. fix issues from lint and tests
 15. if needed, update `docs/context/`, `docs/YAR.md`, `docs/language`, `LLM.txt`
 
@@ -27,9 +27,9 @@ Do not skip test work for implementation changes. Add or update automated tests 
 the highest-value layer for the change, and keep `testdata/` focused on
 representative, durable fixtures rather than incidental cases.
 
-## Go Code Quality Standard
+## Rust Code Quality Standard
 
-Write Go for readability, correctness, maintainability, security, and
+Write Rust for readability, correctness, maintainability, security, and
 performance.
 
 Priority order:
@@ -46,7 +46,7 @@ clarity for speculative optimization.
 
 ## Core Principles
 
-- Prefer simple, idiomatic Go over cleverness.
+- Prefer simple, idiomatic Rust over cleverness.
 - Keep control flow, ownership, and mutation explicit.
 - Prefer composition and direct wiring over heavy abstraction.
 - Avoid framework-like patterns, unnecessary indirection, and speculative design.
@@ -62,19 +62,19 @@ clarity for speculative optimization.
 
 ---
 
-## Interfaces
+## Traits
 
-- Accept interfaces, return structs.
 - Use concrete types by default.
-- Define small interfaces near the consumer.
-- Do not add interfaces just for future flexibility or mocking.
+- Define small traits near the consumer.
+- Keep trait bounds explicit and narrow.
+- Do not add traits just for future flexibility or mocking.
 
 ---
 
 ## Types and API Design
 
 - Make invalid states hard to represent.
-- Be explicit about ownership, lifecycle, concurrency, and zero-value behavior.
+- Be explicit about ownership, borrowing, lifetimes, and concurrency behavior.
 - Keep APIs small, direct, and hard to misuse.
 - Use constructors and abstraction only when they add clear value.
 
@@ -92,7 +92,7 @@ clarity for speculative optimization.
 
 - Keep functions small, cohesive, and easy to scan.
 - Prefer straightforward control flow and early returns.
-- Be explicit about mutation, ownership, and receiver choice.
+- Be explicit about mutation, ownership, borrowing, and receiver choice.
 - Do not extract helpers that make the call site harder to understand.
 
 ---
@@ -100,18 +100,19 @@ clarity for speculative optimization.
 ## Error Handling
 
 - Handle errors explicitly and never ignore them without a clear reason.
-- Wrap with `%w` when extra context helps.
+- Add context to errors when it helps callers understand the failure.
 - Do not use `panic` for normal error handling.
 - Validate inputs and make edge cases explicit at boundaries.
 
 ---
 
-## Context Usage
+## Cancellation and Process Context
 
-- Pass `context.Context` explicitly when appropriate, usually as the first parameter.
-- Never store context in structs.
-- Propagate caller context through request boundaries.
-- Respect cancellation, deadlines, and timeouts.
+- Pass explicit cancellation, timeout, or configuration values when behavior
+  needs them.
+- Do not hide process-global assumptions in low-level APIs.
+- Propagate caller-controlled limits through request boundaries.
+- Respect cancellation, deadlines, and timeouts where they exist.
 
 ---
 
@@ -187,7 +188,7 @@ clarity for speculative optimization.
 
 ## Review Checklist
 
-Before finalizing a Go change, verify readability, correctness on edge cases,
+Before finalizing a Rust change, verify readability, correctness on edge cases,
 explicit error handling, justified abstractions, safe boundary validation,
 necessary and safe concurrency, reasonable performance, explicit security
 handling, minimal global state, and maintainability.
@@ -197,9 +198,9 @@ handling, minimal global state, and maintainability.
 ## Hard Rules
 
 - Prefer simple, explicit code.
-- Accept interfaces, return structs.
+- Prefer concrete types and narrow traits.
 - Handle errors explicitly.
-- Pass context explicitly.
+- Pass cancellation, timeout, and configuration explicitly when needed.
 - Avoid global state.
 - Avoid premature abstraction.
 - Avoid speculative optimization.

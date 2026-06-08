@@ -149,11 +149,12 @@ channels (`chan[T]`), and function types.
 | `conv`    | Numeric and byte/string conversions                   |
 | `sort`    | In-place sorting for slices                           |
 | `path`    | Path normalization and joining                        |
-| `fs`      | Text file and directory operations                    |
+| `fs`      | Text file, directory, and streaming file operations   |
+| `io`      | Stream interfaces and copy/read helpers               |
 | `process` | Argv access and child-process execution               |
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
-| `net`     | TCP networking (listen, connect, read, write)         |
+| `net`     | TCP networking and stream wrappers                    |
 | `http`    | Minimal HTTP/1.1 server helpers over TCP              |
 | `testing` | Test assertions and framework                         |
 
@@ -162,11 +163,37 @@ service.
 
 ## Install
 
-Requirements: Go 1.26+ and `clang`.
+Requirements: Rust 2024 toolchain and `clang`.
 
 ```bash
-go build -o ./bin/yar ./cmd/yar
+cargo build --release -p yar-cli
+./target/release/yar check main.yar
 ```
+
+The Rust 2024 CLI is the shipped `yar` command:
+
+```bash
+./target/release/yar check main.yar
+./target/release/yar emit-ir main.yar
+./target/release/yar build main.yar
+./target/release/yar run main.yar
+./target/release/yar test .
+./target/release/yar init
+./target/release/yar add local_lib --path=../local-lib
+./target/release/yar add http https://github.com/user/http.git --tag=v1.0.0
+./target/release/yar fetch
+```
+
+The CLI supports `check`, `emit-ir`, `build`, host `run`, host `test`, `init`,
+and dependency manifest, lock, fetch, and update commands. It links the Rust
+runtime static library for native build/run/test paths, using
+`YAR_RUNTIME_ARCHIVE` when set, a runtime archive next to the `yar` executable
+when present, or the workspace `target/release` archive after building
+`crates/yar-runtime`. Cross builds require
+`YAR_RUNTIME_ARCHIVE` to point at a runtime archive for the selected target.
+GoReleaser release artifacts now package the Rust CLI with a sibling Rust
+runtime archive. The legacy embedded C runtime has been removed; native builds
+use the Rust runtime only.
 
 Override the C compiler if needed:
 
@@ -292,29 +319,28 @@ support the host platform.
 ## Development
 
 ```bash
-go test -race -count=1 -v -timeout=120s ./...
-golangci-lint run --fix ./...
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+./scripts/verify-rust-testdata.sh
+./scripts/verify-rust-testdata-run.sh
 ```
 
 CI runs those gates on pull requests and pushes to `main`, with Linux and macOS
-coverage for the native `clang` build boundary. Release packaging is validated
-with a GoReleaser snapshot dry run.
+coverage for the native `clang` build boundary, the Rust workspace, and Rust
+CLI native builds plus successful fixture execution for every checked-in
+`testdata/**/main.yar` fixture that is expected to exit successfully.
+Release packaging is validated with a GoReleaser snapshot dry run.
 
 Version tags matching `v*` publish GitHub Release assets through GoReleaser.
 Manual release workflow runs are snapshot-only and do not publish.
 
 ```text
-cmd/yar/          CLI entry point
-internal/
-  lexer/          Tokenizer
-  parser/         Syntax analysis
-  ast/            AST node types
-  checker/        Type checking and semantic analysis
-  codegen/        LLVM IR generation
-  compiler/       Pipeline orchestration and package loading
-  deps/           Dependency management (yar.toml, yar.lock, fetching)
-  runtime/        Embedded C runtime
-  stdlib/         Embedded standard library (Yar source)
+crates/
+  yar-cli/        Rust 2024 CLI entry point
+  yar-compiler/   Rust 2024 compiler crate
+  yar-runtime/    Rust 2024 runtime crate
+stdlib/           Embedded standard library (Yar source)
 testdata/         Representative sample programs
 docs/             Language and design documentation
 ```

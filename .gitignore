@@ -8,6 +8,7 @@
 # Go build and test artifacts
 /bin/
 /dist/
+/target/
 *.test
 *.out
 coverage.txt

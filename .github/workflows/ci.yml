@@ -13,9 +13,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  GOFLAGS: -mod=readonly
-
 jobs:
   lint:
     name: Lint
@@ -26,17 +23,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.11.3
-          args: --timeout=10m
+      - name: Run Rust formatting and lint
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -54,12 +44,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
       - name: Install clang
         if: runner.os == 'Linux'
         run: |
@@ -68,11 +52,15 @@ jobs:
 
       - name: Show toolchain
         run: |
-          go version
           clang --version
+          rustc --version
+          cargo --version
 
       - name: Run tests
-        run: go test -race -count=1 -v -timeout=120s ./...
+        run: |
+          cargo test --workspace
+          ./scripts/verify-rust-testdata.sh
+          ./scripts/verify-rust-testdata-run.sh
 
   release-dry-run:
     name: Release dry run
@@ -88,11 +76,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Run GoReleaser snapshot
         uses: goreleaser/goreleaser-action@v7

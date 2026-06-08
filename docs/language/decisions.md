@@ -236,7 +236,8 @@ Status: accepted
 The compiler embeds a standard library written in Yar. Stdlib packages are
 resolved as a fallback when an import path does not match a local directory.
 Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`,
-`sort`, `path`, `fs`, `process`, `env`, `stdio`.
+`sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
+`testing`.
 
 ### Text and UTF-8 helpers
 

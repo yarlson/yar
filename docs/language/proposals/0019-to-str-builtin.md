@@ -110,7 +110,7 @@ syntax. The name is resolved during checking as a known builtin, same as
   - `str`: returns the argument unchanged
   - `error`: emits a `switch` on the error code mapping each known error name
     to its `"error.<Name>"` string constant, with `"error.unknown"` as default
-- runtime impact: requires `yar_to_str_i32` and `yar_to_str_i64` C runtime
+- runtime impact: requires `yar_to_str_i32` and `yar_to_str_i64` runtime ABI
   functions that allocate and format integer strings
 
 ## 8. Interactions

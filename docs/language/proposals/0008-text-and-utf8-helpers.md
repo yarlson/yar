@@ -32,7 +32,7 @@ The helpers split across two stdlib packages:
 Basic string operations are necessary but still not sufficient for a self-hosted
 frontend.
 
-The current Go frontend also depends on:
+The compiler frontend also depends on:
 
 - UTF-8 decoding while scanning source
 - letter, digit, and whitespace classification
@@ -41,7 +41,7 @@ The current Go frontend also depends on:
 - constructing a single-byte string from a byte value
 
 These belong in the standard library, not as builtins. The stdlib infrastructure
-now exists (`internal/stdlib/`) and the `strings` package is already shipped.
+now exists (`stdlib/packages`) and the `strings` package is already shipped.
 Adding new stdlib packages follows the established pattern.
 
 ## 3. User-Facing Examples
@@ -171,10 +171,10 @@ With proposal 0006 primitives (`len`, `s[i]`, `s[i:j]`, `+`, `==`):
 Add one small builtin or runtime helper — `chr(i32) str` — that constructs a
 one-byte string. Everything else can be written in pure Yar on top of it.
 
-- `internal/stdlib/packages/utf8/utf8.yar` — all five utf8 functions in Yar
-- `internal/stdlib/packages/strings/strings.yar` — add `parse_i64` and
+- `stdlib/packages/utf8/utf8.yar` — all five utf8 functions in Yar
+- `stdlib/packages/strings/strings.yar` — add `parse_i64` and
   `from_byte` (wrapping `chr`)
-- `internal/stdlib/packages/conv/conv.yar` — `itoa` and `itoa64` in Yar using
+- `stdlib/packages/conv/conv.yar` — `itoa` and `itoa64` in Yar using
   `from_byte` for digit characters
 
 ### Implementation steps
@@ -266,10 +266,10 @@ rather than growing the builtin surface.
 ## 14. Implementation Checklist
 
 - `chr` builtin or runtime helper
-- `internal/stdlib/packages/utf8/utf8.yar`
-- `internal/stdlib/packages/strings/strings.yar` additions (`parse_i64`,
+- `stdlib/packages/utf8/utf8.yar`
+- `stdlib/packages/strings/strings.yar` additions (`parse_i64`,
   `from_byte`)
-- `internal/stdlib/packages/conv/conv.yar`
+- `stdlib/packages/conv/conv.yar`
 - integration tests for each stdlib package
 - `docs/YAR.md` update
 - `docs/context/` update

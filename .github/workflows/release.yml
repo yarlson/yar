@@ -13,9 +13,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  GOFLAGS: -mod=readonly
-
 jobs:
   verify:
     name: Verify release inputs
@@ -28,25 +25,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
       - name: Install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.11.3
-          args: --timeout=10m
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
 
       - name: Run tests
-        run: go test -race -count=1 -v -timeout=120s ./...
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+          ./scripts/verify-rust-testdata.sh
+          ./scripts/verify-rust-testdata-run.sh
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
   snapshot:
     name: Release snapshot
@@ -62,11 +58,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Run GoReleaser snapshot
         uses: goreleaser/goreleaser-action@v7
@@ -91,11 +87,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Publish GitHub release
         uses: goreleaser/goreleaser-action@v7

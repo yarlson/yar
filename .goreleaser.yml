@@ -4,26 +4,31 @@ project_name: yar
 
 builds:
   - id: yar
-    main: ./cmd/yar
+    builder: rust
     binary: yar
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - darwin
-      - linux
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
+    command: zigbuild
+    flags:
+      - --release
+      - -p=yar-cli
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-pc-windows-gnu
+    hooks:
+      pre:
+        - cmd: ./scripts/build-release-runtime.sh {{ .Target }}
+          output: true
 
 archives:
   - id: yar
     ids:
       - yar
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: "dist/runtime/{{ .Target }}/libyar_runtime.a"
+        dst: libyar_runtime.a
     formats:
       - tar.gz
     format_overrides:

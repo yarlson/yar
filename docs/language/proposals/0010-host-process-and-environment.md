@@ -41,9 +41,9 @@ A self-hosted `yar` compiler eventually needs to:
 - run built programs with inherited stdio
 - print diagnostics to stderr without treating them as panics
 
-Today the Go driver owns all of that host process logic. Without a corresponding
-Yar surface, a rewritten frontend can at best become a library embedded inside a
-permanent Go CLI.
+Today the Rust CLI owns all of that host process logic. Without a corresponding
+Yar surface, a self-hosted frontend can at best become a library embedded inside
+a permanent host CLI.
 
 ## 3. User-Facing Examples
 
@@ -226,7 +226,7 @@ Additional implementation constraints from proposal 0009:
 
 ## 9. Alternatives Considered
 
-### Keep process execution in an outer Go launcher forever
+### Keep process execution in an outer host launcher forever
 
 Rejected because that would make the self-hosted compiler permanently dependent
 on a privileged non-Yar shell around it.

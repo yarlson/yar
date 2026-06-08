@@ -1,0 +1,917 @@
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use yar_compiler::manifest::{cache_path, parse_lock_file, parse_manifest};
+
+#[test]
+fn check_accepts_testdata_fixture() {
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "check",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_rejects_method_value_selector() {
+    let dir = temp_dir("yar-cli-method-value-check");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"
+package main
+
+struct User {
+    name str
+}
+
+fn (u User) label() str {
+    return u.name
+}
+
+fn main() i32 {
+    user := User{name: "ada"}
+    method := user.label
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected check to fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("method values are not supported"),
+        "stderr did not include method-value diagnostic: {stderr}"
+    );
+}
+
+#[test]
+fn check_reports_non_errorable_propagate_operand() {
+    let dir = temp_dir("yar-cli-propagate-check");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"
+package main
+
+fn main() i32 {
+    x := 1?
+    return x
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected check to fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("? requires an errorable expression or error value"),
+        "stderr did not include propagate operand diagnostic: {stderr}"
+    );
+    assert!(
+        !stderr.contains("cannot use ? in a function that cannot return an error"),
+        "stderr should not report propagation-context failure for a non-errorable operand: {stderr}"
+    );
+}
+
+#[test]
+fn check_rejects_value_or_handler_that_falls_through() {
+    let dir = temp_dir("yar-cli-or-handler-check");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"
+package main
+
+fn maybe() !i32 {
+    return 1
+}
+
+fn main() i32 {
+    value := maybe() or |err| {
+        print(to_str(err))
+    }
+    return value
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected check to fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("or handler for a value result must terminate control flow"),
+        "stderr did not include value-handler termination diagnostic: {stderr}"
+    );
+}
+
+#[test]
+fn emit_ir_prints_rust_codegen_output() {
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "emit-ir",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("; yar rust codegen"));
+    assert!(stdout.contains("define i32 @main(i32 %argc, ptr %argv)"));
+}
+
+#[test]
+fn run_executes_testdata_fixture() {
+    let dir = temp_dir("yar-cli-run");
+    let runtime_archive = build_runtime_archive(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["run", fixture("testdata/hello/main.yar").to_str().unwrap()])
+        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello, world\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_uses_explicit_runtime_archive_without_cargo() {
+    let dir = temp_dir("yar-cli-runtime-archive");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let cc = fake_cc(&dir);
+    let output_path = dir.join("program");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("PATH", &dir)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.is_file());
+    let cc_args = fs::read_to_string(dir.join("cc-args")).unwrap();
+    assert!(
+        cc_args.contains(archive.to_str().unwrap()),
+        "cc args did not include explicit runtime archive: {cc_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_allows_cross_target_with_explicit_runtime_archive() {
+    let dir = temp_dir("yar-cli-cross-runtime-archive");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let cc = fake_cc(&dir);
+    let output_path = dir.join("program");
+    let (target_os, target_arch, target_triple) = non_host_unix_target();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("PATH", &dir)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_OS", target_os)
+        .env("YAR_ARCH", target_arch)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.is_file());
+    let cc_args = fs::read_to_string(dir.join("cc-args")).unwrap();
+    assert!(
+        cc_args.contains(&format!("--target={target_triple}")),
+        "cc args did not include cross target: {cc_args}"
+    );
+    assert!(
+        cc_args.contains(archive.to_str().unwrap()),
+        "cc args did not include explicit runtime archive: {cc_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_rejects_cross_target_without_explicit_runtime_archive() {
+    let dir = temp_dir("yar-cli-cross-missing-runtime-archive");
+    let cc = fake_cc(&dir);
+    let output_path = dir.join("program");
+    let (target_os, target_arch, _target_triple) = non_host_unix_target();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("PATH", &dir)
+        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .env("YAR_OS", target_os)
+        .env("YAR_ARCH", target_arch)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected cross build to fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("requires YAR_RUNTIME_ARCHIVE"),
+        "stderr did not explain runtime archive requirement: {stderr}"
+    );
+    assert!(!output_path.exists());
+    assert!(!dir.join("cc-args").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn build_windows_target_uses_gnu_triple_and_windows_link_flags() {
+    let dir = temp_dir("yar-cli-windows-target");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let cc = fake_cc(&dir);
+    let output_path = dir.join("program.exe");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("PATH", &dir)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_OS", "windows")
+        .env("YAR_ARCH", "amd64")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.is_file());
+    let cc_args = fs::read_to_string(dir.join("cc-args")).unwrap();
+    assert!(
+        cc_args.contains("--target=x86_64-pc-windows-gnu"),
+        "cc args did not use the release-compatible GNU Windows target: {cc_args}"
+    );
+    assert!(
+        cc_args.contains("-lws2_32"),
+        "cc args did not link Winsock for Windows target: {cc_args}"
+    );
+    assert!(
+        !cc_args.contains("-pthread"),
+        "cc args should not include POSIX pthread for Windows target: {cc_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_process_env_fixture_runs_with_rust_runtime() {
+    let dir = temp_dir("yar-cli-process-env");
+    let capture_script = dir.join("capture.sh");
+    let inherit_script = dir.join("inherit.sh");
+    write_executable(
+        &capture_script,
+        "#!/bin/sh\nprintf 'captured stdout\\n'\nprintf 'captured stderr\\n' >&2\nexit 7\n",
+    );
+    write_executable(
+        &inherit_script,
+        "#!/bin/sh\nprintf 'inherit stdout\\n'\nprintf 'inherit stderr\\n' >&2\nexit 3\n",
+    );
+    let runtime_archive = build_runtime_archive(&dir);
+    let program = dir.join("process-env");
+
+    let build = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/stdlib_process_env/main.yar")
+                .to_str()
+                .unwrap(),
+            "-o",
+            program.to_str().unwrap(),
+        ])
+        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .output()
+        .unwrap();
+
+    assert!(
+        build.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let output = Command::new(&program)
+        .arg(&capture_script)
+        .arg(&inherit_script)
+        .env("YAR_PROCESS_ENV_TEST", "env ok")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "stdio stderr\n",
+        "inherit stdout\n",
+        "inherit stderr\n",
+        "process_env ok\n",
+    ] {
+        assert!(
+            combined.contains(expected),
+            "expected {expected:?} in output {combined:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn build_net_fixture_runs_with_rust_runtime() {
+    let dir = temp_dir("yar-cli-net");
+    let runtime_archive = build_runtime_archive(&dir);
+    let program = dir.join("net");
+
+    let build = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/stdlib_net/main.yar").to_str().unwrap(),
+            "-o",
+            program.to_str().unwrap(),
+        ])
+        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .output()
+        .unwrap();
+
+    assert!(
+        build.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let output = Command::new(&program).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "net ok\n");
+}
+
+#[test]
+fn test_runs_passing_tests() {
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["test", fixture("testdata/testing_basic").to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PASS: test_add"));
+    assert!(stdout.contains("5 passed, 0 failed"));
+}
+
+#[test]
+fn test_reports_failing_tests() {
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["test", fixture("testdata/testing_fail").to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected failing test command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("FAIL: test_wrong_sum"));
+    assert!(stdout.contains("got 4, want 5"));
+    assert!(stdout.contains("PASS: test_pass"));
+    assert!(stdout.contains("1 passed, 2 failed"));
+}
+
+#[test]
+fn init_creates_manifest() {
+    let dir = temp_dir("yar-cli-init");
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "created yar.toml\n"
+    );
+    let content = fs::read_to_string(dir.join("yar.toml")).unwrap();
+    let manifest = parse_manifest(&content).unwrap();
+    assert!(!manifest.package.name.is_empty());
+    assert!(manifest.dependencies.is_empty());
+}
+
+#[test]
+fn add_and_remove_local_dependency_updates_manifest() {
+    let dir = temp_dir("yar-cli-local-dep");
+
+    let add = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "local_lib", "--path=../local-lib"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        add.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&add.stdout),
+        "added dependency \"local_lib\"\n"
+    );
+    let content = fs::read_to_string(dir.join("yar.toml")).unwrap();
+    let manifest = parse_manifest(&content).unwrap();
+    assert_eq!(
+        manifest.dependencies["local_lib"].path,
+        "../local-lib".to_string()
+    );
+
+    fs::write(dir.join("yar.lock"), "stale lock").unwrap();
+    let remove = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["remove", "local_lib"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        remove.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&remove.stdout),
+        "removed dependency \"local_lib\"\n"
+    );
+    let content = fs::read_to_string(dir.join("yar.toml")).unwrap();
+    let manifest = parse_manifest(&content).unwrap();
+    assert!(manifest.dependencies.is_empty());
+    assert!(!dir.join("yar.lock").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn add_git_dependency_resolves_transitive_lock_and_fetches_without_network() {
+    let dir = temp_dir("yar-cli-git-dep");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "add",
+            "parent",
+            "https://example.com/parent.git",
+            "--tag=v1",
+        ])
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .env("YAR_CACHE", &cache_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "added dependency \"parent\"\nyar.lock updated\n"
+    );
+
+    let manifest = parse_manifest(&fs::read_to_string(dir.join("yar.toml")).unwrap()).unwrap();
+    assert_eq!(
+        manifest.dependencies["parent"].git,
+        "https://example.com/parent.git"
+    );
+    let lock_content = fs::read_to_string(dir.join("yar.lock")).unwrap();
+    let lock_entries = parse_lock_file(&lock_content).unwrap();
+    let names = lock_entries
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["child", "parent"]);
+    for entry in &lock_entries {
+        assert!(cache_path(&cache_dir, &entry.git, &entry.commit).is_dir());
+    }
+
+    fs::remove_dir_all(&cache_dir).unwrap();
+    let fetch = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("fetch")
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .env("YAR_CACHE", &cache_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        fetch.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&fetch.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&fetch.stdout);
+    assert!(stdout.contains("fetching child..."));
+    assert!(stdout.contains("fetching parent..."));
+    assert!(stdout.contains("all dependencies fetched"));
+    for entry in &lock_entries {
+        assert!(cache_path(&cache_dir, &entry.git, &entry.commit).is_dir());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn update_one_git_dependency_preserves_unrelated_lock_entries() {
+    let dir = temp_dir("yar-cli-update-one-dep");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+sibling = { git = "https://example.com/sibling.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        r#"# Auto-generated by yar. Do not edit.
+
+[[package]]
+name = "child"
+git = "https://example.com/child.git"
+tag = "v0"
+commit = "0000000000000000000000000000000000000000"
+hash = "sha256:old-child"
+
+[[package]]
+name = "parent"
+git = "https://example.com/parent.git"
+tag = "v0"
+commit = "0000000000000000000000000000000000000000"
+hash = "sha256:old-parent"
+
+[[package]]
+name = "sibling"
+git = "https://example.com/sibling.git"
+tag = "v1"
+commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+hash = "sha256:old-sibling"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["update", "parent"])
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .env("YAR_CACHE", &cache_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "yar.lock updated\n"
+    );
+
+    let lock_content = fs::read_to_string(dir.join("yar.lock")).unwrap();
+    let lock_entries = parse_lock_file(&lock_content).unwrap();
+    let entry = |name: &str| {
+        lock_entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("missing lock entry {name:?}: {lock_entries:?}"))
+    };
+    assert_eq!(
+        entry("parent").commit,
+        "1111111111111111111111111111111111111111"
+    );
+    assert_eq!(
+        entry("child").commit,
+        "2222222222222222222222222222222222222222"
+    );
+    assert_eq!(
+        entry("sibling").commit,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(entry("sibling").hash, "sha256:old-sibling");
+}
+
+#[cfg(unix)]
+#[test]
+fn update_one_local_dependency_does_not_resolve_unrelated_git_dependencies() {
+    let dir = temp_dir("yar-cli-update-one-local-dep");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::create_dir_all(dir.join("local-lib")).unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local_lib = { path = "local-lib" }
+sibling = { git = "https://example.com/sibling.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["update", "local_lib"])
+        .current_dir(&dir)
+        .env("PATH", &path)
+        .env("YAR_CACHE", &cache_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "yar.lock updated\n"
+    );
+    assert!(
+        !dir.join("yar.lock").exists(),
+        "selected local update should not create a lock for unrelated git dependencies"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "selected local update should not fetch unrelated git dependencies"
+    );
+}
+
+fn fixture(path: &str) -> PathBuf {
+    repo_root().join(path)
+}
+
+fn repo_root() -> PathBuf {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.pop();
+    dir.pop();
+    dir
+}
+
+fn temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(unix)]
+fn non_host_unix_target() -> (&'static str, &'static str, &'static str) {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => ("darwin", "arm64", "aarch64-apple-darwin"),
+        ("linux", "aarch64") => ("darwin", "amd64", "x86_64-apple-darwin"),
+        ("macos", "x86_64") => ("linux", "arm64", "aarch64-unknown-linux-gnu"),
+        ("macos", "aarch64") => ("linux", "amd64", "x86_64-unknown-linux-gnu"),
+        _ => ("linux", "amd64", "x86_64-unknown-linux-gnu"),
+    }
+}
+
+#[cfg(unix)]
+fn write_executable(path: &std::path::Path, content: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(path, content).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+fn build_runtime_archive(dir: &std::path::Path) -> PathBuf {
+    let target_dir = dir.join("cargo-target");
+    let output = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "yar-runtime",
+            "--release",
+            "--target-dir",
+            target_dir.to_str().unwrap(),
+        ])
+        .current_dir(repo_root())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let archive_name = if cfg!(windows) {
+        "yar_runtime.lib"
+    } else {
+        "libyar_runtime.a"
+    };
+    let archive = target_dir.join("release").join(archive_name);
+    assert!(archive.is_file(), "missing {}", archive.display());
+    archive
+}
+
+#[cfg(unix)]
+fn fake_cc(dir: &std::path::Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = dir.join("cc");
+    let log = dir.join("cc-args");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+set -eu
+printf '%s\n' "$*" > '{}'
+out=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "-o" ]; then
+    out="$arg"
+  fi
+  previous="$arg"
+done
+if [ -z "$out" ]; then
+  echo "missing -o" >&2
+  exit 1
+fi
+: > "$out"
+"#,
+            log.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    script
+}
+
+#[cfg(unix)]
+fn fake_git_dir() -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir("yar-fake-git");
+    let script = dir.join("git");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+set -eu
+
+if [ "$1" = "clone" ]; then
+  url=""
+  dest=""
+  for arg in "$@"; do
+    case "$arg" in
+      https://*) url="$arg" ;;
+    esac
+    dest="$arg"
+  done
+  mkdir -p "$dest/.git"
+  if echo "$url" | grep -q parent; then
+    cat > "$dest/yar.toml" <<'EOF'
+[package]
+name = "parent"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+EOF
+    printf 'package parent\n' > "$dest/parent.yar"
+  else
+    printf 'package child\n' > "$dest/child.yar"
+  fi
+  exit 0
+fi
+
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then
+  if [ -f "$2/parent.yar" ]; then
+    printf '1111111111111111111111111111111111111111\n'
+  else
+    printf '2222222222222222222222222222222222222222\n'
+  fi
+  exit 0
+fi
+
+if [ "$1" = "-C" ] && [ "$3" = "checkout" ]; then
+  exit 0
+fi
+
+echo "unexpected git invocation: $*" >&2
+exit 1
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    dir
+}
