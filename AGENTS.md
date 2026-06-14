@@ -1,223 +1,113 @@
 # AGENTS.md
 
-## Implementation Process
+This file is the mandatory entrypoint for agent work in this repository.
 
-For implementation work in this repository, follow this order:
+Use progressive disclosure:
 
-1. read `docs/context/`
-2. plan implementation and the test approach before changing code
-3. write or update tests first when practical; prefer TDD for new behavior, bug fixes, and regressions
-4. implement
-5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change; syntax changes must keep the portable accepted-syntax fixture under `testdata/syntax_surface` aligned
-6. run `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
-7. fix issues from lint and tests
-8. update affected `docs/context/` files when internal architecture or
-   operations changed
-9. update `docs/YAR.md` when public language/API behavior changed, then update
-   the derived `LLM.txt` mirror
-10. update `docs/language` when design status, rationale, proposal evidence,
-    delivery state, process, or future planning changed
-11. use `/review` slash command from `~/.claude/commands/review.md` or `review` skill to review the code
-12. fix all found issues
-13. run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
-14. fix issues from lint and tests
-15. if needed, repair the affected owned documentation surfaces
+1. Read this file.
+2. Read `docs/context/summary.md` and `docs/context/practices.md`.
+3. Read only the relevant detailed agent guide or guides:
+   - `docs/agents/development-workflow.md` for any code, docs, testdata, CI,
+     release, or tooling change.
+   - `docs/agents/language-design.md` for language surface, stdlib API,
+     runtime boundary, proposal, roadmap, or language-process work.
+   - `docs/agents/rust-quality.md` for Rust implementation details.
+4. Read the specific `docs/context/` and `docs/language/` files touched by the
+   task.
 
-Documentation ownership is defined in `docs/language/process.md`: code and tests
-are behavioral authority, `docs/YAR.md` owns current public behavior,
-`docs/context/` owns current internal behavior, `LLM.txt` is derived, proposals
-preserve design/evidence, decisions preserve rationale, and the roadmap is
-future-only. Do not update unrelated documentation merely to touch every layer,
-and do not skip the surfaces whose owned truth changed.
+Do not treat old session memory, roadmap text, proposal text, or stale docs as
+truth until the live checkout confirms it.
 
-Do not skip test work for implementation changes. Add or update automated tests at
-the highest-value layer for the change, and keep `testdata/` focused on
-representative, durable fixtures rather than incidental cases.
+## Core Working Rules
+
+- Define success criteria before editing.
+- Plan the implementation and verification approach before changing files.
+- Make surgical changes only.
+- Preserve unrelated user changes.
+- Prefer the simplest solution that fully solves the task.
+- Do not add abstractions, configurability, or feature surface unless the task
+  requires it.
+- Update tests, `testdata/`, docs, and tooling when behavior or accepted
+  language surface changes.
+- Verify every meaningful change with concrete commands.
+- Run a review pass before finalizing implementation work.
 
 The Rust frontend owns accepted YAR syntax. External Tree-sitter and JetBrains
 repositories own their grammar projections, generated artifacts, tests, and
-releases; do not copy those artifacts into this repository. Record the syntax
-change and portable fixture here, then leave projection delivery to its owning
-repository.
+releases; do not copy those artifacts into this repository. Keep
+`testdata/syntax_surface` aligned with syntax changes, then leave projection
+delivery to its owning repository.
 
-## Rust Code Quality Standard
+## Language Direction Rules
 
-Write Rust for readability, correctness, maintainability, security, and
-performance.
+- YAR is a small native language with explicit control flow, explicit errors,
+  a Rust 2024 implementation, LLVM IR generation, and a Rust runtime linked
+  through a stable C ABI.
+- Errors are values. Do not introduce exception-like semantics, hidden stack
+  unwinding, or `try`/`catch`-style language direction.
+- Prefer familiar syntax unless there is a proven YAR-specific reason to do
+  something custom.
+- If an API surface starts looking ugly or over-layered, step down to the
+  missing language/runtime/stdlib substrate instead of piling helpers on top.
+- Runtime owns raw allocation, GC, collection layout, channels, taskgroups,
+  OS handles, syscalls, and ABI shims. Stdlib owns user-facing API shape,
+  deterministic policy, and composition expressible in YAR.
+- Public stdlib or routing design should be grounded in current ecosystem
+  practice when the user asks for that or when the surface is unfamiliar.
 
-Priority order:
+## Source-Of-Truth Rules
 
-1. readability
-2. correctness
-3. maintainability
-4. performance
+Documentation ownership is defined in `docs/language/process.md`:
 
-Prefer explicit, idiomatic, production-grade code. Do not trade correctness or
-clarity for speculative optimization.
+- code and executable tests are behavioral authority
+- `docs/YAR.md` owns current public behavior
+- `docs/context/` owns current internal architecture and operations
+- `LLM.txt` is a derived compact mirror
+- proposals own design and implementation evidence
+- proposal metadata is synchronized into `docs/language/README.md`
+- `docs/language/decisions.md` owns design rationale
+- `docs/language/roadmap.md` contains future planning only
 
----
+Update only the surfaces whose owned truth changed. Also update `README.md` for
+public usage, `testdata/` for representative programs, and syntax tooling when
+those contracts change. If owned sources disagree, repair them as part of the
+task or call out why the correction is deliberately out of scope.
 
-## Core Principles
+## Required Verification
 
-- Prefer simple, idiomatic Rust over cleverness.
-- Keep control flow, ownership, and mutation explicit.
-- Prefer composition and direct wiring over heavy abstraction.
-- Avoid framework-like patterns, unnecessary indirection, and speculative design.
+For Rust implementation changes, run:
 
----
+```sh
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+./scripts/verify-rust-testdata.sh
+./scripts/verify-rust-testdata-run.sh
+```
 
-## Package Design
+Before finalizing, run the check-form variants:
 
-- Keep packages small, focused, and acyclic.
-- Keep public APIs minimal and hide implementation details by default.
-- Prefer shallow package structure and clear boundaries.
-- Do not add layers unless they materially improve clarity.
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+./scripts/verify-rust-testdata.sh
+./scripts/verify-rust-testdata-run.sh
+```
 
----
+Use focused checks first when they shorten feedback, but do not replace the
+required final gates for implementation changes.
 
-## Traits
+For docs-only changes, run at least `git diff --check` and inspect the rendered
+or changed Markdown enough to catch broken structure.
 
-- Use concrete types by default.
-- Define small traits near the consumer.
-- Keep trait bounds explicit and narrow.
-- Do not add traits just for future flexibility or mocking.
+## Final Self-Check
 
----
+Before finalizing, verify:
 
-## Types and API Design
-
-- Make invalid states hard to represent.
-- Be explicit about ownership, borrowing, lifetimes, and concurrency behavior.
-- Keep APIs small, direct, and hard to misuse.
-- Use constructors and abstraction only when they add clear value.
-
----
-
-## Naming
-
-- Use clear, domain-specific, descriptive names.
-- Prefer intent-revealing names over vague buckets like `util`, `helper`, or `manager`.
-- Keep package names short and idiomatic.
-
----
-
-## Functions and Methods
-
-- Keep functions small, cohesive, and easy to scan.
-- Prefer straightforward control flow and early returns.
-- Be explicit about mutation, ownership, borrowing, and receiver choice.
-- Do not extract helpers that make the call site harder to understand.
-
----
-
-## Error Handling
-
-- Handle errors explicitly and never ignore them without a clear reason.
-- Add context to errors when it helps callers understand the failure.
-- Do not use `panic` for normal error handling.
-- Validate inputs and make edge cases explicit at boundaries.
-
----
-
-## Cancellation and Process Context
-
-- Pass explicit cancellation, timeout, or configuration values when behavior
-  needs them.
-- Do not hide process-global assumptions in low-level APIs.
-- Propagate caller-controlled limits through request boundaries.
-- Respect cancellation, deadlines, and timeouts where they exist.
-
----
-
-## Concurrency
-
-- Do not add concurrency unless it is needed and beneficial.
-- Prefer simple synchronization and data flow.
-- Be explicit about concurrent-safety guarantees.
-- Avoid leaks, races, deadlocks, and hidden shared mutable state.
-
----
-
-## Performance
-
-- Measure before optimizing.
-- Prefer simple algorithms and data structures.
-- Avoid unnecessary allocations, copies, conversions, reflection, and boxing.
-- Do not trade maintainability for hypothetical speedups.
-
----
-
-## Security
-
-- Treat all external input as untrusted.
-- Validate, sanitize, and bound data at system boundaries.
-- Use secure defaults and least privilege.
-- Never log secrets or introduce avoidable data-exposure risks.
-
----
-
-## State and Configuration
-
-- Minimize global state and hidden runtime coupling.
-- Prefer explicit dependencies and explicit configuration.
-- Keep initialization obvious and remove speculative extension points.
-
----
-
-## Comments and Documentation
-
-- Write comments only when they add signal.
-- Explain why or document non-obvious invariants and tradeoffs.
-- Keep comments and exported docs accurate.
-
----
-
-## Testing
-
-- Test behavior, edge cases, failure paths, and regressions.
-- Prefer deterministic tests and control time, randomness, filesystem, process, and concurrency effects.
-- Choose the highest-value test layer first; test user-visible flows at the boundary that best exercises them.
-- Add lower-level tests to protect pure logic and isolate failures.
-- Avoid brittle tests and duplicated assertions across layers unless each layer catches different risks.
-
----
-
-## Dependency Management
-
-- Prefer the standard library first.
-- Add third-party dependencies only when clearly justified.
-- Avoid dependencies that add more abstraction than value.
-
----
-
-## Change Guidelines
-
-- Preserve good existing style.
-- Prefer minimal, high-signal changes over broad rewrites.
-- Improve naming, structure, and boundaries where needed.
-- Call out tradeoffs for security-sensitive, performance-sensitive, or otherwise non-obvious changes.
-
----
-
-## Review Checklist
-
-Before finalizing a Rust change, verify readability, correctness on edge cases,
-explicit error handling, justified abstractions, safe boundary validation,
-necessary and safe concurrency, reasonable performance, explicit security
-handling, minimal global state, and maintainability.
-
----
-
-## Hard Rules
-
-- Prefer simple, explicit code.
-- Prefer concrete types and narrow traits.
-- Handle errors explicitly.
-- Pass cancellation, timeout, and configuration explicitly when needed.
-- Avoid global state.
-- Avoid premature abstraction.
-- Avoid speculative optimization.
-- Prefer stdlib first.
-- Keep interfaces and package APIs small.
-- Keep code secure at boundaries.
-- Keep code maintainable.
+- The requested task is fully handled.
+- The diff is scoped to the request.
+- The implementation follows the accepted language/process direction.
+- Tests or concrete checks support the change.
+- Source-of-truth docs are synchronized or explicitly called out.
+- No unrelated files were reverted or cleaned up.
