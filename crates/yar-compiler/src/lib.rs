@@ -1,3 +1,5 @@
+mod address_taken;
+
 pub mod ast;
 pub mod checker;
 pub mod codegen;
