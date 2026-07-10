@@ -642,6 +642,14 @@ impl<'a> PackageLowerer<'a> {
                 target: self.rewrite_expr(package, &stmt.target, type_params),
                 value: self.rewrite_expr(package, &stmt.value, type_params),
             })),
+            Statement::CompoundAssign(stmt) => {
+                Statement::CompoundAssign(Box::new(CompoundAssignStmt {
+                    target: self.rewrite_expr(package, &stmt.target, type_params),
+                    operator: stmt.operator,
+                    op_pos: stmt.op_pos.clone(),
+                    value: self.rewrite_expr(package, &stmt.value, type_params),
+                }))
+            }
             Statement::If(stmt) => Statement::If(Box::new(IfStmt {
                 if_pos: stmt.if_pos.clone(),
                 cond: self.rewrite_expr(package, &stmt.cond, type_params),

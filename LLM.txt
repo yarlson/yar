@@ -333,7 +333,9 @@ Arithmetic: `+`, `-`, `*`, `/`, `%`
 Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 Boolean: `&&` (short-circuit AND), `||` (short-circuit OR)
 Unary: `-` (negate), `!` (not), `&` (address-of), `*` (dereference)
-Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (sugar for `x = x op expr`)
+Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=`. The target is evaluated
+once. Map elements do not support compound assignment because lookup is
+errorable.
 String: `+` (concatenation), `==`/`!=` (equality), `s[i]` (byte), `s[i:j]`, `s[i:]`, `s[:j]` (slice)
 
 ## Error Handling

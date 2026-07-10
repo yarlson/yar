@@ -269,8 +269,9 @@ guarantees, or set syntax.
 
 Status: accepted
 
-YAR supports `+=`, `-=`, `*=`, `/=`, and `%=` as sugar that desugars to
-`x = x op expr`. Works for integer arithmetic and string `+` concatenation.
+YAR supports `+=`, `-=`, `*=`, `/=`, and `%=` for integer arithmetic and string
+`+` concatenation. The assignment target is evaluated exactly once. Map
+elements do not support compound assignment because lookup is errorable.
 
 ### Open-ended slice syntax
 

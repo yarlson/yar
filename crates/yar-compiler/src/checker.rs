@@ -690,6 +690,7 @@ impl Checker {
             Statement::Let(stmt) => self.check_let(stmt),
             Statement::Var(stmt) => self.check_var(stmt),
             Statement::Assign(stmt) => self.check_assign(stmt),
+            Statement::CompoundAssign(stmt) => self.check_compound_assign(stmt),
             Statement::If(stmt) => {
                 self.check_condition(
                     &stmt.cond,
@@ -909,6 +910,48 @@ impl Checker {
                     diagnostic_type_name(&value.base),
                     diagnostic_type_name(&target_type)
                 ),
+            );
+        }
+    }
+
+    fn check_compound_assign(&mut self, stmt: &CompoundAssignStmt) {
+        if self.check_map_assignment_target(&stmt.target).is_some() {
+            self.diag.add(
+                stmt.op_pos.clone(),
+                "map compound assignment is not supported; use an explicit lookup and assignment",
+            );
+            return;
+        }
+
+        let target_type = self.check_assignment_target(&stmt.target);
+        if target_type == TYPE_INVALID {
+            return;
+        }
+
+        let mut value = self.check_expression(&stmt.value);
+        value = self.require_non_errorable_value(
+            &stmt.value,
+            value,
+            "compound assignment cannot use an errorable value",
+        );
+        if value.base == TYPE_INVALID {
+            return;
+        }
+        value = self.coerce_value(&stmt.value, value, &target_type);
+
+        let valid = if stmt.operator == Kind::Plus && target_type == TYPE_STR {
+            value.base == TYPE_STR
+        } else {
+            is_integer_type(&target_type) && value.base == target_type
+        };
+        if !valid {
+            self.diag.add(
+                stmt.op_pos.clone(),
+                if stmt.operator == Kind::Plus {
+                    "'+=' requires matching integer or str operands"
+                } else {
+                    "compound arithmetic operators require matching integer operands"
+                },
             );
         }
     }
@@ -4393,6 +4436,27 @@ fn main() i32 {
                 "{name}: missing diagnostic {expected:?}; got {diagnostics:?}",
             );
         }
+    }
+
+    #[test]
+    fn rejects_map_compound_assignment_with_stable_diagnostic() {
+        let program = parse_ok(
+            r#"
+package main
+
+fn main() i32 {
+    values := map[str]i32{"count": 1}
+    values["count"] += 1
+    return 0
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&program);
+        assert_has(
+            &diagnostics,
+            "map compound assignment is not supported; use an explicit lookup and assignment",
+        );
     }
 
     #[test]

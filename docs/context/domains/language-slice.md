@@ -48,8 +48,10 @@
 - `var name Type = expr`
 - Reassignment to an existing local, struct field, array index, slice index,
   dereferenced pointer, or map element
-- Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (desugars to assignment
-  with binary expression)
+- Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` on non-map assignment
+  targets. The target is evaluated exactly once.
+- Map compound assignment is rejected because map lookup produces `!V`; use
+  explicit lookup handling followed by ordinary map assignment.
 - `if`, `else`, and `else if`
 - `for { ... }`
 - `for cond { ... }`

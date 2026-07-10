@@ -421,14 +421,13 @@ impl Parser {
         let tok = self.current();
         if let Some(bin_op) = compound_assign_op(tok.kind) {
             self.advance();
-            let rhs = self.parse_expression();
-            let value = Expression::Binary(Box::new(BinaryExpr {
-                left: target.clone(),
+            let value = self.parse_expression();
+            return Statement::CompoundAssign(Box::new(CompoundAssignStmt {
+                target,
                 operator: bin_op,
                 op_pos: tok.pos,
-                right: rhs,
+                value,
             }));
-            return Statement::Assign(Box::new(AssignStmt { target, value }));
         }
         self.expect(Kind::Assign, "expected '=' in assignment");
         let value = self.parse_expression();
@@ -1446,6 +1445,28 @@ fn main() i32 {
         };
         assert!(matches!(loop_.init, Some(Statement::Assign(_))));
         assert!(matches!(loop_.post, Some(Statement::Assign(_))));
+    }
+
+    #[test]
+    fn preserves_compound_assignment_as_its_own_statement() {
+        let (program, diagnostics) = parse(
+            r#"
+package main
+
+fn main() i32 {
+    values[index] += amount
+    return 0
+}
+"#,
+        );
+
+        assert_eq!(diagnostics, Vec::new());
+        let Statement::CompoundAssign(statement) = &program.functions[0].body.stmts[0] else {
+            panic!("expected compound assignment statement");
+        };
+        assert_eq!(statement.operator, Kind::Plus);
+        assert!(matches!(statement.target, Expression::Index(_)));
+        assert!(matches!(statement.value, Expression::Ident(_)));
     }
 
     #[test]
