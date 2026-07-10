@@ -346,6 +346,9 @@ Supported array operations:
 - taking addresses of addressable elements with `&array[i]`
 - `len(array)`
 
+Array reads, assignments, and element address-taking are bounds-checked at
+runtime and trap with `runtime failure: array index out of range`.
+
 ## Slices
 
 Slices are supported:

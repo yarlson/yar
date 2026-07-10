@@ -187,6 +187,7 @@ impl Generator<'_> {
         out.push_str("declare void @yar_map_delete(ptr, ptr)\n");
         out.push_str("declare i32 @yar_map_len(ptr)\n");
         out.push_str("declare %yar.slice @yar_map_keys(ptr)\n");
+        out.push_str("declare void @yar_array_index_check(i64, i64)\n");
         out.push_str("declare void @yar_slice_index_check(i64, i64)\n");
         out.push_str("declare void @yar_slice_range_check(i64, i64, i64)\n");
         out.push_str("declare void @yar_str_index_check(i64, i64)\n");
@@ -2021,14 +2022,18 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             Expression::Index(expr) => {
                 let base = self.emit_aggregate_address(&expr.inner)?;
                 let index = self.emit_expression(&expr.index)?;
-                if let Some((_, element_type)) = parse_array_type(&base.type_) {
+                if let Some((len, element_type)) = parse_array_type(&base.type_) {
+                    let len =
+                        i64::try_from(len).map_err(|_| CodegenError::unsupported("array size"))?;
+                    let index64 = self.int_to_i64(&index)?;
+                    self.body.push_str(&format!(
+                        "  call void @yar_array_index_check(i64 {index64}, i64 {len})\n"
+                    ));
                     let element_ptr = self.temp("elem.ptr");
                     self.body.push_str(&format!(
-                        "  %{element_ptr} = getelementptr inbounds {}, ptr {}, i32 0, {} {}\n",
+                        "  %{element_ptr} = getelementptr inbounds {}, ptr {}, i32 0, i64 {index64}\n",
                         self.llvm_type(&base.type_)?,
-                        base.ptr,
-                        self.llvm_type(&index.type_)?,
-                        index.repr
+                        base.ptr
                     ));
                     return Ok(Address {
                         type_: element_type,
@@ -6093,6 +6098,7 @@ mod tests {
     const CODEGEN_FIXTURES: &[&str] = &[
         "testdata/hello/main.yar",
         "testdata/add/main.yar",
+        "testdata/array_bounds/main.yar",
         "testdata/i64/main.yar",
         "testdata/i64_untyped_binary/main.yar",
         "testdata/bool_operators/main.yar",
@@ -6442,6 +6448,43 @@ fn main() i32 {
         assert_eq!(
             ir.matches("call void @yar_pointer_check(ptr ").count(),
             12,
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn checks_fixed_array_indexes_for_bounds() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn read(values [2]i32, index i32) i32 {
+    return values[index]
+}
+
+fn read_i64(values [2]i32, index i64) i32 {
+    return values[index]
+}
+
+fn write(values [2]i32, index i32) void {
+    values[index] = 1
+}
+
+fn element_pointer(values [2]i32, index i32) *i32 {
+    return &values[index]
+}
+
+fn main() i32 {
+    values := [2]i32{1, 2}
+    write(values, 0)
+    return read(values, 0) + read_i64(values, 1) + *element_pointer(values, 0)
+}
+"#,
+        );
+
+        assert_eq!(
+            ir.matches("call void @yar_array_index_check(i64 ").count(),
+            4,
             "{ir}"
         );
     }

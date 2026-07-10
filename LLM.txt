@@ -260,7 +260,8 @@ tail := values[1:]           // open-ended: end defaults to len(values)
 head := values[:2]           // open-ended: start defaults to 0
 ```
 
-Runtime bounds-checked. `len()` works on both. `append()` on slices only.
+Array and slice indexing is runtime bounds-checked. `len()` works on both.
+`append()` works on slices only.
 
 ## Maps
 

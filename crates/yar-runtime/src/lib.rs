@@ -156,6 +156,13 @@ pub extern "C" fn yar_set_args(argc: i32, argv: *mut *mut std::ffi::c_char) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn yar_array_index_check(index: i64, len: i64) {
+    if index < 0 || index >= len {
+        runtime_fail(b"runtime failure: array index out of range\n");
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn yar_slice_index_check(index: i64, len: i64) {
     if index < 0 || index >= len {
         runtime_fail(b"runtime failure: slice index out of range\n");

@@ -133,6 +133,8 @@ $ yar run squares.yar
 interfaces, enums, fixed arrays (`[N]T`), slices (`[]T`), maps (`map[K]V`),
 channels (`chan[T]`), and function types.
 
+Fixed-array, slice, and string indexing is bounds-checked at runtime.
+
 ## Concurrency
 
 - `taskgroup []R { ... }` spawns concurrent calls and yields results in spawn
