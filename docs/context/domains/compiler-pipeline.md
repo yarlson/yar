@@ -62,9 +62,10 @@
   pointers to LLVM `ptr` values, lowering slices to runtime descriptors plus
   allocation/copy helpers, lowering maps to opaque runtime-managed hash tables
   with typed key/value access and key-snapshot extraction, generating the
-  native `main` wrapper around `yar.main`, initializing the runtime GC stack
-  boundary there, and declaring the shared runtime allocation helpers used by
-  heap-backed features.
+  native `main` wrapper around `yar.main`, calling the runtime's reserved GC
+  initialization hook there, and declaring the shared runtime allocation
+  helpers used by heap-backed features. The current Rust runtime leaves that GC
+  hook inactive and retains allocations until process exit.
 - `stdlib/packages` contains the standard library written in Yar. The Rust
   package loader embeds those files and uses them as the final fallback after
   local and dependency imports.
@@ -108,9 +109,9 @@
   before semantic analysis.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
-- The generated native `main` wrapper records a stack-top pointer for the
-  runtime before user `yar.main()` executes so the collector can conservatively
-  scan live stack roots.
+- The generated native `main` wrapper passes a stack-top pointer to the reserved
+  runtime GC hook before user `yar.main()` executes. The current Rust runtime's
+  hook is a no-op.
 - Pointer-taking of locals and parameters is implemented conservatively by
   storing local slots in runtime-managed storage so returned or retained
   addresses stay valid without a separate escape-analysis pass.

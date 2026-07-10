@@ -4,8 +4,9 @@
 
 Yar is a compiled programming language that targets native executables through
 LLVM. It has explicit error handling, closed enums with exhaustive matching,
-generics, interfaces, structured concurrency, and automatic memory management
-with no exceptions, no implicit coercions, and no hidden control flow.
+generics, interfaces, structured concurrency, and runtime-managed heap
+allocation with no exceptions, no implicit coercions, and no hidden control
+flow.
 
 Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 
@@ -116,8 +117,9 @@ $ yar run squares.yar
 - Closures capture by value at creation time.
 - Structured concurrency uses `taskgroup` for scoped spawning and `chan[T]`
   for bounded FIFO communication.
-- The runtime manages memory automatically. There is no manual `free` and no
-  visible garbage collector.
+- The runtime owns heap allocation. The current Rust runtime retains allocated
+  storage until process exit; there is no manual `free` or user-visible
+  collector.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
 - The standard library is written in Yar and compiled through the same pipeline

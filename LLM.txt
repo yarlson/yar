@@ -854,7 +854,8 @@ Cache: `~/.cache/yar/deps/` (override with `YAR_CACHE`).
 
 ## Memory Management
 
-- Runtime-managed heap with conservative mark-and-sweep GC
+- Runtime-managed heap; the current Rust runtime retains allocations until
+  process exit
 - No manual free, no GC builtins
 - Allocation failure is unrecoverable (not a YAR error)
 

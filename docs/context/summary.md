@@ -59,8 +59,10 @@ runtime static library to produce or run a native executable.
 - Enumerate map keys through snapshot slices with `keys(map[K]V) []K`.
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
-- Expose a runtime-managed allocation boundary with conservative garbage collection for slices, maps, pointers, and other heap-backed features.
-- Reclaim unreachable heap-backed storage without adding user-visible lifetime syntax.
+- Expose one runtime-managed allocation boundary for slices, maps, pointers,
+  and other heap-backed features.
+- Retain heap allocations until process exit in the current Rust runtime; no
+  user-visible lifetime or deallocation syntax exists.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Stream file and TCP connection data through shared `io.Reader`, `io.Writer`, and `io.Closer` interfaces.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.

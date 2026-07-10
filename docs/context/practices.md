@@ -85,9 +85,9 @@
   key is absent. `keys(map)` returns a snapshot slice of the current keys.
 - Native builds link the Rust runtime archive from `crates/yar-runtime`.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
-  storage, and other heap-backed features. The current runtime reclaims
-  unreachable heap-backed objects with a conservative collector. Allocation
-  failure is still an unrecoverable runtime failure rather than a YAR `error`.
+  storage, and other heap-backed features. The current Rust runtime retains
+  allocations until process exit. Allocation failure is still an unrecoverable
+  runtime failure rather than a YAR `error`.
 - Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
   and `run` commands. They are included only during `yar test`.
 - Test functions follow the convention `fn test_*(t *testing.T) void` and are
