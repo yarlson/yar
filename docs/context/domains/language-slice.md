@@ -204,6 +204,8 @@
   `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because
   there is no pointer type to infer, and `nil` does not coerce to interfaces.
+- Out-of-range fixed-array reads, assignments, and element address-taking trap
+  with `runtime failure: array index out of range`.
 - Out-of-range slice indexing and slicing trap at runtime.
 - Map key types are restricted to `bool`, `i32`, `i64`, and `str`.
 - Map value types cannot be `void`, `noreturn`, or an unknown type.

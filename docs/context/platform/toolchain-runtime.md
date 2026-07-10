@@ -143,8 +143,10 @@
 - `yar_chan_close(void *handle)` closes the channel and wakes blocked senders
   and receivers.
 
-### Slice Runtime
+### Array and Slice Runtime
 
+- `yar_array_index_check(long long index, long long len)` traps on out-of-range
+  fixed-array indexing before generated code computes an element address.
 - `yar_slice_index_check(long long index, long long len)` traps on out-of-range
   slice indexing.
 - `yar_slice_range_check(long long start, long long end, long long len)` traps
