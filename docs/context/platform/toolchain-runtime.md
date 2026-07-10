@@ -101,29 +101,24 @@
 - The generated native `main` wrapper accepts `argc` / `argv`, records a
   stack-top pointer through `yar_gc_init_stack_top(void *stack_top)`, forwards
   arguments to `yar_set_args(int32_t argc, char **argv)`, and then calls user
-  `yar.main()`.
+  `yar.main()`. The current Rust runtime keeps the GC initialization hook as a
+  no-op.
 - The generated unhandled-error path uses `yar_print`, so unhandled `main`
   errors currently surface on stdout rather than stderr.
 
 ### Allocation
 
-- `yar_gc_init_stack_top(void *stack_top)` captures the outer stack boundary
-  used by the conservative collector.
-- `yar_gc_collect(void)` runs a conservative mark-and-sweep collection over the
-  runtime-managed heap.
+- `yar_gc_init_stack_top(void *stack_top)` is a reserved ABI hook and currently
+  does nothing.
+- `yar_gc_collect(void)` is a reserved ABI hook and currently does nothing.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
   stderr and exit status `1`.
-- `yar_alloc(long long size)` allocates collector-managed storage, may trigger
-  collection when the managed heap target is exceeded, and traps on invalid
-  size or allocation failure.
+- `yar_alloc(long long size)` allocates process-lifetime storage and traps on
+  invalid size or allocation failure.
 - `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage
   and traps on invalid size or allocation failure.
-- `YAR_GC_HEAP_TARGET_BYTES` optionally overrides the initial managed-heap
-  target used to decide when automatic collection should run; this is mainly a
-  runtime/testing knob, not a language feature.
-- Heap metadata is guarded by a mutex when taskgroup worker threads are active.
-  The current collector suppresses collection while concurrent tasks are
-  running and resumes normal collection after they join.
+- The current Rust runtime does not reclaim individual heap allocations;
+  process teardown releases them.
 
 ### Concurrency Runtime
 
@@ -288,14 +283,13 @@ long long b_len)` allocates and returns a new string containing the
 - Slice literals, `append`, pointer composite literals, map allocations, and
   local or parameter storage used by address-taking all reuse that same
   allocation boundary.
-- The current runtime implementation uses a non-moving conservative
-  mark-and-sweep collector that scans spilled registers, the stack range rooted
-  at the generated native `main` wrapper, and the contents of live heap blocks.
+- The current Rust runtime retains allocations until process exit. The GC ABI
+  hooks remain reserved for a future collector implementation.
 - Pointer composite literals lower by allocating storage for the pointed-to
   value and storing the literal into that storage.
 - Map creation, growth, string concatenation results, host-returned strings,
   process argv snapshots, and filesystem directory-entry snapshots all allocate
-  through the same collector-aware helpers.
+  through the same runtime helpers.
 - Allocation failure is treated as an unrecoverable runtime failure, not a YAR
   `error` value.
 

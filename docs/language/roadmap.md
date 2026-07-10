@@ -137,8 +137,8 @@ The minimal runtime-managed memory model is now an accepted design foundation.
 
 - future heap-backed features should reuse the shared allocation boundary
 - allocation failure is outside the ordinary `error` model
-- the current runtime now uses conservative garbage collection for existing
-  heap-backed features without adding new source syntax
+- garbage collection remains an accepted direction, but the current Rust
+  runtime retains allocations until process exit
 - this is already used by slices, pointers, maps, richer string operations, and
   other heap-backed runtime values
 

@@ -57,5 +57,5 @@
 - Non-Windows builds pass `-pthread` during linking.
 - Windows currently has runtime stubs that fail with a clear
   "concurrency is not supported on windows yet" runtime error.
-- The conservative GC now guards heap metadata with a mutex and suppresses
-  collection while concurrent worker tasks are active.
+- The current Rust runtime does not collect heap storage while workers run (or
+  outside taskgroups); allocations remain live until process exit.
