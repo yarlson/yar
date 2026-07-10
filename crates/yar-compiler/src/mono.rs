@@ -210,6 +210,14 @@ impl Monomorphizer {
                 target: self.rewrite_expr(&stmt.target, subst),
                 value: self.rewrite_expr(&stmt.value, subst),
             })),
+            Statement::CompoundAssign(stmt) => {
+                Statement::CompoundAssign(Box::new(CompoundAssignStmt {
+                    target: self.rewrite_expr(&stmt.target, subst),
+                    operator: stmt.operator,
+                    op_pos: stmt.op_pos.clone(),
+                    value: self.rewrite_expr(&stmt.value, subst),
+                }))
+            }
             Statement::If(stmt) => Statement::If(Box::new(IfStmt {
                 if_pos: stmt.if_pos.clone(),
                 cond: self.rewrite_expr(&stmt.cond, subst),

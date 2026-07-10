@@ -263,6 +263,7 @@ pub enum Statement {
     Let(Box<LetStmt>),
     Var(Box<VarStmt>),
     Assign(Box<AssignStmt>),
+    CompoundAssign(Box<CompoundAssignStmt>),
     If(Box<IfStmt>),
     For(Box<ForStmt>),
     Break(BreakStmt),
@@ -293,6 +294,14 @@ pub struct VarStmt {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssignStmt {
     pub target: Expression,
+    pub value: Expression,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompoundAssignStmt {
+    pub target: Expression,
+    pub operator: Kind,
+    pub op_pos: Position,
     pub value: Expression,
 }
 

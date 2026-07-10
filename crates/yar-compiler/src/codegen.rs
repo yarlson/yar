@@ -1223,6 +1223,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             }
             Statement::Var(stmt) => self.emit_var(stmt),
             Statement::Assign(stmt) => self.emit_assign(stmt),
+            Statement::CompoundAssign(stmt) => self.emit_compound_assign(stmt),
             Statement::Expr(stmt) => {
                 self.emit_expression(&stmt.expr)?;
                 Ok(())
@@ -1546,6 +1547,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             )));
         }
         self.store_address(&target, &value)
+    }
+
+    fn emit_compound_assign(&mut self, statement: &CompoundAssignStmt) -> Result<(), CodegenError> {
+        let target = self.emit_address(&statement.target)?;
+        let current = self.load_address(&target)?;
+        let value = self.emit_expression_as(&statement.value, &target.type_)?;
+        let result = self.emit_arithmetic_value(statement.operator, current, value)?;
+        self.store_address(&target, &result)
     }
 
     fn bind_local(&mut self, name: &str, value: Value) -> Result<(), CodegenError> {
@@ -2486,13 +2495,29 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return self.emit_comparison(expression.operator, left, right);
         }
 
+        self.emit_arithmetic_value(expression.operator, left, right)
+    }
+
+    fn emit_arithmetic_value(
+        &mut self,
+        operator: Kind,
+        left: Value,
+        right: Value,
+    ) -> Result<Value, CodegenError> {
+        if left.type_ != right.type_ {
+            return Err(CodegenError::unsupported(
+                "mixed-type arithmetic expression",
+            ));
+        }
         if !matches!(left.type_.as_str(), "i32" | "i64") {
-            if expression.operator == Kind::Plus && left.type_ == "str" {
+            if operator == Kind::Plus && left.type_ == "str" {
                 return self.emit_string_concat(left, right);
             }
-            return Err(CodegenError::unsupported("non-integer binary expression"));
+            return Err(CodegenError::unsupported(
+                "non-integer arithmetic expression",
+            ));
         }
-        let op = arithmetic_op(expression.operator)?;
+        let op = arithmetic_op(operator)?;
         let result = self.temp("bin");
         self.body.push_str(&format!(
             "  %{result} = {op} {} {}, {}\n",
@@ -5535,6 +5560,10 @@ fn collect_function_literals_from_statement<'a>(
             collect_function_literals_from_expression(&stmt.target, literals);
             collect_function_literals_from_expression(&stmt.value, literals);
         }
+        Statement::CompoundAssign(stmt) => {
+            collect_function_literals_from_expression(&stmt.target, literals);
+            collect_function_literals_from_expression(&stmt.value, literals);
+        }
         Statement::If(stmt) => {
             collect_function_literals_from_expression(&stmt.cond, literals);
             collect_function_literals_from_block(&stmt.then_block, literals);
@@ -5724,6 +5753,10 @@ fn collect_map_result_types_from_statement(statement: &Statement, result_types: 
             }
         }
         Statement::Assign(stmt) => {
+            collect_map_result_types_from_expression(&stmt.target, result_types);
+            collect_map_result_types_from_expression(&stmt.value, result_types);
+        }
+        Statement::CompoundAssign(stmt) => {
             collect_map_result_types_from_expression(&stmt.target, result_types);
             collect_map_result_types_from_expression(&stmt.value, result_types);
         }
@@ -6487,6 +6520,45 @@ fn main() i32 {
             4,
             "{ir}"
         );
+    }
+
+    #[test]
+    fn evaluates_compound_assignment_targets_once() {
+        let ir = emit_source(
+            r#"
+package main
+
+struct Record {
+    value i32
+}
+
+fn next_index(counter *i32) i32 {
+    *counter += 1
+    return 0
+}
+
+fn amount(counter *i32) i32 {
+    *counter += 1
+    return 2
+}
+
+fn main() i32 {
+    index_calls := 0
+    rhs_calls := 0
+    values := [1]i32{1}
+    slice := []i32{1}
+    records := [1]Record{Record{value: 1}}
+
+    values[next_index(&index_calls)] += amount(&rhs_calls)
+    slice[next_index(&index_calls)] += amount(&rhs_calls)
+    records[next_index(&index_calls)].value += amount(&rhs_calls)
+    return index_calls + rhs_calls
+}
+"#,
+        );
+
+        assert_eq!(ir.matches("call i32 @yar.next_index(").count(), 3, "{ir}");
+        assert_eq!(ir.matches("call i32 @yar.amount(").count(), 3, "{ir}");
     }
 
     #[test]

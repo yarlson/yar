@@ -27,6 +27,10 @@ fn collect_from_statement(statement: &Statement, locals: &mut BTreeSet<String>) 
             collect_from_expression(&statement.target, locals);
             collect_from_expression(&statement.value, locals);
         }
+        Statement::CompoundAssign(statement) => {
+            collect_from_expression(&statement.target, locals);
+            collect_from_expression(&statement.value, locals);
+        }
         Statement::If(statement) => {
             collect_from_expression(&statement.cond, locals);
             collect_from_block(&statement.then_block, locals);

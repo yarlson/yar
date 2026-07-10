@@ -539,8 +539,12 @@ Implemented statements:
 - block statements: `{ ... }`
 - short local declarations: `x := expr`
 - typed local declarations: `var name Type` and `var name Type = expr`
-- assignment to locals, struct fields, array indices, slice indices, and dereferenced pointers
-- compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` (desugars to `x = x op expr`)
+- assignment to locals, struct fields, array indices, slice indices,
+  dereferenced pointers, and map elements
+- compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` for non-map assignment
+  targets; the target is evaluated exactly once
+- map compound assignment is rejected because lookup is errorable; handle the
+  lookup explicitly before assigning a replacement value
 - `if`
 - `if` / `else`
 - `else if`
