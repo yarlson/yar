@@ -239,6 +239,8 @@ p := &n.next                // address-of field through pointer
 - `&expr` (address-of), `*ptr` (dereference), `nil`
 - `ptr.field` works for pointer-to-struct (implicit dereference for field access)
 - `nil` requires pointer-typed context (`p := nil` is rejected)
+- Dereferencing `nil`, explicitly or through field access, terminates with
+  `runtime failure: nil pointer dereference`
 - No pointer arithmetic
 
 ## Arrays and Slices

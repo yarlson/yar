@@ -171,6 +171,8 @@
 - Unary `!` requires a `bool` operand.
 - Address-of requires an addressable operand or a composite literal.
 - Dereference requires a non-errorable pointer operand.
+- Dereferencing `nil`, including through pointer-to-struct field access or
+  assignment, terminates with `runtime failure: nil pointer dereference`.
 - Field access requires a struct value and a known field. Pointer-to-struct
   values are implicitly dereferenced for field access and assignment.
 - Plain enum cases are values of their enum type.

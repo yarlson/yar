@@ -87,6 +87,8 @@ literal.
   the composite literal
 - `nil` is the zero pointer literal
 - `*expr` reads or names the underlying `T` value
+- dereferencing `nil`, explicitly or through pointer field access, terminates
+  with `runtime failure: nil pointer dereference`
 - pointers do not support arithmetic, integer conversion, or raw address
   exposure
 

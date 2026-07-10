@@ -520,6 +520,8 @@ Supported pointer operations:
 - implicit dereference for field access: `ptr.field` (equivalent to `(*ptr).field`)
 - implicit dereference for field assignment: `ptr.field = value`
 - pointer equality and inequality against `nil` or the same pointer type
+- dereferencing `nil`, including through implicit field access, terminates with
+  `runtime failure: nil pointer dereference`
 
 Current pointer restrictions:
 

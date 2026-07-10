@@ -93,6 +93,13 @@ pub extern "C" fn yar_trap_oom() -> ! {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn yar_pointer_check(pointer: *const u8) {
+    if pointer.is_null() {
+        runtime_fail(b"runtime failure: nil pointer dereference\n");
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn yar_alloc(size: i64) -> *mut u8 {
     memory::alloc(size, false)
 }
