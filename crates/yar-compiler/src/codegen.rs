@@ -1,10 +1,11 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt::{self, Write},
 };
 
 use crate::{
+    address_taken::collect_address_taken_locals,
     ast::*,
     checker::{
         CaptureInfo, EnumCaseInfo, EnumInfo, FunctionLiteralInfo, Info, InterfaceMethodInfo,
@@ -1062,6 +1063,7 @@ struct FunctionEmitter<'a, 'g> {
     body_block: &'a BlockStmt,
     signature: Signature,
     captures: Vec<CaptureInfo>,
+    heap_locals: BTreeSet<String>,
     locals: BTreeMap<String, Local>,
     loop_stack: Vec<LoopLabels>,
     taskgroup: Option<TaskgroupContext>,
@@ -1104,6 +1106,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             body_block: &function.body,
             signature: signature.clone(),
             captures: Vec::new(),
+            heap_locals: collect_address_taken_locals(&function.body),
             locals: BTreeMap::new(),
             loop_stack: Vec::new(),
             taskgroup: None,
@@ -1136,6 +1139,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             body_block: &literal.body,
             signature: info.signature,
             captures: info.captures,
+            heap_locals: collect_address_taken_locals(&literal.body),
             locals: BTreeMap::new(),
             loop_stack: Vec::new(),
             taskgroup: None,
@@ -1172,18 +1176,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             let llvm_type = self.llvm_type(&type_)?;
             let register = format!("%arg.{}", param.name);
             params.push(format!("{llvm_type} {register}"));
-            let slot = self.temp(&format!("local.{}", param.name));
+            let slot = self.allocate_local_slot(&param.name, &type_)?;
             self.body
-                .push_str(&format!("  %{slot} = alloca {llvm_type}\n"));
-            self.body
-                .push_str(&format!("  store {llvm_type} {register}, ptr %{slot}\n"));
-            self.locals.insert(
-                param.name,
-                Local {
-                    type_,
-                    ptr: format!("%{slot}"),
-                },
-            );
+                .push_str(&format!("  store {llvm_type} {register}, ptr {slot}\n"));
+            self.locals.insert(param.name, Local { type_, ptr: slot });
         }
 
         for statement in &self.body_block.stmts {
@@ -1552,21 +1548,29 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
 
     fn bind_local(&mut self, name: &str, value: Value) -> Result<(), CodegenError> {
         let llvm_type = self.llvm_type(&value.type_)?;
-        let slot = self.temp(&format!("local.{name}"));
+        let slot = self.allocate_local_slot(name, &value.type_)?;
         self.body
-            .push_str(&format!("  %{slot} = alloca {llvm_type}\n"));
-        self.body.push_str(&format!(
-            "  store {llvm_type} {}, ptr %{slot}\n",
-            value.repr
-        ));
+            .push_str(&format!("  store {llvm_type} {}, ptr {slot}\n", value.repr));
         self.locals.insert(
             name.to_string(),
             Local {
                 type_: value.type_,
-                ptr: format!("%{slot}"),
+                ptr: slot,
             },
         );
         Ok(())
+    }
+
+    fn allocate_local_slot(&mut self, name: &str, type_: &str) -> Result<String, CodegenError> {
+        if self.heap_locals.contains(name) {
+            return self.emit_alloc_type(type_, false);
+        }
+
+        let llvm_type = self.llvm_type(type_)?;
+        let slot = self.temp(&format!("local.{name}"));
+        self.body
+            .push_str(&format!("  %{slot} = alloca {llvm_type}\n"));
+        Ok(format!("%{slot}"))
     }
 
     fn store_address(&mut self, address: &Address, value: &Value) -> Result<(), CodegenError> {
@@ -4901,15 +4905,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         code: &str,
     ) -> Result<(), CodegenError> {
         let previous = self.locals.get(err_name).cloned();
-        let slot = self.temp("handle.err.slot");
-        self.body.push_str(&format!("  %{slot} = alloca i32\n"));
+        let slot = self.allocate_local_slot(err_name, "error")?;
         self.body
-            .push_str(&format!("  store i32 {code}, ptr %{slot}\n"));
+            .push_str(&format!("  store i32 {code}, ptr {slot}\n"));
         self.locals.insert(
             err_name.to_string(),
             Local {
                 type_: "error".to_string(),
-                ptr: format!("%{slot}"),
+                ptr: slot,
             },
         );
 
@@ -6106,6 +6109,7 @@ mod tests {
         "testdata/match_else/main.yar",
         "testdata/methods/main.yar",
         "testdata/panic/main.yar",
+        "testdata/pointer_escape/main.yar",
         "testdata/pointers/main.yar",
         "testdata/slices/main.yar",
         "testdata/stdlib_conv/main.yar",
@@ -6260,6 +6264,105 @@ fn main() i32 {
 
         assert!(ir.contains("icmp eq ptr"), "{ir}");
         assert!(ir.contains("icmp ne ptr"), "{ir}");
+    }
+
+    #[test]
+    fn heap_allocates_address_taken_locals_and_parameters() {
+        let ir = emit_source(
+            r#"
+package main
+
+struct Record {
+    value i32
+}
+
+fn local_pointer() *i32 {
+    value := 7
+    return &value
+}
+
+fn parameter_pointer(value i32) *i32 {
+    return &value
+}
+
+fn field_pointer() *i32 {
+    record := Record{value: 8}
+    return &record.value
+}
+
+fn element_pointer() *i32 {
+    values := [2]i32{9, 10}
+    return &values[1]
+}
+
+fn closure_pointer() *i32 {
+    make_pointer := fn() *i32 {
+        value := 11
+        return &value
+    }
+    return make_pointer()
+}
+
+fn fail() !i32 {
+    return error.Boom
+}
+
+fn error_pointer() *error {
+    value := fail() or |err| {
+        return &err
+    }
+    fallback := error.Unexpected
+    if value == 0 {
+        return &fallback
+    }
+    return &fallback
+}
+
+fn plain(value i32) i32 {
+    copy := value
+    return copy
+}
+
+fn main() i32 {
+    return plain(*local_pointer() + *parameter_pointer(1) + *closure_pointer())
+}
+"#,
+        );
+
+        let function_body = |name: &str| {
+            let symbol = format!("@{}(", function_symbol(name));
+            let symbol_offset = ir
+                .find(&symbol)
+                .unwrap_or_else(|| panic!("missing {symbol}"));
+            let start = ir[..symbol_offset]
+                .rfind("define ")
+                .unwrap_or_else(|| panic!("missing definition for {symbol}"));
+            let end = ir[symbol_offset..]
+                .find("\n}\n")
+                .map(|offset| symbol_offset + offset + 3)
+                .unwrap_or_else(|| panic!("unterminated definition for {symbol}"));
+            &ir[start..end]
+        };
+
+        for name in [
+            "local_pointer",
+            "parameter_pointer",
+            "field_pointer",
+            "element_pointer",
+            "closure.0",
+        ] {
+            let body = function_body(name);
+            assert!(body.contains("call ptr @yar_alloc"), "{name}:\n{body}");
+            assert!(!body.contains("alloca i32"), "{name}:\n{body}");
+        }
+
+        let plain = function_body("plain");
+        assert!(plain.contains("alloca i32"), "{plain}");
+        assert!(!plain.contains("call ptr @yar_alloc"), "{plain}");
+
+        let error_pointer = function_body("error_pointer");
+        assert_eq!(error_pointer.matches("call ptr @yar_alloc").count(), 2);
+        assert_eq!(error_pointer.matches("alloca i32").count(), 1);
     }
 
     #[test]
