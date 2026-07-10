@@ -179,6 +179,7 @@ impl Generator<'_> {
         out.push_str("declare void @yar_eprint(ptr, i64)\n");
         out.push_str("declare ptr @yar_alloc(i64)\n");
         out.push_str("declare ptr @yar_alloc_zeroed(i64)\n");
+        out.push_str("declare void @yar_pointer_check(ptr)\n");
         out.push_str("declare ptr @yar_map_new(i32, i32, i32)\n");
         out.push_str("declare void @yar_map_set(ptr, ptr, ptr)\n");
         out.push_str("declare i32 @yar_map_get(ptr, ptr, ptr)\n");
@@ -1967,6 +1968,11 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         })
     }
 
+    fn emit_pointer_check(&mut self, pointer: &str) {
+        self.body
+            .push_str(&format!("  call void @yar_pointer_check(ptr {pointer})\n"));
+    }
+
     fn emit_address(&mut self, expression: &Expression) -> Result<Address, CodegenError> {
         match expression {
             Expression::Ident(expr) => {
@@ -1984,6 +1990,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 let Some(element_type) = parse_pointer_type(&value.type_) else {
                     return Err(CodegenError::unsupported("dereference address operand"));
                 };
+                self.emit_pointer_check(&value.repr);
                 Ok(Address {
                     type_: element_type,
                     ptr: value.repr,
@@ -1993,6 +2000,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 let mut base = self.emit_aggregate_address(&expr.inner)?;
                 if let Some(element_type) = parse_pointer_type(&base.type_) {
                     let pointer = self.load_address(&base)?;
+                    self.emit_pointer_check(&pointer.repr);
                     base = Address {
                         type_: element_type,
                         ptr: pointer.repr,
@@ -2125,6 +2133,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 let Some(element_type) = parse_pointer_type(&value.type_) else {
                     return Err(CodegenError::unsupported("dereference operand type"));
                 };
+                self.emit_pointer_check(&value.repr);
                 let result = self.temp("deref");
                 self.body.push_str(&format!(
                     "  %{result} = load {}, ptr {}\n",
@@ -6108,6 +6117,7 @@ mod tests {
         "testdata/maps_keys/main.yar",
         "testdata/match_else/main.yar",
         "testdata/methods/main.yar",
+        "testdata/nil_pointer/main.yar",
         "testdata/panic/main.yar",
         "testdata/pointer_escape/main.yar",
         "testdata/pointers/main.yar",
@@ -6363,6 +6373,77 @@ fn main() i32 {
         let error_pointer = function_body("error_pointer");
         assert_eq!(error_pointer.matches("call ptr @yar_alloc").count(), 2);
         assert_eq!(error_pointer.matches("alloca i32").count(), 1);
+    }
+
+    #[test]
+    fn checks_pointer_dereferences_for_nil() {
+        let ir = emit_source(
+            r#"
+package main
+
+struct Record {
+    value i32
+}
+
+fn read(pointer *i32) i32 {
+    return *pointer
+}
+
+fn write(pointer *i32) void {
+    *pointer = 1
+}
+
+fn read_field(pointer *Record) i32 {
+    return pointer.value
+}
+
+fn write_field(pointer *Record) void {
+    pointer.value = 2
+}
+
+fn field_pointer(pointer *Record) *i32 {
+    return &pointer.value
+}
+
+fn read_nested(pointer **Record) i32 {
+    return (*pointer).value
+}
+
+fn write_nested(pointer **Record) void {
+    (*pointer).value = 3
+}
+
+fn nested_field_pointer(pointer **Record) *i32 {
+    return &(*pointer).value
+}
+
+fn same_pointer(pointer *Record) *Record {
+    return pointer
+}
+
+fn read_temporary(pointer *Record) i32 {
+    return same_pointer(pointer).value
+}
+
+fn main() i32 {
+    value := 0
+    record := Record{value: 0}
+    write(&value)
+    write_field(&record)
+    field := field_pointer(&record)
+    if field == nil {
+        return 1
+    }
+    return read(&value) + read_field(&record)
+}
+"#,
+        );
+
+        assert_eq!(
+            ir.matches("call void @yar_pointer_check(ptr ").count(),
+            12,
+            "{ir}"
+        );
     }
 
     #[test]

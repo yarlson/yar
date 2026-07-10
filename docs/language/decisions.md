@@ -97,6 +97,7 @@ Status: accepted
 
 YAR supports explicit `*T` pointers, `&expr`, `*expr`, `nil`, and recursive
 data through pointer indirection rather than direct inline containment.
+Dereferencing `nil` terminates with a deterministic runtime error.
 
 ### Enums and exhaustive `match`
 

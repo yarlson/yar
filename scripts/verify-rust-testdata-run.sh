@@ -52,7 +52,18 @@ while IFS= read -r fixture; do
 
   stdout="$tmp_dir/stdout"
   stderr="$tmp_dir/stderr"
-  if [ "$fixture" = "testdata/stdlib_process_env/main.yar" ]; then
+  if [ "$fixture" = "testdata/nil_pointer/main.yar" ]; then
+    if "$output" >"$stdout" 2>"$stderr"; then
+      echo "fixture unexpectedly succeeded: $fixture" >&2
+      exit 1
+    fi
+    if [ "$(cat "$stderr")" != "runtime failure: nil pointer dereference" ]; then
+      echo "fixture produced unexpected stderr: $fixture" >&2
+      cat "$stderr" >&2
+      exit 1
+    fi
+    continue
+  elif [ "$fixture" = "testdata/stdlib_process_env/main.yar" ]; then
     if ! YAR_PROCESS_ENV_TEST="env ok" "$output" "$capture_script" "$inherit_script" >"$stdout" 2>"$stderr"; then
       echo "fixture failed: $fixture" >&2
       echo "stdout:" >&2

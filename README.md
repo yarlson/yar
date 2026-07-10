@@ -112,6 +112,8 @@ $ yar run squares.yar
 - Packages are explicit. Imports stay qualified. Exported APIs use `pub`.
 - Generics use explicit type arguments. The compiler does not guess.
 - Methods use explicit receivers. Value and pointer receivers are distinct.
+- Dereferencing `nil`, including through pointer field access, terminates with
+  a deterministic runtime error.
 - Interfaces are named and implicit. A concrete type satisfies an interface by
   providing every required method with an exact signature match.
 - Closures capture by value at creation time.

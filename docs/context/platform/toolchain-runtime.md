@@ -120,6 +120,12 @@
 - The current Rust runtime does not reclaim individual heap allocations;
   process teardown releases them.
 
+### Pointer Runtime
+
+- `yar_pointer_check(const void *pointer)` terminates with
+  `runtime failure: nil pointer dereference` when generated code attempts to
+  dereference a null pointer.
+
 ### Concurrency Runtime
 
 - `yar_taskgroup_new(int32_t elem_size)` allocates a taskgroup handle.
