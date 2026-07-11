@@ -1,4 +1,8 @@
-use std::{error::Error, fmt, path::Path};
+use std::{
+    error::Error,
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     ast::{FunctionDecl, PackageGraph, PackageImport, Program, SourceId, TypeRefKind},
@@ -7,7 +11,7 @@ use crate::{
     diag::Diagnostic,
     lower::lower_package_graph,
     mono::monomorphize_program,
-    package::{LoadError, load_package_graph},
+    package::{LoadError, load_package_graph_with_root},
     parser::parse_file,
 };
 
@@ -16,6 +20,7 @@ const TESTING_IMPORT_PATH: &str = "std/testing";
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompileOptions {
     pub target_triple: Option<String>,
+    pub project_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,7 +72,8 @@ pub fn compile_path(
     path: impl AsRef<Path>,
     options: &CompileOptions,
 ) -> Result<(Option<Unit>, Vec<Diagnostic>), CompileError> {
-    let (graph, diagnostics) = load_package_graph(path, false)?;
+    let (graph, diagnostics) =
+        load_package_graph_with_root(path, options.project_root.as_deref(), false)?;
     if !diagnostics.is_empty() {
         return Ok((None, diagnostics));
     }
@@ -79,7 +85,8 @@ pub fn compile_test_path(
     path: impl AsRef<Path>,
     options: &CompileOptions,
 ) -> Result<(Option<Unit>, Vec<Diagnostic>), CompileError> {
-    let (mut graph, diagnostics) = load_package_graph(path, true)?;
+    let (mut graph, diagnostics) =
+        load_package_graph_with_root(path, options.project_root.as_deref(), true)?;
     if !diagnostics.is_empty() {
         return Ok((None, diagnostics));
     }
@@ -298,6 +305,7 @@ fn inject_test_runner(graph: &mut PackageGraph) -> Result<(), CompileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::package::load_package_graph;
 
     #[test]
     fn compiles_entry_path_to_ir() {
@@ -318,6 +326,7 @@ mod tests {
         let root = repo_root();
         let options = CompileOptions {
             target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
+            project_root: None,
         };
         let (unit, diagnostics) =
             compile_path(root.join("testdata/hello/main.yar"), &options).unwrap();
@@ -328,6 +337,42 @@ mod tests {
             unit.ir
                 .contains("target triple = \"x86_64-unknown-linux-gnu\"")
         );
+    }
+
+    #[test]
+    fn compile_options_select_an_explicit_project_root() {
+        let root = temp_dir("yar-rust-explicit-project-root");
+        let inner = root.join("inner");
+        let entry = inner.join("app");
+        write_source(
+            &root.join("yar.toml"),
+            r#"[package]
+name = "outer"
+"#,
+        );
+        write_source(
+            &inner.join("yar.toml"),
+            r#"[package]
+name = "inner"
+"#,
+        );
+        write_source(
+            &root.join("shared/shared.yar"),
+            "package shared\n\npub fn value() i32 { return 0 }\n",
+        );
+        write_source(
+            &entry.join("main.yar"),
+            "package main\n\nimport \"shared\"\n\nfn main() i32 { return shared.value() }\n",
+        );
+        let options = CompileOptions {
+            project_root: Some(root),
+            ..CompileOptions::default()
+        };
+
+        let (unit, diagnostics) = compile_path(&entry, &options).unwrap();
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(unit.is_some());
     }
 
     #[test]
@@ -994,6 +1039,45 @@ fn main() i32 {
             &diagnostics,
             "function \"consume\" expects 2 arguments, got 1",
         );
+        assert_diag_not_contains(
+            &diagnostics,
+            "function \"main.consume\" expects 2 arguments, got 1",
+        );
+    }
+
+    #[test]
+    fn compile_path_reports_source_names_for_nested_entry_package_errors() {
+        let root = temp_dir("yar-rust-nested-entry-diagnostics");
+        write_source(&root.join("yar.toml"), "[package]\nname = \"project\"\n");
+        write_source(
+            &root.join("cmd/app/main.yar"),
+            r#"package main
+
+struct User {
+    id i32
+}
+
+fn consume(user User, n i32) i32 {
+    return n
+}
+
+fn main() i32 {
+    var user User = true
+    return consume(user)
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("cmd/app/main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(&diagnostics, "cannot assign bool to User");
+        assert_diag_contains(
+            &diagnostics,
+            "function \"consume\" expects 2 arguments, got 1",
+        );
+        assert_diag_not_contains(&diagnostics, "cannot assign bool to main.User");
         assert_diag_not_contains(
             &diagnostics,
             "function \"main.consume\" expects 2 arguments, got 1",

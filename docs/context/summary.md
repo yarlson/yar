@@ -18,7 +18,8 @@
 - `build` compiles the entry package graph, writes IR and a selected runtime input into a temporary directory, and invokes `clang` to produce a native binary.
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
 - `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
-- `init` creates a `yar.toml` manifest in the current directory.
+- Project-aware commands accept a prefix-only `--manifest-path` override; otherwise compilation discovers from the entry directory and dependency commands from the invocation directory. The selected manifest directory anchors lock state, recovery, and relative dependency paths without changing the process working directory.
+- `init` creates a `yar.toml` in the invocation directory or at an explicit target without discovering ancestors.
 - `add` and `remove` resolve and serialize the complete target dependency state, then publish `yar.toml` with the target lock contents or absence as one recoverable transition.
 - `fetch` downloads all dependencies in `yar.lock` to the global cache.
 - `lock` regenerates `yar.lock` from `yar.toml` by resolving all git dependencies without rewriting the manifest.

@@ -124,6 +124,10 @@ pub(crate) fn recover(root: &Path) -> io::Result<()> {
     finish_completed_transaction(root)
 }
 
+pub(crate) fn has_recovery_state(root: &Path) -> io::Result<bool> {
+    Ok(path_exists(&root.join(ACTIVE_JOURNAL))? || path_exists(&root.join(COMPLETION_MARKER))?)
+}
+
 #[cfg(test)]
 fn publish_with_hook<F>(
     root: &Path,

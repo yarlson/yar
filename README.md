@@ -233,6 +233,7 @@ CC=clang-17 ./bin/yar build main.yar
 
 ```text
 yar <command> [arguments]
+yar --manifest-path <path/to/yar.toml> <command> [arguments]
 ```
 
 | Command   | What it does                                      |
@@ -278,6 +279,29 @@ PASS: test_add
 ## Dependencies
 
 Yar uses git-based dependency management with no central registry.
+
+The optional `--manifest-path` prefix appears at most once before the command,
+must name `yar.toml`, and explicitly selects a project without fallback. Relative
+manifest paths are resolved from the invocation directory. For `check`,
+`emit-ir`, `build`, `run`, and `test`, Yar otherwise selects the nearest
+ancestor manifest from the named entry file or directory; a manifestless entry
+uses its own directory as the project root. An explicitly selected root must
+contain the entry.
+
+Dependency commands discover from the invocation directory. `add`, `remove`,
+`fetch`, `lock`, and `update` use the nearest ancestor manifest. If none exists,
+`add` creates one in the invocation directory while the other commands fail.
+`init` does not search ancestors: it creates a project in the invocation
+directory. Explicit `init` and `add` may create an absent `yar.toml` in an
+existing selected directory; every other explicitly selected command requires
+the manifest to exist. A created manifest derives its package name from the
+selected directory when that name is valid and otherwise uses `myproject`.
+Invalid nearest candidates fail rather than falling back to a parent project.
+
+The selected manifest's directory owns its sibling `yar.lock`, recovery state,
+root package tree, and manifest-relative local dependency paths. Relative
+manifest, source, and output arguments still use the invocation directory, and
+`run` or `test` programs keep that working directory.
 
 ```bash
 yar init                                        # create yar.toml
@@ -329,10 +353,13 @@ then commit the new `yar.toml` together with the new `yar.lock` or its deletion.
 prepared interrupted transactions restore the prior pair, and success output
 appears only after commit and journal cleanup. Existing metadata-file
 permissions are preserved. Verified dependency caches may be warmed during
-resolution and are not rolled back with project metadata. A later CLI command
-recovers journal state only in its current directory. Do not run concurrent Yar
-CLI commands from the same current directory while dependency metadata
-publication or recovery is in progress.
+resolution and are not rolled back with project metadata. Explicit selection
+recovers only its fixed manifest directory and never falls back. Automatic
+discovery also recognizes transaction state when the live manifest is absent;
+it recovers that candidate and restarts its ancestor search before reading
+metadata. Do not run another Yar CLI command against the same selected project
+while dependency metadata publication or recovery is in progress, even from a
+different invocation directory.
 
 The compiler hash-verifies a selected cache tree before reading its manifest or
 source, then verifies the manifest against the recorded child edges. A missing,
@@ -348,9 +375,10 @@ requires a future lock v2. There is no root override for conflicting
 source/ref selections.
 
 Local path dependencies remain live and unhashed and may be declared only in
-the root manifest. Their manifests may contribute git dependencies, but may
-not declare another path dependency. A selected path alias must exist and does
-not fall through to a same-named standard-library package. `yar update
+the root manifest. Relative values are resolved from the manifest directory,
+not the invocation directory. Their manifests may contribute git dependencies,
+but may not declare another path dependency. A selected path alias must exist
+and does not fall through to a same-named standard-library package. `yar update
 <git-alias>` merges the replacement graph, preserves unrelated nodes needed by
 other roots, refreshes compatible shared nodes, and prunes orphans; targeted
 path updates require `yar lock`.

@@ -115,7 +115,9 @@ method — A top-level function declaration with an explicit receiver such as
 `fn (u User) label() str`, callable with `value.label()`.
 
 manifest — The `yar.toml` file declaring the project name and its external
-dependencies with alias names and git URLs or local paths.
+dependencies with alias names and git URLs or local paths. The selected root
+manifest's directory anchors project metadata, the root package tree, and
+manifest-relative dependency paths.
 
 lock file — The versioned `yar.lock` dependency graph, pinning each reachable
 git dependency to an exact commit and content hash and recording full

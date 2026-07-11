@@ -58,7 +58,16 @@ pub fn load_package_graph(
     path: impl AsRef<Path>,
     include_tests: bool,
 ) -> Result<(PackageGraph, Vec<Diagnostic>), LoadError> {
-    let (root_dir, entry_dir) = resolve_entry_dirs(path.as_ref())?;
+    load_package_graph_with_root(path, None, include_tests)
+}
+
+pub(crate) fn load_package_graph_with_root(
+    path: impl AsRef<Path>,
+    project_root: Option<&Path>,
+    include_tests: bool,
+) -> Result<(PackageGraph, Vec<Diagnostic>), LoadError> {
+    let entry_dir = resolve_entry_dir(path.as_ref())?;
+    let (root_dir, entry_subpath) = resolve_project_root(&entry_dir, project_root)?;
     let dependency_index = DependencyIndex::load(&root_dir)?;
     let mut loader = PackageLoader {
         packages: BTreeMap::new(),
@@ -68,7 +77,10 @@ pub fn load_package_graph(
     };
 
     let entry_location = PackageLocation {
-        id: PackageId::default(),
+        id: PackageId {
+            source: SourceId::Entry,
+            subpath: entry_subpath,
+        },
         dir: Some(entry_dir),
         import_path: String::new(),
     };
@@ -94,7 +106,7 @@ pub fn load_package_graph(
     }
 }
 
-fn resolve_entry_dirs(path: &Path) -> Result<(PathBuf, PathBuf), LoadError> {
+fn resolve_entry_dir(path: &Path) -> Result<PathBuf, LoadError> {
     let clean_path = if path == Path::new(".") {
         std::env::current_dir()?
     } else {
@@ -102,14 +114,97 @@ fn resolve_entry_dirs(path: &Path) -> Result<(PathBuf, PathBuf), LoadError> {
     };
     let metadata = fs::metadata(&clean_path)?;
     if metadata.is_dir() {
-        return Ok((clean_path.clone(), clean_path));
+        return Ok(clean_path);
     }
     let parent = clean_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    Ok((parent.clone(), parent))
+    Ok(parent)
+}
+
+fn resolve_project_root(
+    entry_dir: &Path,
+    explicit_root: Option<&Path>,
+) -> Result<(PathBuf, String), LoadError> {
+    let entry_dir = fs::canonicalize(absolute_path(entry_dir)?)?;
+    let root_dir = match explicit_root {
+        Some(root) => {
+            let root = absolute_path(root)?;
+            let metadata = fs::metadata(&root)?;
+            if !metadata.is_dir() {
+                return Err(invalid_project_root(format!(
+                    "project root {} is not a directory",
+                    root.display()
+                )));
+            }
+            root
+        }
+        None => discover_project_root(&entry_dir)?.unwrap_or_else(|| entry_dir.clone()),
+    };
+
+    let root_dir = fs::canonicalize(root_dir)?;
+    let relative = entry_dir.strip_prefix(&root_dir).map_err(|_| {
+        invalid_project_root(format!(
+            "entry package {} is outside project root {}",
+            entry_dir.display(),
+            root_dir.display()
+        ))
+    })?;
+    let subpath = package_subpath(relative)?;
+    Ok((root_dir, subpath))
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf, LoadError> {
+    if path.is_absolute() {
+        return Ok(clean_path(path));
+    }
+    Ok(clean_path(&std::env::current_dir()?.join(path)))
+}
+
+fn discover_project_root(entry_dir: &Path) -> Result<Option<PathBuf>, LoadError> {
+    for ancestor in entry_dir.ancestors() {
+        let manifest = ancestor.join(MANIFEST_FILE);
+        match fs::symlink_metadata(&manifest) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                return Ok(Some(ancestor.to_path_buf()));
+            }
+            Ok(_) => {
+                return Err(invalid_project_root(format!(
+                    "manifest candidate {} is not a regular file",
+                    manifest.display()
+                )));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(None)
+}
+
+fn package_subpath(path: &Path) -> Result<String, LoadError> {
+    let mut segments = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(segment) = component else {
+            return Err(invalid_project_root(format!(
+                "entry package path {} is not relative to its project root",
+                path.display()
+            )));
+        };
+        let Some(segment) = segment.to_str() else {
+            return Err(invalid_project_root(format!(
+                "entry package path {} is not valid UTF-8",
+                path.display()
+            )));
+        };
+        segments.push(segment);
+    }
+    Ok(segments.join("/"))
+}
+
+fn invalid_project_root(message: String) -> LoadError {
+    LoadError::Manifest(ManifestError::Invalid(message))
 }
 
 struct PackageLoader {
@@ -370,11 +465,24 @@ impl DependencyIndex {
         );
 
         let manifest_path = root_dir.join(MANIFEST_FILE);
-        if !manifest_path.exists() {
-            return Ok(index);
+        match fs::symlink_metadata(&manifest_path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                return Err(invalid_dependency_graph(format!(
+                    "manifest {} is not a regular file",
+                    manifest_path.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(index),
+            Err(error) => return Err(error.into()),
         }
 
-        let manifest = read_manifest(&manifest_path)?;
+        let manifest = read_manifest(&manifest_path).map_err(|error| {
+            invalid_dependency_graph(format!(
+                "reading manifest {}: {error}",
+                manifest_path.display()
+            ))
+        })?;
         let lock_path = root_dir.join(LOCK_FILE);
         let needs_lock = requires_lock(root_dir, &manifest)?;
         let lock_entries = match read_lock_file(&lock_path) {
@@ -1035,6 +1143,131 @@ mod tests {
         assert!(graph.packages.contains_key(&entry_package_id("token")));
         assert_eq!(graph.packages[&PackageId::default()].name, "main");
         assert_eq!(graph.packages[&entry_package_id("lexer")].name, "lexer");
+    }
+
+    #[test]
+    fn discovers_ancestor_manifest_and_assigns_the_entry_subpath() {
+        let root = temp_dir("yar-package-nested-entry");
+        let entry = root.join("cmd/app");
+        fs::create_dir_all(&entry).unwrap();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            r#"[package]
+name = "project"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            entry.join("main.yar"),
+            r#"package main
+
+import "cmd/app"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&entry, false).unwrap();
+        let entry_id = entry_package_id("cmd/app");
+
+        assert_eq!(graph.entry, entry_id);
+        assert_eq!(graph.packages.len(), 1, "entry directory loaded twice");
+        assert_eq!(graph.packages[&graph.entry].name, "main");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.contains("cannot import package main") })
+        );
+    }
+
+    #[test]
+    fn explicit_project_root_overrides_the_nearest_manifest() {
+        let root = temp_dir("yar-package-explicit-root");
+        let inner = root.join("inner");
+        let entry = inner.join("app");
+        let dependency = root.join("dep");
+        fs::create_dir_all(&entry).unwrap();
+        fs::create_dir_all(&dependency).unwrap();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            r#"[package]
+name = "outer"
+
+[dependencies]
+dep = { path = "dep" }
+"#,
+        )
+        .unwrap();
+        fs::write(inner.join(MANIFEST_FILE), "[package]\nname = \"inner\"\n").unwrap();
+        fs::write(
+            dependency.join("dep.yar"),
+            "package dep\n\npub fn value() i32 { return 0 }\n",
+        )
+        .unwrap();
+        fs::write(
+            entry.join("main.yar"),
+            "package main\n\nimport \"dep\"\n\nfn main() i32 { return dep.value() }\n",
+        )
+        .unwrap();
+
+        let (_, automatic_diagnostics) = load_package_graph(&entry, false).unwrap();
+        assert!(
+            automatic_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("could not be loaded")),
+            "nearest manifest was not selected: {automatic_diagnostics:?}"
+        );
+
+        let (graph, diagnostics) =
+            load_package_graph_with_root(&entry, Some(&root), false).unwrap();
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(graph.entry, entry_package_id("inner/app"));
+    }
+
+    #[test]
+    fn rejects_an_explicit_project_root_outside_the_entry_tree() {
+        let dir = temp_dir("yar-package-outside-explicit-root");
+        let project = dir.join("project");
+        let entry = dir.join("entry");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&entry).unwrap();
+        fs::write(
+            entry.join("main.yar"),
+            "package main\n\nfn main() i32 { return 0 }\n",
+        )
+        .unwrap();
+
+        let error = load_package_graph_with_root(&entry, Some(&project), false)
+            .expect_err("accepted an entry outside the explicit project root");
+
+        assert!(
+            error.to_string().contains("is outside project root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_non_file_nearest_manifest() {
+        let root = temp_dir("yar-package-non-file-manifest");
+        let entry = root.join("app");
+        fs::create_dir_all(&entry).unwrap();
+        fs::create_dir(root.join(MANIFEST_FILE)).unwrap();
+        fs::write(
+            entry.join("main.yar"),
+            "package main\n\nfn main() i32 { return 0 }\n",
+        )
+        .unwrap();
+
+        let error =
+            load_package_graph(&entry, false).expect_err("skipped a non-file manifest candidate");
+
+        assert!(
+            error.to_string().contains("is not a regular file"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

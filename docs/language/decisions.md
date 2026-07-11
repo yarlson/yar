@@ -240,6 +240,18 @@ Status: accepted
 Yar supports external dependencies through `yar.toml` manifests and `yar.lock`
 lock files. Dependencies are git repositories identified by short alias names.
 There is no central registry, no semver range resolution, and no parser changes.
+The prefix `yar --manifest-path <path/to/yar.toml> <command> ...` explicitly
+selects one project and never falls back. Without it, compilation commands use
+the nearest ancestor manifest from the entry directory, while dependency
+commands use the nearest ancestor from the invocation directory. `init` always
+targets the invocation directory or an explicit new root instead of discovering
+ancestors. `add` creates in the invocation directory when discovery finds no
+manifest or at an absent explicit target. Other explicit commands and
+non-creating dependency commands require a manifest; automatic compilation may
+remain manifestless. Invalid nearest candidates fail closed.
+The selected manifest directory anchors `yar.lock`, transaction state, the root
+package tree, and manifest-relative dependency paths while entry and output
+arguments and program working directories remain invocation-relative.
 The explicit `version = 1` lock graph records each git package's exact
 commit/hash and full alias/git/ref child edges. Git declarations in the root
 manifest and manifests of root path dependencies, plus every lock edge, must
@@ -272,18 +284,21 @@ Project dependency metadata is published as one recoverable transition.
 contents before publication; `lock`/`update` preserve manifest bytes. A
 prepared journal restores the prior pair after pre-commit failure or
 interruption, while a completion marker retains the target pair through
-idempotent cleanup. A later command performs recovery only in its current
-directory. Success output follows commit and cleanup. Verified global cache
-warming is outside this transaction. No other Yar CLI command may run
-concurrently from that project directory while metadata changes.
+idempotent cleanup. Explicit selection recovers only its fixed project and never
+falls back. Automatic discovery recognizes transaction state without a live
+manifest, recovers that candidate, and restarts its ancestor search before
+reading metadata. Success output follows commit and cleanup. Verified global
+cache warming is outside this transaction. No other Yar CLI command may target
+that selected project concurrently while metadata changes, even from another
+invocation directory.
 Local path dependencies remain live and unhashed and may be declared only in
-the root manifest. Their manifests may contribute git roots but may not declare
-another path dependency; locked git packages may not declare path dependencies
-either. A selected path alias must exist and cannot fall through to a
-same-named stdlib package. A targeted git update replaces its reachable graph,
-preserves nodes unrelated to the selected graph, refreshes compatible shared
-nodes, and prunes orphans; a targeted path update requires full `yar lock`
-reconciliation.
+the root manifest. Relative values are resolved from that manifest's directory.
+Their manifests may contribute git roots but may not declare another path
+dependency; locked git packages may not declare path dependencies either. A
+selected path alias must exist and cannot fall through to a same-named stdlib
+package. A targeted git update replaces its reachable graph, preserves nodes
+unrelated to the selected graph, refreshes compatible shared nodes, and prunes
+orphans; a targeted path update requires full `yar lock` reconciliation.
 
 ---
 

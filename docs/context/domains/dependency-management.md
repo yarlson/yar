@@ -16,6 +16,36 @@
   `path` for a local source.
 - Alias names must be valid Yar import path segments: `[a-zA-Z_][a-zA-Z0-9_]*`.
   The alias `std` is reserved for the compiler-owned standard library.
+- Relative local dependency paths are interpreted from the directory containing
+  the manifest that declares them, not from the invoking process's directory.
+
+## Project Selection
+
+- The optional global prefix is
+  `yar --manifest-path <path/to/yar.toml> <command> ...`. It is accepted only
+  once, before the command, and must name `yar.toml`. A relative manifest path
+  is resolved from the invocation directory.
+- Explicit selection overrides discovery and never falls back. `init` and `add`
+  may create an absent explicitly selected manifest in an existing target
+  directory; every other command that receives the prefix requires the manifest
+  to exist. Created manifests derive the package name from the selected
+  directory when valid and otherwise use `myproject`.
+- `check`, `emit-ir`, `build`, `run`, and `test` search from the named entry
+  file's parent or entry directory toward the filesystem root. The nearest
+  manifest wins. Without one, the entry directory is a manifestless project
+  root. An explicitly selected root must contain the entry package.
+- `add`, `remove`, `fetch`, `lock`, and `update` search from the invocation
+  directory toward the filesystem root. The nearest manifest wins. If none
+  exists, `add` creates one in the invocation directory; the other commands
+  require a manifest.
+- `init` deliberately does not search ancestors. It creates a project in the
+  invocation directory unless the global prefix selects another target.
+- A manifest candidate must be a regular file. An invalid nearest candidate is
+  an error rather than a reason to continue to a parent manifest.
+- The selected manifest's directory is the project root and owns its sibling
+  `yar.lock` and dependency-metadata transaction state. Source, output, and
+  manifest option paths remain relative to the invocation directory; selection
+  does not change the process working directory.
 
 ## Lock File (`yar.lock`)
 
@@ -123,8 +153,11 @@ bare known stdlib name receives a migration diagnostic.
   pre-commit failure restores the prior pair byte-for-byte; prepared
   interruption recovery rolls back, while completed cleanup retains the target
   pair.
-- The CLI recovers transaction state in its current directory before command
-  dispatch. Recovery is idempotent: incomplete private staging never touches
+- Explicit selection recovers only its fixed project directory and never falls
+  back. Automatic discovery treats an active prepared journal or completion
+  marker as project state even when `yar.toml` is temporarily absent. It
+  recovers that candidate, restarts its ancestor search, and then reads project
+  metadata. Recovery is idempotent: incomplete private staging never touches
   targets and is ignored, while a malformed prepared journal or completion
   marker fails closed.
 - `yar lock` and `yar update` preserve `yar.toml` byte-for-byte. Success output
@@ -167,6 +200,8 @@ bare known stdlib name receives a migration diagnostic.
 - `crates/yar-compiler/src/package.rs` builds origin-scoped source and alias
   records from manifests and locked child edges, then verifies a selected
   source during package resolution.
+- `crates/yar-cli/src/project.rs` owns explicit project selection,
+  nearest-ancestor discovery, entry containment, and pre-read recovery.
 - `crates/yar-cli/src/metadata_transaction.rs` owns recoverable publication and
   recovery for the `yar.toml`/`yar.lock` pair.
 
@@ -187,6 +222,7 @@ bare known stdlib name receives a migration diagnostic.
 - No version range negotiation or automatic resolution. All versions are exact.
 - Branch-pinned dependencies are non-reproducible across machines unless the
   lock file is committed and kept up to date.
-- Commands from one current directory are not serialized. Callers must not run
-  concurrent Yar CLI commands from that directory while dependency metadata
-  publication or recovery is in progress.
+- Commands targeting one selected project are not serialized. Callers must not
+  run another Yar CLI command against that project while dependency metadata
+  publication or recovery is in progress, even from a different invocation
+  directory.

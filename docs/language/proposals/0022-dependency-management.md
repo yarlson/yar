@@ -77,6 +77,7 @@ fn main() i32 {
 yar init
 yar add http https://github.com/user/yar-http.git --tag=v0.3.1
 yar build .
+yar --manifest-path ./yar.toml build ./cmd/tool
 ```
 
 ### Invalid examples
@@ -105,7 +106,33 @@ Invalid because `path` and `git` are mutually exclusive.
 
 ## 4. Semantics
 
-- A `yar.toml` file in the project root declares external dependencies.
+- The optional global prefix
+  `yar --manifest-path <path/to/yar.toml> <command> ...` appears at most once
+  before the command and must name `yar.toml`. A relative manifest path is
+  resolved from the invocation directory. Explicit selection overrides
+  discovery and never falls back.
+- For `check`, `emit-ir`, `build`, `run`, and `test`, discovery starts at the
+  named entry file's parent or entry directory and selects the nearest ancestor
+  manifest. Without one, the entry directory is a manifestless project root.
+  An explicitly selected project root must contain the entry package.
+- For `add`, `remove`, `fetch`, `lock`, and `update`, discovery starts at the
+  invocation directory and selects the nearest ancestor manifest. When none is
+  found, `add` creates a manifest in the invocation directory; the other
+  metadata commands fail.
+- `init` deliberately does not discover ancestors. It creates `yar.toml` in the
+  invocation directory unless the global prefix selects another target.
+  Explicit `init` and `add` may create an absent selected manifest in an
+  existing target directory; all other explicitly selected commands require it
+  to exist. Created manifests derive the package name from the selected
+  directory when valid and otherwise use `myproject`.
+- A manifest candidate must be a regular file. A malformed or non-regular
+  nearest candidate fails closed instead of allowing discovery to continue to a
+  parent project.
+- The selected manifest's directory is the project root. Its sibling
+  `yar.lock`, transaction state, root package tree, and manifest-declared
+  relative dependency paths are anchored there. Relative source, output, and
+  manifest option paths remain relative to the invocation directory; selection
+  never changes the process working directory.
 - Each dependency has a short alias name that becomes the first segment of its
   import path in source code.
 - `yar lock` resolves all git dependencies, clones them, computes content
@@ -120,11 +147,14 @@ Invalid because `path` and `git` are mutually exclusive.
   `yar update` preserve the manifest byte-for-byte. The manifest and target
   lock contents or absence are one recoverable transition: pre-commit failure
   and prepared interruption restore the prior pair, while a completion marker
-  retains the target pair through idempotent cleanup. A later command performs
-  recovery only in its current directory. Success output follows commit and
-  cleanup, and existing metadata-file permissions are preserved. No other Yar
-  CLI command may run concurrently from that project directory while metadata
-  changes.
+  retains the target pair through idempotent cleanup. Explicit selection
+  recovers only its fixed project directory and never falls back. Automatic
+  discovery treats active or completed transaction state as project evidence
+  even when the live manifest is absent, recovers that candidate, and restarts
+  its ancestor search before metadata is read. Success output follows commit
+  and cleanup, and existing metadata-file permissions are preserved. No other
+  Yar CLI command may target the same selected project concurrently while
+  metadata changes, regardless of its invocation directory.
 - Resolution may warm verified content-addressed dependency caches before the
   project-metadata commit. Those cache entries are outside the transaction and
   are not rolled back.
@@ -180,9 +210,10 @@ Invalid because `path` and `git` are mutually exclusive.
   source/ref tuple per alias, so different owners cannot yet reuse one alias for
   different targets. That requires lock v2.
 - `path` dependencies are resolved directly from the filesystem and are not
-  written to `yar.lock`. They may be declared only in the root manifest. A root
-  path dependency's manifest may declare git dependencies, but may not declare
-  another path dependency; neither may a locked git package.
+  written to `yar.lock`. Relative values are resolved from the directory of the
+  manifest that declares them. They may be declared only in the root manifest.
+  A root path dependency's manifest may declare git dependencies, but may not
+  declare another path dependency; neither may a locked git package.
 - `yar update <git-alias>` resolves a replacement graph for the selected root,
   preserves unrelated nodes still reachable from unselected roots, merges
   compatible shared nodes using the updated resolution, and prunes orphans. It
@@ -223,8 +254,11 @@ origin-safe canonical symbols derived from `PackageId`.
 
 ### Compiler package loader impact
 
-- `load_package_graph()` constructs a `DependencyIndex` from `yar.toml` and
-  `yar.lock` and gives it to `PackageLoader`.
+- Path compilation receives the selected project root separately from the entry
+  file or directory. The entry package keeps its real directory and receives a
+  source-relative `PackageId` subpath beneath that root.
+- `load_package_graph()` constructs a `DependencyIndex` from the selected root's
+  `yar.toml` and `yar.lock` and gives it to `PackageLoader`.
 - `DependencyIndex::load()` reconciles the complete lock graph, then builds
   source records and direct alias bindings for each owner origin without
   requiring every cache entry to exist.
@@ -247,10 +281,11 @@ None.
 - `crates/yar-compiler/src/lock_graph.rs` — graph reconciliation, selected
   manifest-edge verification, and targeted-update merge/prune behavior
 - `crates/yar-compiler/src/package.rs` — origin-scoped source and alias lookup
-  with selected locked-cache verification
-- `crates/yar-cli/src/metadata_transaction.rs` — same-directory prepared
-  journal, completion marker, recoverable manifest/lock write or deletion, and
-  current-directory CLI-dispatch recovery
+  with project-root/entry separation and selected locked-cache verification
+- `crates/yar-cli/src/project.rs` — explicit selection, nearest-ancestor
+  discovery, entry containment, and transaction-aware recovery
+- `crates/yar-cli/src/metadata_transaction.rs` — project-directory prepared
+  journal, completion marker, and recoverable manifest/lock write or deletion
 
 ### External dependency
 
@@ -322,6 +357,20 @@ file. Rejected because a failure or interruption between those renames exposes
 a mixed dependency state. The implemented journal records both prior states and
 uses an explicit phase transition so recovery can restore a prepared operation
 or retain a committed one.
+
+### Current-directory-only manifest lookup
+
+Resolve project metadata only beside the invoking process. Rejected because a
+command run from a nested package would ignore the project manifest, could
+create a second manifest accidentally, and could miss recovery state belonging
+to the selected project.
+
+### Changing the process working directory
+
+Change into the selected manifest directory before running the command.
+Rejected because it would silently reinterpret relative entry and output paths
+and change the working directory observed by programs run through `yar run` or
+`yar test`. The project root is passed explicitly instead.
 
 ### Global reachable-alias visibility
 
@@ -407,6 +456,8 @@ owner-local alias reuse.
 - [x] origin-scoped package identity, direct owner bindings, sealed stdlib
       imports, and origin-safe lowering
 - [x] CLI commands in `crates/yar-cli/src/main.rs`
+- [x] explicit and nearest-ancestor project selection in
+      `crates/yar-cli/src/project.rs`
 - [x] recoverable manifest/lock publication and recovery in
       `crates/yar-cli/src/metadata_transaction.rs`
 - [x] unit tests in `crates/yar-compiler`

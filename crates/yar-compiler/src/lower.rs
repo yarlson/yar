@@ -390,7 +390,7 @@ impl<'a> PackageLowerer<'a> {
             .map(|decl| InterfaceDecl {
                 interface_pos: decl.interface_pos.clone(),
                 exported: decl.exported,
-                name: canonical_decl_name(package, &decl.name),
+                name: canonical_decl_name(&self.graph.entry, package, &decl.name),
                 name_pos: decl.name_pos.clone(),
                 methods: decl
                     .methods
@@ -417,7 +417,7 @@ impl<'a> PackageLowerer<'a> {
                     struct_pos: decl.struct_pos.clone(),
                     exported: decl.exported,
                     resource: decl.resource,
-                    name: canonical_decl_name(package, &decl.name),
+                    name: canonical_decl_name(&self.graph.entry, package, &decl.name),
                     name_pos: decl.name_pos.clone(),
                     type_params: decl.type_params.clone(),
                     fields: decl
@@ -445,7 +445,7 @@ impl<'a> PackageLowerer<'a> {
             .map(|decl| EnumDecl {
                 enum_pos: decl.enum_pos.clone(),
                 exported: decl.exported,
-                name: canonical_decl_name(package, &decl.name),
+                name: canonical_decl_name(&self.graph.entry, package, &decl.name),
                 name_pos: decl.name_pos.clone(),
                 cases: decl
                     .cases
@@ -595,13 +595,13 @@ impl<'a> PackageLowerer<'a> {
                     );
                     return out;
                 }
-                out.name = canonical_decl_name(target, member);
+                out.name = canonical_decl_name(&self.graph.entry, target, member);
             }
             return out;
         }
 
         if self.type_kind(&package.id, &ref_.name).is_some() {
-            out.name = canonical_decl_name(package, &ref_.name);
+            out.name = canonical_decl_name(&self.graph.entry, package, &ref_.name);
         }
         out
     }
@@ -914,7 +914,7 @@ impl<'a> PackageLowerer<'a> {
                 .is_some_and(|functions| functions.contains_key(&ident.name))
             {
                 return Expression::Ident(Box::new(IdentExpr {
-                    name: canonical_decl_name(package, &ident.name),
+                    name: canonical_decl_name(&self.graph.entry, package, &ident.name),
                     name_pos: ident.name_pos.clone(),
                 }));
             }
@@ -943,7 +943,7 @@ impl<'a> PackageLowerer<'a> {
                 }));
             }
             return Expression::Ident(Box::new(IdentExpr {
-                name: canonical_decl_name(target, &selector.name),
+                name: canonical_decl_name(&self.graph.entry, target, &selector.name),
                 name_pos: selector.name_pos.clone(),
             }));
         }
@@ -977,7 +977,7 @@ impl<'a> PackageLowerer<'a> {
         }
         let target_id = target.id.clone();
         let target_name = target.name.clone();
-        let canonical_enum_name = canonical_decl_name(target, enum_name);
+        let canonical_enum_name = canonical_decl_name(&self.graph.entry, target, enum_name);
         if target_id != package.id && !self.type_exported(&target_id, enum_name) {
             self.diag.add(
                 positions[positions.len() - 2].clone(),
@@ -1020,7 +1020,7 @@ impl<'a> PackageLowerer<'a> {
         }
         let target_id = target.id.clone();
         let target_name = target.name.clone();
-        let canonical_enum_name = canonical_decl_name(target, enum_name);
+        let canonical_enum_name = canonical_decl_name(&self.graph.entry, target, enum_name);
         if target_id != package.id && !self.type_exported(&target_id, enum_name) {
             self.diag.add(
                 ref_.pos.clone(),
@@ -1102,7 +1102,7 @@ fn canonical_function_name(graph: &PackageGraph, package: &Package, name: &str) 
     if package.id == graph.entry && name == "main" {
         return "main".to_owned();
     }
-    canonical_decl_name(package, name)
+    canonical_decl_name(&graph.entry, package, name)
 }
 
 fn is_builtin_type(name: &str) -> bool {

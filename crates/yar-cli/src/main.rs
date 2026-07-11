@@ -1,7 +1,7 @@
 use std::{
     env,
     error::Error,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt, fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
@@ -9,8 +9,10 @@ use std::{
 };
 
 mod metadata_transaction;
+mod project;
 
 use metadata_transaction::{FileChange, MetadataChanges};
+use project::ProjectPaths;
 
 use yar_compiler::{
     compile::{CompileOptions, Unit, compile_path, compile_test_path},
@@ -20,14 +22,15 @@ use yar_compiler::{
         validate_lock_entries_for_update, verify_locked_dependency_manifest,
     },
     manifest::{
-        Dependency, LOCK_FILE, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
-        STDLIB_IMPORT_ROOT, cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file,
-        read_manifest, resolve_dependencies, to_lock_entries, valid_alias, valid_dependency_alias,
+        Dependency, MANIFEST_FILE, Manifest, ManifestError, PackageInfo, STDLIB_IMPORT_ROOT,
+        cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file, read_manifest,
+        resolve_dependencies, to_lock_entries, valid_alias, valid_dependency_alias,
         write_lock_file, write_manifest,
     },
 };
 
 const RUNTIME_ARCHIVE_ENV: &str = "YAR_RUNTIME_ARCHIVE";
+const ROOT_USAGE: &str = "usage: yar [--manifest-path <path/to/yar.toml>] <command> [arguments]";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
@@ -49,32 +52,96 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<OsString>) -> Result<(), CliError> {
-    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
-        return Err(CliError::usage("usage: yar <command> [arguments]"));
-    };
+    let Invocation {
+        command,
+        command_args,
+        manifest_path,
+    } = parse_invocation(args)?;
     let current_dir = env::current_dir()?;
-    metadata_transaction::recover(&current_dir)
-        .map_err(|err| CliError::other(format!("recovering dependency metadata: {err}")))?;
 
-    match command {
-        "check" => run_check(&args[1..]),
-        "emit-ir" => run_emit_ir(&args[1..]),
-        "build" => run_build(&args[1..]),
-        "run" => run_run(&args[1..]),
-        "test" => run_test(&args[1..]),
-        "init" => run_init(&args[1..]),
-        "add" => run_add(&args[1..]),
-        "remove" => run_remove(&args[1..]),
-        "fetch" => run_fetch(&args[1..]),
-        "lock" => run_lock(&args[1..]),
-        "update" => run_update(&args[1..]),
+    match command.as_str() {
+        "check" => run_check(&command_args, &current_dir, manifest_path.as_deref()),
+        "emit-ir" => run_emit_ir(&command_args, &current_dir, manifest_path.as_deref()),
+        "build" => run_build(&command_args, &current_dir, manifest_path.as_deref()),
+        "run" => run_run(&command_args, &current_dir, manifest_path.as_deref()),
+        "test" => run_test(&command_args, &current_dir, manifest_path.as_deref()),
+        "init" => run_init(&command_args, &current_dir, manifest_path.as_deref()),
+        "add" => run_add(&command_args, &current_dir, manifest_path.as_deref()),
+        "remove" => run_remove(&command_args, &current_dir, manifest_path.as_deref()),
+        "fetch" => run_fetch(&command_args, &current_dir, manifest_path.as_deref()),
+        "lock" => run_lock(&command_args, &current_dir, manifest_path.as_deref()),
+        "update" => run_update(&command_args, &current_dir, manifest_path.as_deref()),
         _ => Err(CliError::usage(format!("unknown command {command:?}"))),
     }
 }
 
-fn run_check(args: &[OsString]) -> Result<(), CliError> {
+struct Invocation {
+    command: String,
+    command_args: Vec<OsString>,
+    manifest_path: Option<PathBuf>,
+}
+
+fn parse_invocation(mut args: Vec<OsString>) -> Result<Invocation, CliError> {
+    let mut manifest_path = None;
+    while args.first().is_some_and(|arg| arg == "--manifest-path") {
+        if manifest_path.is_some() {
+            return Err(CliError::usage(
+                "--manifest-path may be specified only once",
+            ));
+        }
+        if args.len() < 2 {
+            return Err(CliError::usage(ROOT_USAGE));
+        }
+        let path = PathBuf::from(&args[1]);
+        if path.file_name() != Some(OsStr::new(MANIFEST_FILE)) {
+            return Err(CliError::usage("--manifest-path must name yar.toml"));
+        }
+        manifest_path = Some(path);
+        args.drain(..2);
+    }
+
+    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
+        return Err(CliError::usage(ROOT_USAGE));
+    };
+    Ok(Invocation {
+        command: command.to_owned(),
+        command_args: args[1..].to_vec(),
+        manifest_path,
+    })
+}
+
+fn entry_project(
+    current_dir: &Path,
+    entry: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<ProjectPaths, CliError> {
+    let project = ProjectPaths::for_entry(current_dir, entry, manifest_path)?;
+    if manifest_path.is_some() {
+        project.require_manifest()?;
+    }
+    Ok(project)
+}
+
+fn metadata_project(
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<ProjectPaths, CliError> {
+    let project = ProjectPaths::for_metadata(current_dir, manifest_path)?;
+    project.require_manifest()?;
+    Ok(project)
+}
+
+fn run_check(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar check <file|dir>")?;
-    let options = CompileOptions::default();
+    let project = entry_project(current_dir, &path, manifest_path)?;
+    let options = CompileOptions {
+        project_root: Some(project.root().to_path_buf()),
+        ..CompileOptions::default()
+    };
     let (unit, diagnostics) = compile_path(&path, &options)?;
     if !diagnostics.is_empty() {
         return Err(CliError::Diagnostics {
@@ -88,11 +155,17 @@ fn run_check(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_emit_ir(args: &[OsString]) -> Result<(), CliError> {
+fn run_emit_ir(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar emit-ir <file|dir>")?;
+    let project = entry_project(current_dir, &path, manifest_path)?;
     let target = Target::resolve()?;
     let options = CompileOptions {
         target_triple: target.triple.clone(),
+        project_root: Some(project.root().to_path_buf()),
     };
     let (unit, diagnostics) = compile_path(&path, &options)?;
     if !diagnostics.is_empty() {
@@ -108,14 +181,24 @@ fn run_emit_ir(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_build(args: &[OsString]) -> Result<(), CliError> {
+fn run_build(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     let target = Target::resolve()?;
     let BuildArgs { path, output } = parse_build_args(args, &target)?;
-    build_path(&path, &target, &output)
+    let project = entry_project(current_dir, &path, manifest_path)?;
+    build_path(&path, project.root(), &target, &output)
 }
 
-fn run_run(args: &[OsString]) -> Result<(), CliError> {
+fn run_run(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar run <file|dir>")?;
+    let project = entry_project(current_dir, &path, manifest_path)?;
     let target = Target::resolve()?;
     if target.is_cross() {
         return Err(CliError::other(format!(
@@ -128,12 +211,17 @@ fn run_run(args: &[OsString]) -> Result<(), CliError> {
     let output = tmp_dir
         .path()
         .join(format!("program{}", target.exe_suffix()));
-    build_path(&path, &target, &output)?;
+    build_path(&path, project.root(), &target, &output)?;
     invoke_program(&output)
 }
 
-fn run_test(args: &[OsString]) -> Result<(), CliError> {
+fn run_test(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar test <file|dir>")?;
+    let project = entry_project(current_dir, &path, manifest_path)?;
     let target = Target::resolve()?;
     if target.is_cross() {
         return Err(CliError::other(format!(
@@ -144,6 +232,7 @@ fn run_test(args: &[OsString]) -> Result<(), CliError> {
 
     let options = CompileOptions {
         target_triple: target.triple.clone(),
+        project_root: Some(project.root().to_path_buf()),
     };
     let (unit, diagnostics) = compile_test_path(&path, &options)?;
     if !diagnostics.is_empty() {
@@ -162,28 +251,44 @@ fn run_test(args: &[OsString]) -> Result<(), CliError> {
     invoke_program(&output)
 }
 
-fn run_init(args: &[OsString]) -> Result<(), CliError> {
+fn run_init(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar init"));
     }
-    let path = Path::new(MANIFEST_FILE);
-    if path.exists() {
-        return Err(CliError::other("yar.toml already exists"));
+    let project = ProjectPaths::for_init(current_dir, manifest_path)?;
+    let path = project.manifest();
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            return Err(CliError::other(format!(
+                "{} already exists",
+                path.display()
+            )));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
 
     let manifest = Manifest {
         package: PackageInfo {
-            name: default_package_name(),
+            name: default_package_name(project.root()),
             version: String::new(),
         },
         dependencies: Default::default(),
     };
-    write_manifest_file(path, &manifest)?;
+    write_manifest_file(&path, &manifest)?;
     println!("created yar.toml");
     Ok(())
 }
 
-fn run_add(args: &[OsString]) -> Result<(), CliError> {
+fn run_add(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if args.len() < 2 {
         return Err(CliError::usage(
             "usage: yar add <alias> <git-url> [--tag=v1.0.0|--rev=abc123|--branch=main]\n       yar add <alias> --path=<dir>",
@@ -202,13 +307,13 @@ fn run_add(args: &[OsString]) -> Result<(), CliError> {
 
     let dependency = parse_dependency_args(&args[1..])?;
 
-    let mut manifest = read_or_create_manifest()?;
+    let project = ProjectPaths::for_metadata(current_dir, manifest_path)?;
+    let mut manifest = read_or_create_manifest(&project)?;
     manifest.dependencies.insert(alias.to_string(), dependency);
     let manifest_content = write_manifest(&manifest)?;
-    let root_dir = env::current_dir()?;
-    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest)?;
     publish_metadata(
-        &root_dir,
+        project.root(),
         FileChange::Write(manifest_content.as_bytes()),
         lock_content.as_deref(),
     )?;
@@ -219,21 +324,25 @@ fn run_add(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_remove(args: &[OsString]) -> Result<(), CliError> {
+fn run_remove(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if args.len() != 1 {
         return Err(CliError::usage("usage: yar remove <alias>"));
     }
 
     let alias = args[0].to_string_lossy();
-    let mut manifest = read_manifest(MANIFEST_FILE)?;
+    let project = metadata_project(current_dir, manifest_path)?;
+    let mut manifest = read_project_manifest(&project)?;
     if manifest.dependencies.remove(alias.as_ref()).is_none() {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
     }
     let manifest_content = write_manifest(&manifest)?;
-    let root_dir = env::current_dir()?;
-    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest)?;
     publish_metadata(
-        &root_dir,
+        project.root(),
         FileChange::Write(manifest_content.as_bytes()),
         lock_content.as_deref(),
     )?;
@@ -244,14 +353,18 @@ fn run_remove(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
+fn run_fetch(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar fetch"));
     }
-    let manifest = read_manifest(MANIFEST_FILE)?;
-    let root_dir = env::current_dir()?;
-    let needs_lock = requires_lock(&root_dir, &manifest)?;
-    let entries = match read_lock_file(LOCK_FILE) {
+    let project = metadata_project(current_dir, manifest_path)?;
+    let manifest = read_project_manifest(&project)?;
+    let needs_lock = requires_lock(project.root(), &manifest)?;
+    let entries = match read_lock_file(project.lock()) {
         Ok(entries) => entries,
         Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound && !needs_lock => {
             Vec::new()
@@ -262,7 +375,7 @@ fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
             )));
         }
     };
-    reconcile_lock_entries(&root_dir, &manifest, &entries).map_err(|err| {
+    reconcile_lock_entries(project.root(), &manifest, &entries).map_err(|err| {
         CliError::other(format!(
             "yar.toml and yar.lock do not describe one valid dependency graph (run 'yar lock'): {err}"
         ))
@@ -297,26 +410,42 @@ fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn run_lock(args: &[OsString]) -> Result<(), CliError> {
+fn run_lock(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar lock"));
     }
-    update_lock_file()
+    let project = metadata_project(current_dir, manifest_path)?;
+    update_lock_file(&project)
 }
 
-fn run_update(args: &[OsString]) -> Result<(), CliError> {
+fn run_update(
+    args: &[OsString],
+    current_dir: &Path,
+    manifest_path: Option<&Path>,
+) -> Result<(), CliError> {
     if args.len() > 1 {
         return Err(CliError::usage("usage: yar update [alias]"));
     }
+    let project = metadata_project(current_dir, manifest_path)?;
     match args.first() {
-        Some(alias) => update_lock_file_for_alias(&alias.to_string_lossy()),
-        None => update_lock_file(),
+        Some(alias) => update_lock_file_for_alias(&project, &alias.to_string_lossy()),
+        None => update_lock_file(&project),
     }
 }
 
-fn build_path(path: &Path, target: &Target, output: &Path) -> Result<(), CliError> {
+fn build_path(
+    path: &Path,
+    project_root: &Path,
+    target: &Target,
+    output: &Path,
+) -> Result<(), CliError> {
     let options = CompileOptions {
         target_triple: target.triple.clone(),
+        project_root: Some(project_root.to_path_buf()),
     };
     let (unit, diagnostics) = compile_path(path, &options)?;
     if !diagnostics.is_empty() {
@@ -426,27 +555,34 @@ fn parse_dependency_args(args: &[OsString]) -> Result<Dependency, CliError> {
     Ok(dependency)
 }
 
-fn read_or_create_manifest() -> Result<Manifest, CliError> {
-    match read_manifest(MANIFEST_FILE) {
+fn read_or_create_manifest(project: &ProjectPaths) -> Result<Manifest, CliError> {
+    let path = project.manifest();
+    match read_manifest(&path) {
         Ok(manifest) => Ok(manifest),
         Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound => Ok(Manifest {
             package: PackageInfo {
-                name: default_package_name(),
+                name: default_package_name(project.root()),
                 version: String::new(),
             },
             dependencies: Default::default(),
         }),
-        Err(err) => Err(err.into()),
+        Err(error) => Err(manifest_read_error(&path, error)),
     }
 }
 
-fn default_package_name() -> String {
-    let name = env::current_dir()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
+fn read_project_manifest(project: &ProjectPaths) -> Result<Manifest, CliError> {
+    let path = project.manifest();
+    read_manifest(&path).map_err(|error| manifest_read_error(&path, error))
+}
+
+fn manifest_read_error(path: &Path, error: ManifestError) -> CliError {
+    CliError::other(format!("reading manifest {}: {error}", path.display()))
+}
+
+fn default_package_name(root: &Path) -> String {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| valid_alias(name))
         .unwrap_or_else(|| "myproject".to_string());
     if name.is_empty() {
@@ -462,11 +598,14 @@ fn write_manifest_file(path: &Path, manifest: &Manifest) -> Result<(), CliError>
     Ok(())
 }
 
-fn update_lock_file() -> Result<(), CliError> {
-    let manifest = read_manifest(MANIFEST_FILE)?;
-    let root_dir = env::current_dir()?;
-    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
-    publish_metadata(&root_dir, FileChange::Preserve, lock_content.as_deref())?;
+fn update_lock_file(project: &ProjectPaths) -> Result<(), CliError> {
+    let manifest = read_project_manifest(project)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest)?;
+    publish_metadata(
+        project.root(),
+        FileChange::Preserve,
+        lock_content.as_deref(),
+    )?;
     if lock_content.is_some() {
         println!("yar.lock updated");
     }
@@ -487,8 +626,8 @@ fn resolve_lock_content(root_dir: &Path, manifest: &Manifest) -> Result<Option<S
     Ok(Some(write_lock_file(&entries)))
 }
 
-fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
-    let manifest = read_manifest(MANIFEST_FILE)?;
+fn update_lock_file_for_alias(project: &ProjectPaths, alias: &str) -> Result<(), CliError> {
+    let manifest = read_project_manifest(project)?;
     let Some(dependency) = manifest.dependencies.get(alias) else {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
     };
@@ -498,10 +637,10 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
         )));
     }
 
-    let existing_entries = match read_lock_file(LOCK_FILE) {
+    let existing_entries = match read_lock_file(project.lock()) {
         Ok(entries) => entries,
         Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
-            return update_lock_file();
+            return update_lock_file(project);
         }
         Err(err) => {
             return Err(CliError::other(format!(
@@ -509,8 +648,7 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
             )));
         }
     };
-    let root_dir = env::current_dir()?;
-    validate_lock_entries_for_update(&root_dir, &manifest, alias, &existing_entries).map_err(
+    validate_lock_entries_for_update(project.root(), &manifest, alias, &existing_entries).map_err(
         |err| {
             CliError::other(format!(
                 "cannot selectively update {alias:?}: {err}; run 'yar lock' to regenerate the full graph"
@@ -527,10 +665,10 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
         .insert(alias.to_string(), dependency.clone());
 
     let cache_dir = cache_dir_from_env()?;
-    let resolved = resolve_dependencies(&root_dir, &selected_manifest, &cache_dir)?;
+    let resolved = resolve_dependencies(project.root(), &selected_manifest, &cache_dir)?;
     let updated_entries = to_lock_entries(&resolved);
     let merged_entries = merge_lock_entries_for_update(
-        &root_dir,
+        project.root(),
         &manifest,
         alias,
         &existing_entries,
@@ -547,7 +685,11 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
     } else {
         Some(write_lock_file(&merged_entries))
     };
-    publish_metadata(&root_dir, FileChange::Preserve, lock_content.as_deref())?;
+    publish_metadata(
+        project.root(),
+        FileChange::Preserve,
+        lock_content.as_deref(),
+    )?;
     println!("yar.lock updated");
     Ok(())
 }
