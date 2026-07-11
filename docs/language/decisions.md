@@ -267,6 +267,15 @@ entry requests the locked commit object directly rather than re-resolving its
 recorded ref; an unavailable object fails without ref fallback. Fresh checkouts
 are verified before publication, and lock generation never derives a trusted
 hash from cache content that differs from the fresh checkout.
+Project dependency metadata is published as one recoverable transition.
+`add`/`remove` compute and serialize the target manifest plus lock presence or
+contents before publication; `lock`/`update` preserve manifest bytes. A
+prepared journal restores the prior pair after pre-commit failure or
+interruption, while a completion marker retains the target pair through
+idempotent cleanup. A later command performs recovery only in its current
+directory. Success output follows commit and cleanup. Verified global cache
+warming is outside this transaction. No other Yar CLI command may run
+concurrently from that project directory while metadata changes.
 Local path dependencies remain live and unhashed and may be declared only in
 the root manifest. Their manifests may contribute git roots but may not declare
 another path dependency; locked git packages may not declare path dependencies

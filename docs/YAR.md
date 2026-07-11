@@ -1479,6 +1479,25 @@ resolve to a different source/ref tuple. A path dependency has no independent
 locked revision, so `yar update <path-alias>` is rejected with guidance to run
 `yar lock`.
 
+### Metadata Publication
+
+`yar add` and `yar remove` resolve, reconcile, and serialize the complete
+target manifest and lock state before changing project metadata. They publish
+`yar.toml` together with the target `yar.lock`, including deletion of the lock
+when no git roots remain. `yar lock` and `yar update` publish only the lock
+state and preserve the manifest byte-for-byte.
+
+A same-directory journal records the prior contents or absence of both files.
+A failure before commit restores that prior pair. On the next CLI invocation
+from the project directory, a prepared interrupted transaction is rolled back;
+a transaction that reached its commit phase keeps the target pair while cleanup
+finishes. Success messages are printed only after commit and cleanup. Resolution
+may warm verified content-addressed global dependency-cache entries before
+publication; those cache entries are outside the project-metadata transaction
+and are not rolled back. Existing metadata-file permissions are preserved. Do
+not run concurrent Yar CLI commands from the same current directory while
+dependency metadata publication or recovery is in progress.
+
 ### Resolution Order
 
 For each import:
@@ -1516,4 +1535,4 @@ The compiler does not currently implement:
 
 - import aliases
 - exceptions
-- automatic recovery
+- general application/runtime recovery beyond dependency-metadata recovery

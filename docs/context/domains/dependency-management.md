@@ -108,12 +108,40 @@ bare known stdlib name receives a migration diagnostic.
   dependency's manifest may contribute git dependencies, but may not declare
   another path dependency. Locked git packages may not declare them either.
 
+## Metadata Publication
+
+- `yar add`, `yar remove`, `yar lock`, and `yar update` resolve, reconcile, and
+  serialize the complete target state before project metadata is changed.
+- `yar.toml` and `yar.lock` form one recoverable transition. This includes
+  deleting `yar.lock` when the target graph has no git roots; absence is not
+  represented by an empty lock file.
+- Private same-directory staging becomes the prepared journal through one
+  rename. That journal records the previous bytes or absence of both targets;
+  an external completion marker makes later cleanup idempotent even if journal
+  removal was interrupted. Journal files are synchronized before phase changes,
+  and directory entries are synchronized where the host supports it. A
+  pre-commit failure restores the prior pair byte-for-byte; prepared
+  interruption recovery rolls back, while completed cleanup retains the target
+  pair.
+- The CLI recovers transaction state in its current directory before command
+  dispatch. Recovery is idempotent: incomplete private staging never touches
+  targets and is ignored, while a malformed prepared journal or completion
+  marker fails closed.
+- `yar lock` and `yar update` preserve `yar.toml` byte-for-byte. Success output
+  is emitted only after commit and journal cleanup. Replaced or restored
+  metadata files retain their existing permissions.
+- Resolution may publish verified content-addressed dependency caches before
+  the metadata commit. Cache warming is intentionally outside the project
+  metadata transaction and is not rolled back.
+
 ## CLI Commands
 
 - `yar init` creates a `yar.toml` with `[package]` section.
 - `yar add <alias> <git-url> --tag=v1.0.0` adds a dependency and updates
   `yar.lock`.
-- `yar remove <alias>` removes a dependency and updates `yar.lock`.
+- `yar remove <alias>` removes a dependency and rebuilds the reachable lock
+  closure, dropping orphaned transitives while preserving remaining roots and
+  shared reachable packages.
 - `yar fetch` reconciles `yar.toml` with `yar.lock`, then downloads and verifies
   every locked dependency.
 - `yar lock` regenerates `yar.lock` from `yar.toml`.
@@ -139,6 +167,8 @@ bare known stdlib name receives a migration diagnostic.
 - `crates/yar-compiler/src/package.rs` builds origin-scoped source and alias
   records from manifests and locked child edges, then verifies a selected
   source during package resolution.
+- `crates/yar-cli/src/metadata_transaction.rs` owns recoverable publication and
+  recovery for the `yar.toml`/`yar.lock` pair.
 
 ## Constraints
 
@@ -157,3 +187,6 @@ bare known stdlib name receives a migration diagnostic.
 - No version range negotiation or automatic resolution. All versions are exact.
 - Branch-pinned dependencies are non-reproducible across machines unless the
   lock file is committed and kept up to date.
+- Commands from one current directory are not serialized. Callers must not run
+  concurrent Yar CLI commands from that directory while dependency metadata
+  publication or recovery is in progress.

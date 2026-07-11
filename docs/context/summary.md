@@ -19,11 +19,10 @@
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
 - `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
 - `init` creates a `yar.toml` manifest in the current directory.
-- `add` adds a dependency to `yar.toml` and updates `yar.lock`.
-- `remove` removes a dependency from `yar.toml` and updates `yar.lock`.
+- `add` and `remove` resolve and serialize the complete target dependency state, then publish `yar.toml` with the target lock contents or absence as one recoverable transition.
 - `fetch` downloads all dependencies in `yar.lock` to the global cache.
-- `lock` regenerates `yar.lock` from `yar.toml` by resolving all git dependencies.
-- `update` re-resolves one or all dependencies and updates `yar.lock`.
+- `lock` regenerates `yar.lock` from `yar.toml` by resolving all git dependencies without rewriting the manifest.
+- `update` re-resolves one or all dependencies and updates `yar.lock` without rewriting the manifest.
 
 ## System State
 
@@ -65,7 +64,7 @@
 - Discover and run test functions from `_test.yar` files using `yar test`, with generic assertion helpers from the `testing` stdlib package.
 - Convert primitive values to their string representation with `to_str`.
 - Compare error values with `==` and `!=`, and use `error.Name` as a general expression.
-- Manage external dependencies through owner-scoped manifest or lock edges, git fetching, and commit-keyed caches verified against lock hashes. Lock v1 still requires each alias to identify one source/ref tuple across the graph.
+- Manage external dependencies through owner-scoped manifest or lock edges, recoverable project-metadata publication, git fetching, and commit-keyed caches verified against lock hashes. Lock v1 still requires each alias to identify one source/ref tuple across the graph.
 
 ## Tech Stack
 
