@@ -1,4 +1,4 @@
-use crate::token::Position;
+use crate::{symbol::sanitize_diagnostic_message, token::Position};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
@@ -15,12 +15,16 @@ impl List {
     pub fn add(&mut self, pos: Position, message: impl Into<String>) {
         self.items.push(Diagnostic {
             pos,
-            message: message.into(),
+            message: sanitize_diagnostic_message(message.into()),
         });
     }
 
     pub fn append(&mut self, other: &[Diagnostic]) {
-        self.items.extend_from_slice(other);
+        self.items
+            .extend(other.iter().cloned().map(|mut diagnostic| {
+                diagnostic.message = sanitize_diagnostic_message(diagnostic.message);
+                diagnostic
+            }));
     }
 
     pub fn items(&self) -> Vec<Diagnostic> {

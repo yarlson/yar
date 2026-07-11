@@ -12,6 +12,7 @@ The smallest coherent version is:
 - explicit `import` declarations
 - qualified cross-package references
 - explicit export markers for top-level declarations
+- origin-scoped package identity and import resolution
 
 ## 2. Motivation
 
@@ -117,8 +118,24 @@ name.
 - top-level declarations are package-local unless marked `pub`
 - references across package boundaries are always qualified in the first version
 
-The initial model intentionally avoids aliases, dot imports, wildcard imports,
-re-exports, and implicit visibility.
+A loaded package is identified by `PackageId = (source origin,
+source-relative subpath)`. A source origin is the entry tree, one root path
+dependency, one pinned git source, or embedded stdlib. Import text and
+dependency aliases are bindings owned by an origin; they are not package
+identity.
+
+For each non-stdlib importer, resolution checks:
+
+1. the importer's same-origin package tree, including its self alias
+2. aliases declared directly by that origin
+3. embedded stdlib
+
+Imports originating in embedded stdlib resolve only within the stdlib origin.
+The final import-path segment is the source qualifier. Two distinct imports in
+one package with the same final segment are rejected as ambiguous.
+
+The initial source syntax intentionally avoids import aliases, dot imports,
+wildcard imports, re-exports, and implicit visibility.
 
 `package main` remains the executable entry package. A program entry build still
 requires a `main` package with `main` returning `i32` or `!i32`.
@@ -135,6 +152,9 @@ requires a `main` package with `main` returning `i32` or `!i32`.
 - import cycles are invalid
 - importing a package does not automatically place its exported names into the
   local unqualified scope
+- package graphs and cycle checks distinguish equal logical paths from different
+  source origins
+- distinct imports in one package cannot bind the same final qualifier segment
 
 ## 6. Grammar / Parsing Shape
 
@@ -162,11 +182,11 @@ Qualified references continue to use existing selector syntax.
 
 - parser: accept import declarations and export markers, and parse more than one
   file into a package unit
-- AST / IR: add package/file structure rather than one-file program structure
+- AST / IR: represent packages and import targets with typed `PackageId` values
 - checker: add package scopes, import resolution, export visibility, and cycle
   checks
-- codegen: lower all declarations in a resolved package graph while preserving
-  package-qualified symbol identity
+- lowering/codegen: lower all declarations in a resolved package graph to
+  origin-safe canonical symbols
 - runtime: no direct changes required
 
 The main implementation cost is not syntax. It is name resolution, package graph
@@ -181,6 +201,9 @@ package-oriented compilation unit.
 - control flow: no new control-flow surface
 - returns: `main` entry rules still apply only to the entry package
 - builtins: builtins remain globally available and are not imported
+- dependencies: each source origin sees only aliases it directly declares;
+  graph reachability does not grant import visibility
+- stdlib: internal stdlib imports are sealed to the stdlib origin
 - future modules/imports: this proposal defines the core organization model
 - future richer type features: methods, enums, and standard-library design all
   depend on package boundaries being clear
@@ -214,20 +237,18 @@ expose everything automatically.
 
 ## 11. Why Now?
 
-This is the main capability gap between toy programs and maintainable systems.
-It is also the first prerequisite for any realistic self-hosted frontend.
+This was the main capability gap between toy programs and maintainable systems
+and a prerequisite for a realistic self-hosted frontend. The feature is now
+implemented with explicit package identity and origin-scoped name resolution.
 
-Even so, the feature remains deferred because its interaction cost is high and
-it should not land before name resolution and package semantics are written down
-carefully.
+## 12. Resolved Questions
 
-## 12. Open Questions
-
-- What exact path syntax should import strings use?
-- Should package identity be directory-based, module-based, or something else?
-- Should `pub` be the only visibility marker, or is a different export form
-  better for YAR?
-- How should the CLI move from file-based compilation to package-based builds?
+- Import strings use slash-separated logical package paths whose segments are
+  valid Yar identifiers.
+- Package identity is `PackageId = (source origin, source-relative subpath)`.
+- `pub` is the export marker; declarations are package-local by default.
+- The CLI accepts a package directory or entry file and builds the resolved
+  package graph.
 
 ## 13. Decision
 
@@ -235,7 +256,9 @@ Accepted.
 
 The compiler now supports multi-file packages, explicit imports, package-
 qualified cross-package references, and `pub` exports for top-level `struct`
-and `fn` declarations.
+and `fn` declarations. Package identity is origin-aware, import resolution is
+owner-scoped, stdlib imports are sealed, duplicate final qualifiers are
+rejected, and lowering preserves origin-safe symbol identity.
 
 ## 14. Implementation Checklist
 

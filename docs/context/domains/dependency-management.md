@@ -40,28 +40,30 @@
 - Every child edge must match its target node by the same full source/ref
   tuple. Duplicate aliases or edges, missing nodes, dependency cycles, and
   unreachable lock nodes are rejected.
-- There is no root override. Reusing an alias with a different git source or
-  ref anywhere in the graph is a dependency conflict.
+- Lock v1 has global alias/source uniqueness. Reusing an alias with a different
+  git source or ref is a conflict even across owners. Distinct owner-local
+  sources behind one alias require a newer lock schema.
 - Local path dependencies may be declared only in the root manifest and remain
   live filesystem inputs. Their manifests may contribute git roots, but may
   not declare another path dependency. A locked git package may not declare
   path dependencies.
-- Every reachable lock alias is placed in one global dependency index and may
-  be imported by any loaded package. An alias need not be declared directly by
-  the importing package once it is reachable in the validated lock graph.
+- Alias visibility is owner-scoped after reconciliation. Entry and root path
+  origins see their own manifest aliases; a locked git origin sees only its
+  child edges. Reachability does not grant another origin access to an alias.
 
 ## Resolution Order
 
-1. Cache check (already loaded package).
-2. Local filesystem (`rootDir/importPath`).
-3. Dependency index (first import path segment matched against alias in
-   `yar.toml` → cached directory).
+1. Already loaded `PackageId` (origin plus source-relative subpath).
+2. The importer's own source tree, including its self alias.
+3. An alias declared by that origin, resolved to a path or verified git source.
 4. Embedded stdlib fallback.
 5. Error.
 
-Local packages shadow dependencies. Dependencies shadow stdlib.
+Own-origin packages shadow declared dependencies. Dependencies shadow stdlib.
 A selected dependency alias is authoritative. A missing local path dependency
 fails loading rather than falling through to a same-named stdlib package.
+Imports inside embedded stdlib are sealed to the stdlib origin and do not
+consult project-local or external dependency sources.
 
 ## Fetching
 
@@ -77,8 +79,8 @@ fails loading rather than falling through to a same-named stdlib package.
   they are published at the final cache path.
 - When the effective graph has no git roots, `yar fetch` succeeds without a
   lock file or dependency-cache work.
-- The dependency index stores lock metadata. When package resolution selects a
-  locked dependency, the loader verifies its cache tree before returning the
+- The dependency index stores sources and alias bindings per owner origin. When
+  resolution selects a locked dependency, the loader verifies its cache tree before returning the
   path or parsing source, then verifies that the selected package manifest's
   git dependencies exactly match the node's child edges. Missing, unreadable,
   symlinked, hash-mismatched, or edge-mismatched selected entries stop
@@ -95,7 +97,7 @@ fails loading rather than falling through to a same-named stdlib package.
 - Each dependency may contain its own `yar.toml`.
 - The resolver walks transitive dependencies recursively.
 - Diamonds are valid when every use of an alias has the same git URL and exact
-  ref. Reusing an alias with a different source/ref tuple is an error.
+  ref. Lock v1 rejects the same alias with a different source/ref tuple.
 - Dependency cycles are detected and reported.
 - Path dependencies are supported only in the root `yar.toml`. A root path
   dependency's manifest may contribute git dependencies, but may not declare
@@ -129,9 +131,9 @@ fails loading rather than falling through to a same-named stdlib package.
 - `crates/yar-compiler/src/lock_graph.rs` validates and reconciles lock graphs,
   verifies selected manifests against recorded edges, and merges selective
   updates.
-- `crates/yar-compiler/src/package.rs` builds a Rust dependency index from
-  local path dependencies and locked metadata, then verifies a selected cache
-  path and manifest during package resolution.
+- `crates/yar-compiler/src/package.rs` builds origin-scoped source and alias
+  records from manifests and locked child edges, then verifies a selected
+  source during package resolution.
 
 ## Constraints
 

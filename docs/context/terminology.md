@@ -15,9 +15,16 @@ package graph — The directed acyclic graph of packages rooted at the entry
 `package main`, resolved by `crates/yar-compiler` before lowering into a
 single checked program.
 
-canonical name — A lowered declaration name derived from the package path or
-package name, used to merge multiple packages into one checked AST without
-symbol collisions.
+package origin — One source tree that owns package lookup and dependency
+bindings: the entry tree, one path dependency, one pinned git source, or the
+embedded stdlib.
+
+PackageId — Compiler identity for a package, formed from its package origin and
+source-relative subpath. The source import string is not package identity.
+
+canonical name — An origin-safe lowered declaration name derived from a
+`PackageId`, used to merge packages into one checked AST without collisions
+between equal logical paths from different origins.
 
 type parameter — A declaration-scoped generic type name such as `T` in
 `fn first[T](values []T) T`.
@@ -116,7 +123,8 @@ source/ref child edges.
 
 dependency alias — The short name used in `yar.toml` to refer to an external
 dependency, which becomes the top-level import path segment in source code.
+Aliases are bindings owned by an importing package origin.
 
-dependency index — The global lookup table for every alias in the reconciled
-lock graph, resolved lazily to verified cached directory paths during package
-loading.
+dependency index — The package loader's origin-scoped source and alias map,
+built from the root manifest, path-dependency manifests, and lock child edges.
+Selected locked sources resolve lazily to verified cache directories.

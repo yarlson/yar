@@ -4,6 +4,7 @@ use crate::{
     ast::*,
     checker::is_builtin_function,
     diag::{Diagnostic, List},
+    symbol::canonical_decl_name,
     token::Position,
 };
 
@@ -50,11 +51,11 @@ pub fn lower_package_graph(graph: &PackageGraph) -> (Program, Vec<Diagnostic>) {
 
 struct PackageLowerer<'a> {
     graph: &'a PackageGraph,
-    structs: BTreeMap<String, BTreeMap<String, DeclVisibility>>,
-    interfaces: BTreeMap<String, BTreeMap<String, DeclVisibility>>,
-    enums: BTreeMap<String, BTreeMap<String, DeclVisibility>>,
-    functions: BTreeMap<String, BTreeMap<String, DeclVisibility>>,
-    imports: BTreeMap<String, BTreeMap<String, String>>,
+    structs: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
+    interfaces: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
+    enums: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
+    functions: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
+    imports: BTreeMap<PackageId, BTreeMap<String, PackageId>>,
     diag: List,
 }
 
@@ -166,7 +167,14 @@ impl<'a> PackageLowerer<'a> {
 
             let mut imports = BTreeMap::new();
             for import in &package.imports {
-                imports.insert(import.name.clone(), import.path.clone());
+                if let Some(existing) = imports.insert(import.name.clone(), import.target.clone())
+                    && existing != import.target
+                {
+                    self.diag.add(
+                        import.decl.path_pos.clone(),
+                        format!("import qualifier {:?} is ambiguous", import.name),
+                    );
+                }
             }
             self.imports.insert(path.clone(), imports);
         }
@@ -264,7 +272,7 @@ impl<'a> PackageLowerer<'a> {
 
     fn validate_exported_local_type_ref(
         &mut self,
-        package_path: &str,
+        package_id: &PackageId,
         ref_: &TypeRef,
         type_params: Option<&BTreeSet<String>>,
         owner_kind: &str,
@@ -272,7 +280,7 @@ impl<'a> PackageLowerer<'a> {
     ) {
         for arg in &ref_.type_args {
             self.validate_exported_local_type_ref(
-                package_path,
+                package_id,
                 arg,
                 type_params,
                 owner_kind,
@@ -288,7 +296,7 @@ impl<'a> PackageLowerer<'a> {
             | TypeRefKind::Chan => {
                 if let Some(elem) = ref_.elem.as_deref() {
                     self.validate_exported_local_type_ref(
-                        package_path,
+                        package_id,
                         elem,
                         type_params,
                         owner_kind,
@@ -300,7 +308,7 @@ impl<'a> PackageLowerer<'a> {
             TypeRefKind::Map => {
                 if let Some(key) = ref_.key.as_deref() {
                     self.validate_exported_local_type_ref(
-                        package_path,
+                        package_id,
                         key,
                         type_params,
                         owner_kind,
@@ -309,7 +317,7 @@ impl<'a> PackageLowerer<'a> {
                 }
                 if let Some(value) = ref_.value.as_deref() {
                     self.validate_exported_local_type_ref(
-                        package_path,
+                        package_id,
                         value,
                         type_params,
                         owner_kind,
@@ -321,7 +329,7 @@ impl<'a> PackageLowerer<'a> {
             TypeRefKind::Function => {
                 for param in &ref_.params {
                     self.validate_exported_local_type_ref(
-                        package_path,
+                        package_id,
                         param,
                         type_params,
                         owner_kind,
@@ -330,7 +338,7 @@ impl<'a> PackageLowerer<'a> {
                 }
                 if let Some(return_type) = ref_.return_type.as_deref() {
                     self.validate_exported_local_type_ref(
-                        package_path,
+                        package_id,
                         return_type,
                         type_params,
                         owner_kind,
@@ -351,16 +359,16 @@ impl<'a> PackageLowerer<'a> {
 
         let hidden_local_type = self
             .structs
-            .get(package_path)
+            .get(package_id)
             .and_then(|decls| decls.get(&ref_.name))
             .or_else(|| {
                 self.interfaces
-                    .get(package_path)
+                    .get(package_id)
                     .and_then(|decls| decls.get(&ref_.name))
             })
             .or_else(|| {
                 self.enums
-                    .get(package_path)
+                    .get(package_id)
                     .and_then(|decls| decls.get(&ref_.name))
             })
             .is_some_and(|decl| !decl.exported);
@@ -575,9 +583,9 @@ impl<'a> PackageLowerer<'a> {
 
         if let Some((import_name, member)) = ref_.name.split_once('.') {
             if let Some(target) = self.import_target(package, import_name)
-                && let Some(type_kind) = self.type_kind(&target.path, member)
+                && let Some(type_kind) = self.type_kind(&target.id, member)
             {
-                if !self.type_exported(&target.path, member) {
+                if !self.type_exported(&target.id, member) {
                     self.diag.add(
                         ref_.pos.clone(),
                         format!(
@@ -592,7 +600,7 @@ impl<'a> PackageLowerer<'a> {
             return out;
         }
 
-        if self.type_kind(&package.path, &ref_.name).is_some() {
+        if self.type_kind(&package.id, &ref_.name).is_some() {
             out.name = canonical_decl_name(package, &ref_.name);
         }
         out
@@ -897,12 +905,12 @@ impl<'a> PackageLowerer<'a> {
         }
 
         if let Expression::Ident(ident) = callee {
-            if ident.name == "main" && package.path == self.graph.entry {
+            if ident.name == "main" && package.id == self.graph.entry {
                 return Expression::Ident(ident.clone());
             }
             if self
                 .functions
-                .get(&package.path)
+                .get(&package.id)
                 .is_some_and(|functions| functions.contains_key(&ident.name))
             {
                 return Expression::Ident(Box::new(IdentExpr {
@@ -918,7 +926,7 @@ impl<'a> PackageLowerer<'a> {
             && let Some(target) = self.import_target(package, &inner.name)
             && let Some(function) = self
                 .functions
-                .get(&target.path)
+                .get(&target.id)
                 .and_then(|functions| functions.get(&selector.name))
         {
             if !function.exported {
@@ -962,15 +970,15 @@ impl<'a> PackageLowerer<'a> {
 
         if !self
             .enums
-            .get(&target.path)
+            .get(&target.id)
             .is_some_and(|enums| enums.contains_key(enum_name))
         {
             return None;
         }
-        let target_path = target.path.clone();
+        let target_id = target.id.clone();
         let target_name = target.name.clone();
         let canonical_enum_name = canonical_decl_name(target, enum_name);
-        if target_path != package.path && !self.type_exported(&target_path, enum_name) {
+        if target_id != package.id && !self.type_exported(&target_id, enum_name) {
             self.diag.add(
                 positions[positions.len() - 2].clone(),
                 format!(
@@ -1005,15 +1013,15 @@ impl<'a> PackageLowerer<'a> {
         };
         if !self
             .enums
-            .get(&target.path)
+            .get(&target.id)
             .is_some_and(|enums| enums.contains_key(enum_name))
         {
             return None;
         }
-        let target_path = target.path.clone();
+        let target_id = target.id.clone();
         let target_name = target.name.clone();
         let canonical_enum_name = canonical_decl_name(target, enum_name);
-        if target_path != package.path && !self.type_exported(&target_path, enum_name) {
+        if target_id != package.id && !self.type_exported(&target_id, enum_name) {
             self.diag.add(
                 ref_.pos.clone(),
                 format!(
@@ -1029,24 +1037,24 @@ impl<'a> PackageLowerer<'a> {
         ))
     }
 
-    fn type_kind(&self, package_path: &str, name: &str) -> Option<&'static str> {
+    fn type_kind(&self, package_id: &PackageId, name: &str) -> Option<&'static str> {
         if self
             .structs
-            .get(package_path)
+            .get(package_id)
             .is_some_and(|decls| decls.contains_key(name))
         {
             return Some("type");
         }
         if self
             .interfaces
-            .get(package_path)
+            .get(package_id)
             .is_some_and(|decls| decls.contains_key(name))
         {
             return Some("interface");
         }
         if self
             .enums
-            .get(package_path)
+            .get(package_id)
             .is_some_and(|decls| decls.contains_key(name))
         {
             return Some("enum");
@@ -1054,26 +1062,22 @@ impl<'a> PackageLowerer<'a> {
         None
     }
 
-    fn type_exported(&self, package_path: &str, name: &str) -> bool {
+    fn type_exported(&self, package_id: &PackageId, name: &str) -> bool {
         self.structs
-            .get(package_path)
+            .get(package_id)
             .and_then(|decls| decls.get(name))
             .or_else(|| {
                 self.interfaces
-                    .get(package_path)
+                    .get(package_id)
                     .and_then(|decls| decls.get(name))
             })
-            .or_else(|| {
-                self.enums
-                    .get(package_path)
-                    .and_then(|decls| decls.get(name))
-            })
+            .or_else(|| self.enums.get(package_id).and_then(|decls| decls.get(name)))
             .is_some_and(|decl| decl.exported)
     }
 
     fn import_target(&self, package: &Package, import_name: &str) -> Option<&Package> {
-        let path = self.imports.get(&package.path)?.get(import_name)?;
-        self.graph.packages.get(path)
+        let id = self.imports.get(&package.id)?.get(import_name)?;
+        self.graph.packages.get(id)
     }
 }
 
@@ -1095,19 +1099,10 @@ fn type_param_set(params: &[TypeParam]) -> BTreeSet<String> {
 }
 
 fn canonical_function_name(graph: &PackageGraph, package: &Package, name: &str) -> String {
-    if package.path == graph.entry && name == "main" {
+    if package.id == graph.entry && name == "main" {
         return "main".to_owned();
     }
     canonical_decl_name(package, name)
-}
-
-fn canonical_decl_name(package: &Package, name: &str) -> String {
-    let prefix = if package.path.is_empty() {
-        package.name.clone()
-    } else {
-        package.path.replace('/', ".")
-    };
-    format!("{prefix}.{name}")
 }
 
 fn is_builtin_type(name: &str) -> bool {
@@ -1139,13 +1134,13 @@ mod tests {
             program
                 .functions
                 .iter()
-                .any(|function| function.name == "lexer.classify")
+                .any(|function| function.name.ends_with(".lexer.classify"))
         );
         assert!(
             program
                 .structs
                 .iter()
-                .any(|struct_| struct_.name == "token.Kind")
+                .any(|struct_| struct_.name.ends_with(".token.Kind"))
         );
         assert!(
             program

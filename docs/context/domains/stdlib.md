@@ -7,8 +7,12 @@
   `crates/yar-compiler/src/package.rs`.
 - Stdlib packages are imported with bare paths like any user package:
   `import "strings"`.
-- Resolution order is local packages first, embedded stdlib second. A local
-  directory with the same name shadows the stdlib package.
+- Non-stdlib origins resolve their own packages first, aliases declared by that
+  origin second, and embedded stdlib last.
+- Imports made by stdlib packages are sealed to the stdlib origin, so project
+  or dependency packages cannot replace transitive stdlib packages.
+- Package identity includes origin and source-relative subpath; stdlib and
+  non-stdlib packages with the same logical path can coexist safely.
 - Stdlib packages are parsed, type-checked, and compiled through the same
   pipeline as user code.
 - Most stdlib functions are ordinary Yar code. A small set of embedded `fs`,
@@ -21,10 +25,8 @@
 - `crates/yar-compiler/src/package.rs` provides the stdlib lookup table.
 - `stdlib/packages/<pkg>/<file>.yar` is the canonical location for
   stdlib source files.
-- The Rust package loader calls `read_stdlib_package` as a fallback when a
-  local or dependency import path is absent.
-- Both local and stdlib packages share the same import-resolution path.
-- Stdlib packages can import other stdlib packages.
+- The Rust package loader calls `read_stdlib_package` as the fallback for
+  non-stdlib origins and as the only source for imports from stdlib origins.
 - Stdlib packages may use the internal builtins `chr`, `i32_to_i64`, and
   `i64_to_i32`. User code cannot call these names directly.
 

@@ -12,9 +12,18 @@
   `!i32`.
 - Packages may span multiple `.yar` files in one directory.
 - Imports are explicit `import "path"` declarations after the package clause.
-- Imports resolve from local packages under the entry root first, then check
-  the dependency index built from `yar.toml` and `yar.lock`, and fall back to
-  the embedded stdlib only when both local and dependency paths are absent.
+- A loaded package is identified by `PackageId`: its source origin plus its
+  source-relative package subpath. Import text is a binding request, not
+  package identity.
+- Imports resolve within the importing package's origin: the origin's own
+  package tree first, then aliases declared for that origin, then the embedded
+  stdlib. An origin's self alias also resolves back into its own package tree.
+- Entry-package aliases come from the root manifest, path-dependency aliases
+  come from that dependency's manifest, and locked-package aliases come from
+  that lock node's child edges. Reachability elsewhere in the graph does not
+  make an alias visible.
+- Embedded stdlib imports are sealed to the stdlib origin. They do not consult
+  entry-local packages or external dependency aliases.
 - A selected dependency entry is authoritative; a missing declared path does
   not fall through to a same-named stdlib package.
 - A versioned `yar.lock` records the complete reachable git dependency graph.
@@ -22,10 +31,10 @@
   dependencies, plus lock child edges, must agree on alias, git URL, ref kind,
   and ref value before cache or network access.
 - Lock graphs reject duplicate aliases or edges, missing nodes, dependency
-  cycles, and unreachable nodes. There is no root dependency override; one
-  alias cannot identify different source/ref tuples in the same graph.
-- Reachable lock aliases share one global dependency index and may be imported
-  without being declared directly by each importing package.
+  cycles, and unreachable nodes. Lock v1 has global alias/source uniqueness:
+  one alias cannot identify different source/ref tuples in different owner
+  scopes. Representing that owner-local alias reuse requires a newer lock
+  schema.
 - When resolution selects a locked git dependency, its cache tree is verified
   against `yar.lock` before cached source is read. Its manifest is then checked
   against the node's recorded child edges. Unused or locally shadowed entries
@@ -43,7 +52,11 @@
   types in their public surface.
 - Import cycles are rejected.
 - Package lowering rewrites package-local and imported declarations to
-  canonical package-qualified names before checking and code generation.
+  canonical origin-safe names before checking and code generation. Equal
+  logical package paths from different origins cannot collide.
+- The final import-path segment is the source qualifier. Two distinct imports
+  with the same final segment are rejected instead of one silently replacing
+  the other.
 - Explicit generic struct and function instantiations are monomorphized before
   semantic checking and code generation.
 - Generic uses must supply explicit type arguments; the compiler does not infer

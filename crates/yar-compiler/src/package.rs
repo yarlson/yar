@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    ast::{Package, PackageGraph, PackageImport, Program},
+    ast::{Package, PackageGraph, PackageId, PackageImport, Program, SourceId},
     diag::{Diagnostic, List},
     lock_graph::{reconcile_lock_entries, requires_lock, verify_locked_dependency_manifest},
     manifest::{
@@ -60,14 +60,18 @@ pub fn load_package_graph(
     let (root_dir, entry_dir) = resolve_entry_dirs(path.as_ref())?;
     let dependency_index = DependencyIndex::load(&root_dir)?;
     let mut loader = PackageLoader {
-        root_dir,
         packages: BTreeMap::new(),
         diag: List::default(),
         include_tests,
         dependency_index,
     };
 
-    match loader.load_package("", &entry_dir)? {
+    let entry_location = PackageLocation {
+        id: PackageId::default(),
+        dir: Some(entry_dir),
+        import_path: String::new(),
+    };
+    match loader.load_package(entry_location)? {
         Some(entry) => {
             if let Some(pkg) = loader.packages.get(&entry)
                 && pkg.name != "main"
@@ -79,21 +83,13 @@ pub fn load_package_graph(
                     .add(file.package_pos.clone(), "package must be main");
             }
             let mut graph = PackageGraph {
-                entry_path: String::new(),
                 entry,
                 packages: loader.packages,
             };
             check_import_cycles(&mut graph, &mut loader.diag);
             Ok((graph, loader.diag.items()))
         }
-        None => Ok((
-            PackageGraph {
-                entry_path: String::new(),
-                entry: String::new(),
-                packages: loader.packages,
-            },
-            loader.diag.items(),
-        )),
+        None => Ok((PackageGraph::default(), loader.diag.items())),
     }
 }
 
@@ -116,56 +112,53 @@ fn resolve_entry_dirs(path: &Path) -> Result<(PathBuf, PathBuf), LoadError> {
 }
 
 struct PackageLoader {
-    root_dir: PathBuf,
-    packages: BTreeMap<String, Package>,
+    packages: BTreeMap<PackageId, Package>,
     diag: List,
     include_tests: bool,
     dependency_index: DependencyIndex,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PackageLocation {
+    id: PackageId,
+    dir: Option<PathBuf>,
+    import_path: String,
+}
+
 impl PackageLoader {
-    fn load_package(&mut self, import_path: &str, dir: &Path) -> Result<Option<String>, LoadError> {
-        if self.packages.contains_key(import_path) {
-            return Ok(Some(import_path.to_owned()));
+    fn load_package(&mut self, location: PackageLocation) -> Result<Option<PackageId>, LoadError> {
+        if self.packages.contains_key(&location.id) {
+            return Ok(Some(location.id));
         }
 
-        if !import_path.is_empty()
-            && !dir.exists()
-            && let Some(dependency_dir) = self.dependency_index.resolve(import_path)?
-            && dependency_dir != dir
-        {
-            return self.load_package(import_path, &dependency_dir);
-        }
-
-        let package = match self.read_local_package(import_path, dir)? {
-            Some(package) => package,
-            None if !import_path.is_empty()
-                && !self.dependency_index.contains_alias(import_path) =>
-            {
-                match read_stdlib_package(import_path) {
-                    Some((package, diagnostics)) => {
-                        self.diag.append(&diagnostics);
-                        package
-                    }
-                    None => return Ok(None),
+        let package = match location.dir.as_deref() {
+            Some(dir) => self.read_local_package(&location.id, dir)?,
+            None => match read_stdlib_package(&location.import_path) {
+                Some((package, diagnostics)) => {
+                    self.diag.append(&diagnostics);
+                    Some(package)
                 }
-            }
-            None => return Ok(None),
+                None => None,
+            },
+        };
+        let Some(package) = package else {
+            return Ok(None);
         };
 
-        self.packages.insert(import_path.to_owned(), package);
-        self.resolve_imports(import_path)?;
-        Ok(Some(import_path.to_owned()))
+        let id = location.id;
+        self.packages.insert(id.clone(), package);
+        self.resolve_imports(&id)?;
+        Ok(Some(id))
     }
 
     fn read_local_package(
         &mut self,
-        import_path: &str,
+        id: &PackageId,
         dir: &Path,
     ) -> Result<Option<Package>, LoadError> {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
-            Err(err) if !import_path.is_empty() && err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err) if !id.subpath.is_empty() && err.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(None);
             }
             Err(err) => return Err(err.into()),
@@ -221,19 +214,20 @@ impl PackageLoader {
         }
 
         Ok(Some(package_from_files(
-            import_path.to_owned(),
+            id.clone(),
             package_name,
             false,
             files,
         )))
     }
 
-    fn resolve_imports(&mut self, package_path: &str) -> Result<(), LoadError> {
-        let Some(package) = self.packages.get(package_path).cloned() else {
+    fn resolve_imports(&mut self, package_id: &PackageId) -> Result<(), LoadError> {
+        let Some(package) = self.packages.get(package_id).cloned() else {
             return Ok(());
         };
 
         let mut seen_imports = BTreeSet::new();
+        let mut import_names = BTreeMap::<String, String>::new();
         let mut imports = Vec::new();
         for file in &package.files {
             for decl in &file.imports {
@@ -247,17 +241,43 @@ impl PackageLoader {
                 if !seen_imports.insert(decl.path.clone()) {
                     continue;
                 }
-                let target_dir = self
-                    .root_dir
-                    .join(decl.path.replace('/', std::path::MAIN_SEPARATOR_STR));
-                let Some(target_path) = self.load_package(&decl.path, &target_dir)? else {
+                let import_name = last_import_segment(&decl.path);
+                if let Some(existing) =
+                    import_names.insert(import_name.to_owned(), decl.path.clone())
+                    && existing != decl.path
+                {
                     self.diag.add(
                         decl.path_pos.clone(),
-                        format!("import {:?} could not be loaded", decl.path),
+                        format!(
+                            "import qualifier {import_name:?} is ambiguous between {existing:?} and {:?}",
+                            decl.path,
+                        ),
                     );
                     continue;
+                }
+
+                let location = self
+                    .dependency_index
+                    .resolve(&package.id.source, &decl.path)?;
+                let Some(target_id) = self.load_package(location)? else {
+                    let message = if self
+                        .dependency_index
+                        .is_reachable_but_undeclared(&package.id.source, &decl.path)
+                    {
+                        let alias = decl
+                            .path
+                            .split_once('/')
+                            .map_or(decl.path.as_str(), |(alias, _)| alias);
+                        format!(
+                            "dependency alias {alias:?} is reachable but not declared by this package origin"
+                        )
+                    } else {
+                        format!("import {:?} could not be loaded", decl.path)
+                    };
+                    self.diag.add(decl.path_pos.clone(), message);
+                    continue;
                 };
-                let Some(target) = self.packages.get(&target_path) else {
+                let Some(target) = self.packages.get(&target_id) else {
                     continue;
                 };
                 if target.name == "main" {
@@ -265,7 +285,7 @@ impl PackageLoader {
                         .add(decl.path_pos.clone(), "cannot import package main");
                     continue;
                 }
-                let want = last_import_segment(&decl.path);
+                let want = import_name;
                 if want != target.name {
                     self.diag.add(
                         decl.path_pos.clone(),
@@ -279,52 +299,60 @@ impl PackageLoader {
                 imports.push(PackageImport {
                     name: target.name.clone(),
                     path: decl.path.clone(),
+                    target: target_id,
                     decl: decl.clone(),
                 });
             }
         }
 
-        if let Some(package) = self.packages.get_mut(package_path) {
+        if let Some(package) = self.packages.get_mut(package_id) {
             package.imports = imports;
         }
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 struct DependencyIndex {
-    entries: BTreeMap<String, DependencyEntry>,
-    verified: BTreeSet<String>,
+    sources: BTreeMap<SourceId, DependencySource>,
+    aliases: BTreeMap<String, SourceId>,
+    verified: BTreeSet<SourceId>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct DependencySource {
+    root: PathBuf,
+    self_aliases: BTreeSet<String>,
+    dependencies: BTreeMap<String, SourceId>,
+    locked: Option<LockedSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum DependencyEntry {
-    Local(PathBuf),
-    Locked {
-        cache_dir: PathBuf,
-        git: String,
-        commit: String,
-        hash: String,
-        dependencies: Vec<LockDependency>,
-    },
+struct LockedSource {
+    cache_dir: PathBuf,
+    git: String,
+    commit: String,
+    hash: String,
+    dependencies: Vec<LockDependency>,
 }
 
 impl DependencyIndex {
-    fn contains_alias(&self, import_path: &str) -> bool {
-        let alias = import_path
-            .split_once('/')
-            .map_or(import_path, |(alias, _)| alias);
-        self.entries.contains_key(alias)
-    }
-
     fn load(root_dir: &Path) -> Result<Self, LoadError> {
+        let mut index = Self::default();
+        index.sources.insert(
+            SourceId::Entry,
+            DependencySource {
+                root: root_dir.to_path_buf(),
+                ..DependencySource::default()
+            },
+        );
+
         let manifest_path = root_dir.join(MANIFEST_FILE);
         if !manifest_path.exists() {
-            return Ok(Self::default());
+            return Ok(index);
         }
 
         let manifest = read_manifest(&manifest_path)?;
-        let mut entries = BTreeMap::new();
         let lock_path = root_dir.join(LOCK_FILE);
         let needs_lock = requires_lock(root_dir, &manifest)?;
         let lock_entries = match read_lock_file(&lock_path) {
@@ -346,97 +374,335 @@ impl DependencyIndex {
                     "yar.toml and yar.lock do not describe one valid dependency graph (run 'yar lock'): {err}"
                 )))
             })?;
-            if !lock_entries.is_empty() {
-                let cache_dir = cache_dir_from_env()?;
-                for entry in lock_entries {
-                    entries.insert(
-                        entry.name,
-                        DependencyEntry::Locked {
-                            cache_dir: cache_dir.clone(),
-                            git: entry.git,
-                            commit: entry.commit,
-                            hash: entry.hash,
-                            dependencies: entry.dependencies,
-                        },
-                    );
-                }
-            }
+            index.add_locked_sources(lock_entries)?;
         }
 
-        for (alias, dependency) in manifest.dependencies {
-            if dependency.is_local() {
-                entries.insert(
-                    alias,
-                    DependencyEntry::Local(dependency_dir(root_dir, &dependency)),
-                );
-            }
-        }
-
-        Ok(Self {
-            entries,
-            verified: BTreeSet::new(),
-        })
+        index.add_manifest_scope(&SourceId::Entry, root_dir, &manifest)?;
+        Ok(index)
     }
 
-    fn resolve(&mut self, import_path: &str) -> Result<Option<PathBuf>, LoadError> {
-        let (alias, sub_path) = import_path.split_once('/').unwrap_or((import_path, ""));
-        let Some(entry) = self.entries.get(alias).cloned() else {
-            return Ok(None);
-        };
-        let (dir, is_local) = match entry {
-            DependencyEntry::Local(dir) => (dir, true),
-            DependencyEntry::Locked {
-                cache_dir,
-                git,
-                commit,
-                hash,
+    fn add_locked_sources(
+        &mut self,
+        lock_entries: Vec<crate::manifest::LockEntry>,
+    ) -> Result<(), LoadError> {
+        if lock_entries.is_empty() {
+            return Ok(());
+        }
+        let cache_dir = cache_dir_from_env()?;
+        for entry in &lock_entries {
+            let source = SourceId::Git {
+                git: entry.git.clone(),
+                commit: entry.commit.clone(),
+            };
+            self.register_alias(&entry.name, &source)?;
+
+            let mut dependencies = entry.dependencies.clone();
+            dependencies.sort_by(|left, right| left.name.cmp(&right.name));
+            let locked = LockedSource {
+                cache_dir: cache_dir.clone(),
+                git: entry.git.clone(),
+                commit: entry.commit.clone(),
+                hash: entry.hash.clone(),
                 dependencies,
-            } => {
-                if !self.verified.contains(alias) {
-                    let dependency_dir =
-                        verify_cached_dependency(&cache_dir, &git, &commit, &hash).map_err(
-                            |err| {
-                                LoadError::Manifest(ManifestError::Invalid(format!(
-                                    "dependency {alias:?} cache verification failed: {err}; remove or repair the reported cache path, then run 'yar fetch'"
-                                )))
-                            },
-                        )?;
-                    verify_locked_dependency_manifest(&dependency_dir, &dependencies).map_err(
-                        |err| {
-                        LoadError::Manifest(ManifestError::Invalid(format!(
-                            "dependency {alias:?} manifest does not match yar.lock (run 'yar lock'): {err}"
-                        )))
-                    },
-                    )?;
-                    self.verified.insert(alias.to_string());
-                }
-                (cache_path(cache_dir, &git, &commit), false)
+            };
+            let source_entry = self
+                .sources
+                .entry(source)
+                .or_insert_with(|| DependencySource {
+                    root: cache_path(&cache_dir, &entry.git, &entry.commit),
+                    locked: Some(locked.clone()),
+                    ..DependencySource::default()
+                });
+            if source_entry.locked.as_ref() != Some(&locked) {
+                return Err(invalid_dependency_graph(format!(
+                    "yar.lock describes git source {:?} at commit {:?} with conflicting hashes or dependency edges",
+                    entry.git, entry.commit
+                )));
             }
+            source_entry.self_aliases.insert(entry.name.clone());
+        }
+
+        for entry in &lock_entries {
+            let owner = SourceId::Git {
+                git: entry.git.clone(),
+                commit: entry.commit.clone(),
+            };
+            for dependency in &entry.dependencies {
+                let Some(target) = self.aliases.get(&dependency.name).cloned() else {
+                    return Err(invalid_dependency_graph(format!(
+                        "yar.lock dependency {:?} has no package entry",
+                        dependency.name
+                    )));
+                };
+                self.insert_binding(&owner, &dependency.name, &target)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_manifest_scope(
+        &mut self,
+        owner: &SourceId,
+        owner_root: &Path,
+        manifest: &crate::manifest::Manifest,
+    ) -> Result<(), LoadError> {
+        let mut path_sources = BTreeSet::new();
+        for (alias, dependency) in &manifest.dependencies {
+            let target = if dependency.is_local() {
+                let root = dependency_dir(owner_root, dependency);
+                let source = SourceId::Path {
+                    manifest_path: path_source_identity(dependency),
+                };
+                let entry =
+                    self.sources
+                        .entry(source.clone())
+                        .or_insert_with(|| DependencySource {
+                            root,
+                            ..DependencySource::default()
+                        });
+                entry.self_aliases.insert(alias.clone());
+                path_sources.insert(source.clone());
+                source
+            } else {
+                self.locked_source_for_alias(alias).ok_or_else(|| {
+                    invalid_dependency_graph(format!(
+                        "dependency {alias:?} has no reconciled yar.lock package entry"
+                    ))
+                })?
+            };
+            self.register_alias(alias, &target)?;
+            self.insert_binding(owner, alias, &target)?;
+        }
+
+        for source in path_sources {
+            let root = self
+                .sources
+                .get(&source)
+                .map(|entry| entry.root.clone())
+                .ok_or_else(|| {
+                    invalid_dependency_graph(format!("missing package source scope for {source:?}"))
+                })?;
+            let manifest_path = root.join(MANIFEST_FILE);
+            let manifest = match read_manifest(&manifest_path) {
+                Ok(manifest) => manifest,
+                Err(ManifestError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+                    crate::manifest::Manifest::default()
+                }
+                Err(err) => return Err(err.into()),
+            };
+            for (alias, dependency) in &manifest.dependencies {
+                if dependency.is_local() {
+                    return Err(invalid_dependency_graph(format!(
+                        "dependency {alias:?} uses a path inside live dependency {}: path dependencies are supported only in the root yar.toml",
+                        root.display()
+                    )));
+                }
+                let target = self.locked_source_for_alias(alias).ok_or_else(|| {
+                    invalid_dependency_graph(format!(
+                        "dependency {alias:?} has no reconciled yar.lock package entry"
+                    ))
+                })?;
+                self.insert_binding(&source, alias, &target)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn locked_source_for_alias(&self, alias: &str) -> Option<SourceId> {
+        self.aliases
+            .get(alias)
+            .filter(|source| matches!(source, SourceId::Git { .. }))
+            .cloned()
+    }
+
+    fn register_alias(&mut self, alias: &str, source: &SourceId) -> Result<(), LoadError> {
+        if let Some(existing) = self.aliases.insert(alias.to_owned(), source.clone())
+            && existing != *source
+        {
+            return Err(invalid_dependency_graph(format!(
+                "dependency alias {alias:?} maps to conflicting package sources"
+            )));
+        }
+        Ok(())
+    }
+
+    fn insert_binding(
+        &mut self,
+        owner: &SourceId,
+        alias: &str,
+        target: &SourceId,
+    ) -> Result<(), LoadError> {
+        let Some(scope) = self.sources.get_mut(owner) else {
+            return Err(invalid_dependency_graph(format!(
+                "missing package source scope for {owner:?}"
+            )));
         };
-        let dir = if sub_path.is_empty() {
-            dir
+        if let Some(existing) = scope.dependencies.insert(alias.to_owned(), target.clone())
+            && existing != *target
+        {
+            return Err(invalid_dependency_graph(format!(
+                "dependency alias {alias:?} maps to conflicting package sources"
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve(
+        &mut self,
+        owner: &SourceId,
+        import_path: &str,
+    ) -> Result<PackageLocation, LoadError> {
+        if matches!(owner, SourceId::Stdlib) {
+            return Ok(stdlib_location(import_path));
+        }
+
+        let Some(scope) = self.sources.get(owner).cloned() else {
+            return Err(invalid_dependency_graph(format!(
+                "missing package source scope for {owner:?}"
+            )));
+        };
+        let owner_root = self.verify_source(owner, None)?;
+        let (alias, subpath) = import_path.split_once('/').unwrap_or((import_path, ""));
+
+        if scope.self_aliases.contains(alias) {
+            return Ok(filesystem_location(
+                owner.clone(),
+                subpath,
+                owner_root,
+                import_path,
+            ));
+        }
+
+        let local_dir = package_dir(&owner_root, import_path);
+        if local_dir.exists() {
+            return Ok(PackageLocation {
+                id: PackageId {
+                    source: owner.clone(),
+                    subpath: import_path.to_owned(),
+                },
+                dir: Some(local_dir),
+                import_path: import_path.to_owned(),
+            });
+        }
+
+        if let Some(target) = scope.dependencies.get(alias) {
+            let target_root = self.verify_source(target, Some(alias))?;
+            return Ok(filesystem_location(
+                target.clone(),
+                subpath,
+                target_root,
+                import_path,
+            ));
+        }
+
+        Ok(stdlib_location(import_path))
+    }
+
+    fn verify_source(
+        &mut self,
+        source: &SourceId,
+        selected_alias: Option<&str>,
+    ) -> Result<PathBuf, LoadError> {
+        let Some(entry) = self.sources.get(source).cloned() else {
+            return Err(invalid_dependency_graph(format!(
+                "missing package source scope for {source:?}"
+            )));
+        };
+        if self.verified.contains(source) || matches!(source, SourceId::Entry) {
+            return Ok(entry.root);
+        }
+        let alias = selected_alias
+            .or_else(|| entry.self_aliases.iter().next().map(String::as_str))
+            .unwrap_or("<unknown>");
+
+        if let Some(locked) = entry.locked {
+            let dependency_dir = verify_cached_dependency(
+                &locked.cache_dir,
+                &locked.git,
+                &locked.commit,
+                &locked.hash,
+            )
+            .map_err(|err| {
+                LoadError::Manifest(ManifestError::Invalid(format!(
+                    "dependency {alias:?} cache verification failed: {err}; remove or repair the reported cache path, then run 'yar fetch'"
+                )))
+            })?;
+            verify_locked_dependency_manifest(&dependency_dir, &locked.dependencies).map_err(
+                |err| {
+                    LoadError::Manifest(ManifestError::Invalid(format!(
+                        "dependency {alias:?} manifest does not match yar.lock (run 'yar lock'): {err}"
+                    )))
+                },
+            )?;
         } else {
-            dir.join(sub_path.replace('/', std::path::MAIN_SEPARATOR_STR))
-        };
-        if is_local {
-            match fs::metadata(&dir) {
+            match fs::metadata(&entry.root) {
                 Ok(metadata) if metadata.is_dir() => {}
                 Ok(_) => {
                     return Err(LoadError::Manifest(ManifestError::Invalid(format!(
                         "local dependency {alias:?} path {} is not a directory",
-                        dir.display()
+                        entry.root.display()
                     ))));
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                     return Err(LoadError::Manifest(ManifestError::Invalid(format!(
                         "local dependency {alias:?} path {} does not exist",
-                        dir.display()
+                        entry.root.display()
                     ))));
                 }
                 Err(err) => return Err(err.into()),
             }
         }
-        Ok(Some(dir))
+        self.verified.insert(source.clone());
+        Ok(entry.root)
+    }
+
+    fn is_reachable_but_undeclared(&self, owner: &SourceId, import_path: &str) -> bool {
+        let alias = import_path
+            .split_once('/')
+            .map_or(import_path, |(alias, _)| alias);
+        self.aliases.contains_key(alias)
+            && self.sources.get(owner).is_some_and(|scope| {
+                !scope.dependencies.contains_key(alias) && !scope.self_aliases.contains(alias)
+            })
+    }
+}
+
+fn invalid_dependency_graph(message: String) -> LoadError {
+    LoadError::Manifest(ManifestError::Invalid(message))
+}
+
+fn package_dir(root: &Path, subpath: &str) -> PathBuf {
+    if subpath.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(subpath.replace('/', std::path::MAIN_SEPARATOR_STR))
+    }
+}
+
+fn filesystem_location(
+    source: SourceId,
+    subpath: &str,
+    root: PathBuf,
+    import_path: &str,
+) -> PackageLocation {
+    PackageLocation {
+        id: PackageId {
+            source,
+            subpath: subpath.to_owned(),
+        },
+        dir: Some(package_dir(&root, subpath)),
+        import_path: import_path.to_owned(),
+    }
+}
+
+fn stdlib_location(import_path: &str) -> PackageLocation {
+    PackageLocation {
+        id: PackageId {
+            source: SourceId::Stdlib,
+            subpath: import_path.to_owned(),
+        },
+        dir: None,
+        import_path: import_path.to_owned(),
     }
 }
 
@@ -450,9 +716,15 @@ fn dependency_dir(root_dir: &Path, dependency: &Dependency) -> PathBuf {
     clean_path(&dir)
 }
 
-fn package_from_files(path: String, name: String, stdlib: bool, files: Vec<Program>) -> Package {
+fn path_source_identity(dependency: &Dependency) -> String {
+    clean_path(Path::new(&dependency.path))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn package_from_files(id: PackageId, name: String, stdlib: bool, files: Vec<Program>) -> Package {
     let mut package = Package {
-        path,
+        id,
         name,
         stdlib,
         files,
@@ -491,7 +763,15 @@ fn read_stdlib_package(import_path: &str) -> Option<(Package, Vec<Diagnostic>)> 
         files.push(program);
     }
     Some((
-        package_from_files(import_path.to_owned(), package_name, true, files),
+        package_from_files(
+            PackageId {
+                source: SourceId::Stdlib,
+                subpath: import_path.to_owned(),
+            },
+            package_name,
+            true,
+            files,
+        ),
         diagnostics,
     ))
 }
@@ -635,53 +915,70 @@ fn check_import_cycles(graph: &mut PackageGraph, diagnostics: &mut List) {
 
 fn visit_package(
     graph: &PackageGraph,
-    package_path: &str,
-    visited: &mut BTreeSet<String>,
-    active: &mut BTreeSet<String>,
-    stack: &mut Vec<String>,
+    package_id: &PackageId,
+    visited: &mut BTreeSet<PackageId>,
+    active: &mut BTreeSet<PackageId>,
+    stack: &mut Vec<PackageId>,
     diagnostics: &mut List,
 ) {
-    if visited.contains(package_path) {
+    if visited.contains(package_id) {
         return;
     }
-    let Some(package) = graph.packages.get(package_path) else {
+    let Some(package) = graph.packages.get(package_id) else {
         return;
     };
 
-    visited.insert(package_path.to_owned());
-    active.insert(package_path.to_owned());
-    stack.push(package_path.to_owned());
+    visited.insert(package_id.clone());
+    active.insert(package_id.clone());
+    stack.push(package_id.clone());
 
     for import in &package.imports {
-        let target_path = &import.path;
-        if !graph.packages.contains_key(target_path) {
+        let target_id = &import.target;
+        if !graph.packages.contains_key(target_id) {
             continue;
         }
-        if active.contains(target_path) {
-            let cycle = append_cycle(stack, target_path);
+        if active.contains(target_id) {
+            let cycle = append_cycle(graph, stack, target_id);
             diagnostics.add(
                 import.decl.path_pos.clone(),
                 format!("import cycle: {}", cycle.join(" -> ")),
             );
             continue;
         }
-        visit_package(graph, target_path, visited, active, stack, diagnostics);
+        visit_package(graph, target_id, visited, active, stack, diagnostics);
     }
 
     stack.pop();
-    active.remove(package_path);
+    active.remove(package_id);
 }
 
-fn append_cycle(stack: &[String], target: &str) -> Vec<String> {
-    let start = stack.iter().position(|path| path == target).unwrap_or(0);
-    let mut cycle = stack[start..].to_vec();
-    cycle.push(target.to_owned());
-    for path in &mut cycle {
-        if path.is_empty() {
-            *path = "main".to_owned();
-        }
+fn append_cycle(graph: &PackageGraph, stack: &[PackageId], target: &PackageId) -> Vec<String> {
+    let start = stack.iter().position(|id| id == target).unwrap_or(0);
+    stack[start..]
+        .iter()
+        .chain(std::iter::once(target))
+        .map(|id| package_display_path(graph, id))
+        .collect()
+}
+
+fn package_display_path(graph: &PackageGraph, id: &PackageId) -> String {
+    if id == &graph.entry {
+        return "main".to_owned();
     }
-    cycle
+    let subpath = if id.subpath.is_empty() {
+        graph
+            .packages
+            .get(id)
+            .map_or("<root>", |package| package.name.as_str())
+    } else {
+        &id.subpath
+    };
+    match &id.source {
+        SourceId::Entry => subpath.to_owned(),
+        SourceId::Path { manifest_path } => format!("{manifest_path}:{subpath}"),
+        SourceId::Git { git, commit } => format!("{git}@{commit}:{subpath}"),
+        SourceId::Stdlib => format!("<stdlib>/{subpath}"),
+    }
 }
 
 #[cfg(test)]
@@ -701,12 +998,12 @@ mod tests {
             load_package_graph(root.join("testdata/imports_ok/main.yar"), false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
-        assert_eq!(graph.entry, "");
-        assert!(graph.packages.contains_key(""));
-        assert!(graph.packages.contains_key("lexer"));
-        assert!(graph.packages.contains_key("token"));
-        assert_eq!(graph.packages[""].name, "main");
-        assert_eq!(graph.packages["lexer"].name, "lexer");
+        assert_eq!(graph.entry, PackageId::default());
+        assert!(graph.packages.contains_key(&PackageId::default()));
+        assert!(graph.packages.contains_key(&entry_package_id("lexer")));
+        assert!(graph.packages.contains_key(&entry_package_id("token")));
+        assert_eq!(graph.packages[&PackageId::default()].name, "main");
+        assert_eq!(graph.packages[&entry_package_id("lexer")].name, "lexer");
     }
 
     #[test]
@@ -716,9 +1013,9 @@ mod tests {
             load_package_graph(root.join("testdata/stdlib_http/main.yar"), false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
-        assert!(graph.packages["http"].stdlib);
-        assert!(graph.packages["net"].stdlib);
-        assert!(graph.packages["strings"].stdlib);
+        assert!(graph.packages[&stdlib_package_id("http")].stdlib);
+        assert!(graph.packages[&stdlib_package_id("net")].stdlib);
+        assert!(graph.packages[&stdlib_package_id("strings")].stdlib);
     }
 
     #[test]
@@ -796,15 +1093,15 @@ pub fn read_file(path str) str {
         let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
-        assert!(!graph.packages["fs"].stdlib);
+        assert!(!graph.packages[&entry_package_id("fs")].stdlib);
         assert!(
-            graph.packages["fs"]
+            graph.packages[&entry_package_id("fs")]
                 .structs
                 .iter()
                 .all(|decl| !decl.resource)
         );
         assert!(
-            graph.packages["fs"]
+            graph.packages[&entry_package_id("fs")]
                 .functions
                 .iter()
                 .all(|decl| !decl.host_intrinsic)
@@ -855,8 +1152,17 @@ pub fn add(a i32, b i32) i32 {
         let (graph, diagnostics) = load_package_graph(&app_dir, false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
-        assert_eq!(graph.packages["vendor/mathlib"].name, "mathlib");
-        assert_eq!(graph.packages[""].imports[0].path, "vendor/mathlib");
+        let mathlib_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "../deps/vendor".to_owned(),
+            },
+            subpath: "mathlib".to_owned(),
+        };
+        assert_eq!(graph.packages[&mathlib_id].name, "mathlib");
+        assert_eq!(
+            graph.packages[&PackageId::default()].imports[0].path,
+            "vendor/mathlib"
+        );
     }
 
     #[test]
@@ -880,7 +1186,11 @@ pub fn add(a i32, b i32) i32 {
                 failures.push(format!("{}: {:?}", entry.display(), diagnostics));
                 continue;
             }
-            if graph.packages.get("").is_none_or(|pkg| pkg.name != "main") {
+            if graph
+                .packages
+                .get(&PackageId::default())
+                .is_none_or(|pkg| pkg.name != "main")
+            {
                 failures.push(format!("{}: missing main entry package", entry.display()));
             }
         }
@@ -894,6 +1204,20 @@ pub fn add(a i32, b i32) i32 {
             .nth(2)
             .expect("crate is nested under crates/yar-compiler")
             .to_path_buf()
+    }
+
+    fn entry_package_id(subpath: &str) -> PackageId {
+        PackageId {
+            source: SourceId::Entry,
+            subpath: subpath.to_owned(),
+        }
+    }
+
+    fn stdlib_package_id(subpath: &str) -> PackageId {
+        PackageId {
+            source: SourceId::Stdlib,
+            subpath: subpath.to_owned(),
+        }
     }
 
     fn collect_main_files(dir: &Path, out: &mut Vec<PathBuf>) {
