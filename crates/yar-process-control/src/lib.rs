@@ -781,7 +781,7 @@ fn wait(
         #[cfg(unix)]
         for signal in pending_signals {
             if let Some((original_signal, _)) = interruption {
-                child.terminate(program)?;
+                let _ = child.terminate(program);
                 return Err(ProcessError::Interrupted {
                     program: program.to_owned(),
                     signal: original_signal,
@@ -800,14 +800,15 @@ fn wait(
         }
 
         if let Some(status) = child.try_wait(program)? {
-            child.finish(program, deadline)?;
             #[cfg(unix)]
             if let Some((signal, _)) = interruption {
+                let _ = child.finish(program, deadline);
                 return Err(ProcessError::Interrupted {
                     program: program.to_owned(),
                     signal,
                 });
             }
+            child.finish(program, deadline)?;
             return Ok(status);
         }
 
@@ -815,7 +816,7 @@ fn wait(
         if let Some((signal, expires_at)) = interruption
             && now >= expires_at
         {
-            child.terminate(program)?;
+            let _ = child.terminate(program);
             return Err(ProcessError::Interrupted {
                 program: program.to_owned(),
                 signal,

@@ -641,13 +641,13 @@ dep = { git = "https://example.com/dep.git", tag = "v1" }
     );
 
     let path = format!("{}:/bin:/usr/bin", tools.display());
-    let mut child = Command::new(env!("CARGO_BIN_EXE_yar"))
+    let child = Command::new(env!("CARGO_BIN_EXE_yar"))
         .arg("fetch")
         .current_dir(&project)
         .env("PATH", path)
         .env("YAR_CACHE", dir.join("cache"))
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     wait_for_file(&tools.join("started"));
@@ -656,8 +656,13 @@ dep = { git = "https://example.com/dep.git", tag = "v1" }
         .status()
         .unwrap();
     assert!(signal.success());
-    let status = child.wait().unwrap();
-    assert_eq!(status.code(), Some(143));
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(143),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
