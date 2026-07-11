@@ -15,6 +15,7 @@
   segment. Each value specifies either `git` + one of `tag`/`rev`/`branch`, or
   `path` for a local source.
 - Alias names must be valid Yar import path segments: `[a-zA-Z_][a-zA-Z0-9_]*`.
+  The alias `std` is reserved for the compiler-owned standard library.
 
 ## Lock File (`yar.lock`)
 
@@ -53,17 +54,18 @@
 
 ## Resolution Order
 
-1. Already loaded `PackageId` (origin plus source-relative subpath).
-2. The importer's own source tree, including its self alias.
-3. An alias declared by that origin, resolved to a path or verified git source.
-4. Embedded stdlib fallback.
-5. Error.
+1. A `std/<package>` path resolves only to an embedded stdlib `PackageId`.
+2. Otherwise, reuse an already loaded `PackageId` when applicable.
+3. Check the importer's own source tree, including its self alias.
+4. Check an alias declared by that origin, resolving it to a path or verified
+   git source.
+5. Report an error.
 
-Own-origin packages shadow declared dependencies. Dependencies shadow stdlib.
-A selected dependency alias is authoritative. A missing local path dependency
-fails loading rather than falling through to a same-named stdlib package.
-Imports inside embedded stdlib are sealed to the stdlib origin and do not
-consult project-local or external dependency sources.
+Own-origin packages shadow declared dependencies for non-`std` paths. A
+selected dependency alias is authoritative, and a missing local path dependency
+fails without stdlib substitution. Embedded stdlib imports also use `std/...`
+and never consult project-local or external dependency sources. An unresolved
+bare known stdlib name receives a migration diagnostic.
 
 ## Fetching
 

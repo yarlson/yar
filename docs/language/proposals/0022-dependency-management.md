@@ -129,8 +129,9 @@ Invalid because `path` and `git` are mutually exclusive.
   its commit and content hash match. Each fetched manifest is also checked
   against its package node's child edges.
 - During compilation, the package loader builds origin-scoped source records
-  and alias bindings from `yar.toml` and `yar.lock`. It checks same-origin
-  packages, then aliases declared by the importing origin, then stdlib.
+  and alias bindings from `yar.toml` and `yar.lock`. Reserved `std/...` paths
+  resolve to embedded packages; other paths check same-origin packages and then
+  aliases declared by the importing origin.
 - The source index stores lock metadata. When resolution selects a locked
   dependency, its cache tree is hash-verified before the path is returned or
   its manifest or source is parsed. The verified manifest's git dependencies
@@ -143,13 +144,15 @@ Invalid because `path` and `git` are mutually exclusive.
   live, unhashed filesystem inputs.
 - A dependency alias is a binding owned by a source origin, not package
   identity. Packages use `PackageId = (source origin, source-relative subpath)`.
-- For each non-stdlib importer, resolution checks same-origin packages, then
-  aliases declared directly by that origin, then embedded stdlib.
+- The reserved `std/<package>` namespace resolves exclusively to embedded
+  stdlib before source or alias lookup. Other imports check same-origin
+  packages, then aliases declared directly by that origin, then fail.
 - Entry aliases come from the root manifest, root path origins use aliases from
   their own manifests, and locked git origins use their lock node's child edges.
-- Imports inside embedded stdlib are sealed to the stdlib origin.
+- Dependency aliases cannot be named `std`. Imports inside embedded stdlib use
+  `std/...` and remain sealed to the stdlib origin.
 - A selected dependency alias is authoritative. A missing declared path fails
-  loading instead of falling through to a same-named stdlib package.
+  loading without substituting a same-named stdlib package.
 - Lock reachability does not grant import visibility. Each importing origin
   must directly declare every external alias it uses. Source that relied on a
   merely reachable transitive alias must add it to that source's manifest.
@@ -251,10 +254,11 @@ origins remain distinct and cycles through dependencies are detected normally.
 
 ### Stdlib
 
-For non-stdlib importers, directly declared dependencies shadow stdlib packages
-with the same qualifier. A locked dependency whose cache is missing or corrupt
-fails before stdlib fallback. Stdlib's own imports never consult external
-aliases.
+The reserved `std/...` namespace bypasses directly declared dependencies and
+same-origin packages. Bare user packages and dependency aliases may still use
+names such as `fs` or `http`; they do not replace `std/fs` or `std/http`. A
+selected dependency whose cache is missing or corrupt fails without any stdlib
+substitution. Stdlib's own imports never consult external aliases.
 
 ### Testing
 

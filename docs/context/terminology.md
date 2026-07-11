@@ -85,9 +85,9 @@ binding payload fields when present.
 unhandled error — An errorable `main` result that reaches the generated native
 wrapper, which prints an error message and exits with code `1`.
 
-stdlib — The embedded standard library of Yar packages (`strings`, `utf8`,
-`conv`, `sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`,
-`testing`) compiled through the same pipeline as user code.
+stdlib — The embedded standard library of Yar packages imported through the
+compiler-owned `std/...` namespace and compiled through the same pipeline as
+user code.
 
 internal builtin — A builtin (`chr`, `i32_to_i64`, `i64_to_i32`) restricted to
 stdlib packages and rejected in user code by the package lowerer.
@@ -123,7 +123,8 @@ source/ref child edges.
 
 dependency alias — The short name used in `yar.toml` to refer to an external
 dependency, which becomes the top-level import path segment in source code.
-Aliases are bindings owned by an importing package origin.
+Aliases are bindings owned by an importing package origin; `std` is reserved
+and cannot be a dependency alias.
 
 dependency index — The package loader's origin-scoped source and alias map,
 built from the root manifest, path-dependency manifests, and lock child edges.

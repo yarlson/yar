@@ -1,6 +1,6 @@
 package main
 
-import "conv"
+import "std/conv"
 
 fn min_i32() i32 {
     return 0 - 2147483647 - 1

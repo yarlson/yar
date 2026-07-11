@@ -1,9 +1,9 @@
 package http
 
-import "conv"
-import "net"
-import "sort"
-import "strings"
+import "std/conv"
+import "std/net"
+import "std/sort"
+import "std/strings"
 
 pub struct Request {
     method str

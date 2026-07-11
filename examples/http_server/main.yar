@@ -1,7 +1,7 @@
 package main
 
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 fn handle(req http.Request) !http.Response {
     if req.path == "/health" {

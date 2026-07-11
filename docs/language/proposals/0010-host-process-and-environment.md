@@ -50,7 +50,7 @@ a permanent host CLI.
 ### Valid examples
 
 ```
-import "process"
+import "std/process"
 
 fn main() i32 {
     args := process.args()
@@ -62,7 +62,7 @@ fn main() i32 {
 ```
 
 ```
-import "env"
+import "std/env"
 
 fn cc_name() str {
     cc := env.lookup("CC") or |err| {
@@ -73,7 +73,7 @@ fn cc_name() str {
 ```
 
 ```
-import "process"
+import "std/process"
 
 fn link(ir_path str, runtime_path str, out_path str, cc str) !i32 {
     result := process.run([]str{
@@ -89,7 +89,7 @@ fn link(ir_path str, runtime_path str, out_path str, cc str) !i32 {
 ```
 
 ```
-import "stdio"
+import "std/stdio"
 
 fn report(msg str) void {
     stdio.eprint(msg)

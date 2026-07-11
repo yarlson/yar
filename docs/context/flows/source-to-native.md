@@ -4,9 +4,9 @@
 
 - Path compilation loads a graph keyed by `PackageId(origin, subpath)` rather
   than by raw import text.
-- Each import resolves within the importing origin: own packages, aliases
-  declared for that origin, then embedded stdlib. Stdlib-origin imports remain
-  inside the embedded stdlib origin.
+- `std/<package>` imports resolve only to the embedded stdlib origin before any
+  user-controlled lookup. Other imports resolve within the importing origin:
+  own packages, aliases declared for that origin, then error.
 - The loader rejects invalid paths, package-name mismatches, cycles, undeclared
   reachable aliases, and distinct imports with the same final-segment
   qualifier.

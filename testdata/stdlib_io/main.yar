@@ -1,8 +1,8 @@
 package main
 
-import "fs"
-import "io"
-import "path"
+import "std/fs"
+import "std/io"
+import "std/path"
 
 fn main() !i32 {
     dir := fs.temp_dir("yar-io")?

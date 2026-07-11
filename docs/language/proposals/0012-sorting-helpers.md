@@ -38,7 +38,7 @@ foundational piece of tooling logic across programs and packages.
 ### Valid examples
 
 ```
-import "sort"
+import "std/sort"
 
 fn stable_files(files []str) []str {
     sort.strings(files)
@@ -47,7 +47,7 @@ fn stable_files(files []str) []str {
 ```
 
 ```
-import "sort"
+import "std/sort"
 
 fn stable_error_codes(codes []i32) []i32 {
     sort.i32s(codes)

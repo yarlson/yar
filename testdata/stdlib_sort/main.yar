@@ -1,8 +1,8 @@
 package main
 
-import "conv"
-import "sort"
-import "strings"
+import "std/conv"
+import "std/sort"
+import "std/strings"
 
 fn main() i32 {
     words := []str{"beta", "alpha", "alphabet", "alp", "", "alpha"}

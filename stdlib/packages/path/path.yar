@@ -1,7 +1,7 @@
 package path
 
-import "conv"
-import "strings"
+import "std/conv"
+import "std/strings"
 
 fn normalize_separators(p str) str {
     result := ""

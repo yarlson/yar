@@ -49,8 +49,10 @@ Imported packages:
 - use `import "path"` with slash-separated package paths
 - must declare a package name matching the final import path segment
 - may expose top-level `struct`, `interface`, `enum`, and `fn` declarations with `pub`
-- resolve within the importing source origin: same-origin packages → aliases
-  declared directly by that origin → embedded stdlib
+- use the reserved `std/<package>` namespace for embedded standard-library
+  packages; these imports bypass project and dependency lookup
+- otherwise resolve within the importing source origin: same-origin packages →
+  aliases declared directly by that origin → error
 - cannot share a final path segment with another distinct import in the same
   package, because that segment is the source qualifier
 
@@ -912,16 +914,18 @@ Out-of-range slice indexing and invalid slice ranges trap with a runtime failure
 
 ## Standard Library
 
-The compiler ships with an embedded standard library written in Yar. For a
-non-stdlib importer, stdlib is the fallback after same-origin packages and
-directly declared dependency aliases. Imports made by stdlib packages are
-sealed to the embedded stdlib origin; project-local and external packages
-cannot replace stdlib's internal dependencies.
+The compiler ships with an embedded standard library written in Yar. Its
+compiler-owned import namespace is `std/<package>`. The resolver selects that
+namespace before project-local or dependency lookup, so those sources cannot
+replace direct or transitive stdlib packages. Stdlib packages use the same
+canonical paths for their internal imports. A missing bare import that names a
+known stdlib package receives a diagnostic pointing to its `std/...` path;
+genuine user-owned packages may still use those bare names.
 
 ### `strings`
 
 ```
-import "strings"
+import "std/strings"
 ```
 
 Available functions:
@@ -946,7 +950,7 @@ Available functions:
 ### `utf8`
 
 ```
-import "utf8"
+import "std/utf8"
 ```
 
 Available functions:
@@ -963,7 +967,7 @@ UTF-8 errors return `error.InvalidUTF8`. Out-of-range offsets return
 ### `conv`
 
 ```
-import "conv"
+import "std/conv"
 ```
 
 Available functions:
@@ -977,7 +981,7 @@ Available functions:
 ### `sort`
 
 ```
-import "sort"
+import "std/sort"
 ```
 
 Available functions:
@@ -991,7 +995,7 @@ Current implementation note: these helpers use a simple in-place insertion sort.
 ### `path`
 
 ```
-import "path"
+import "std/path"
 ```
 
 Available functions:
@@ -1010,7 +1014,7 @@ Current implementation notes:
 ### `fs`
 
 ```
-import "fs"
+import "std/fs"
 ```
 
 Types:
@@ -1064,7 +1068,7 @@ Unix-like systems and Win32 APIs on Windows. `fs.temp_dir` uses `TMPDIR` or
 ### `io`
 
 ```
-import "io"
+import "std/io"
 ```
 
 Interfaces:
@@ -1085,7 +1089,7 @@ Available functions:
 ### `process`
 
 ```
-import "process"
+import "std/process"
 ```
 
 Types:
@@ -1112,7 +1116,7 @@ as data in `process.Result.exit_code` or the returned `i32`, not as a YAR
 ### `env`
 
 ```
-import "env"
+import "std/env"
 ```
 
 Available functions:
@@ -1125,7 +1129,7 @@ that cannot cross the host boundary return `error.InvalidArgument`.
 ### `stdio`
 
 ```
-import "stdio"
+import "std/stdio"
 ```
 
 Available functions:
@@ -1135,7 +1139,7 @@ Available functions:
 ### `net`
 
 ```
-import "net"
+import "std/net"
 ```
 
 Types:
@@ -1215,7 +1219,7 @@ Unix-like systems and Winsock2 on Windows. SIGPIPE is suppressed on POSIX.
 ### `http`
 
 ```
-import "http"
+import "std/http"
 ```
 
 Types:
@@ -1234,8 +1238,8 @@ Available functions:
 Example:
 
 ```yar
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 fn handle(req http.Request) !http.Response {
     return http.text(200, "hello\n")
@@ -1261,7 +1265,7 @@ Current v1 behavior:
 ### `testing`
 
 ```
-import "testing"
+import "std/testing"
 ```
 
 Types:
@@ -1306,7 +1310,7 @@ Test functions start with `test_`, take a single `*testing.T` parameter, and
 return `void`:
 
 ```
-import "testing"
+import "std/testing"
 
 fn test_addition(t *testing.T) void {
     testing.equal_i32(t, add(2, 3), 5)
@@ -1368,7 +1372,8 @@ json = { git = "https://github.com/user/yar-json.git", rev = "a1b2c3d" }
 local_lib = { path = "../my-local-lib" }
 ```
 
-Each dependency alias becomes the top-level import path segment:
+Each dependency alias becomes the top-level import path segment. The alias
+`std` is reserved for the compiler-owned standard library and is rejected:
 
 ```yar
 import "http"
@@ -1430,7 +1435,7 @@ tree against the lock hash before reading its manifest or source, then checks
 that the manifest's git dependencies exactly match the node's recorded child
 edges. A missing, unreadable, symlinked, hash-mismatched, or edge-mismatched
 selected tree is a hard package-loading error with repair guidance;
-compilation does not repair the cache or fall back to a same-named stdlib
+compilation does not repair the cache or substitute a same-named stdlib
 package. Unused dependencies and dependencies shadowed by local packages do
 not require a cache.
 
@@ -1473,14 +1478,17 @@ locked revision, so `yar update <path-alias>` is rejected with guidance to run
 
 ### Resolution Order
 
-For each non-stdlib importing origin:
+For each import:
 
-1. Same-origin package tree, including the origin's self alias
-2. An alias declared directly by that origin
-3. Embedded stdlib
-4. Error
+1. A `std/<package>` path resolves only within the embedded stdlib origin.
+2. Otherwise, check the importer's same-origin package tree, including its self
+   alias.
+3. Check an alias declared directly by that origin.
+4. Report an error. If the unresolved bare path is a known stdlib package, the
+   diagnostic names the required `std/<package>` spelling.
 
-Imports originating in embedded stdlib resolve only within the stdlib origin.
+Imports originating in embedded stdlib also use `std/<package>` and cannot
+consult project or dependency sources.
 
 ### Cache
 

@@ -535,6 +535,24 @@ fn add_and_remove_local_dependency_updates_manifest() {
 }
 
 #[test]
+fn add_rejects_reserved_std_alias_without_writing_manifest() {
+    let dir = temp_dir("yar-cli-reserved-stdlib-alias");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "std", "--path=../stdlib-shadow"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "dependency alias \"std\" is reserved for the standard library\n"
+    );
+    assert!(!dir.join("yar.toml").exists());
+}
+
+#[test]
 fn check_verifies_a_locked_dependency_before_parsing_it() {
     let project = locked_dependency_project("yar-cli-tampered-locked-cache");
     let valid = run_yar(&project.dir, &project.cache_dir, &["check", "."]);
@@ -562,7 +580,7 @@ fn check_verifies_a_locked_dependency_before_parsing_it() {
 }
 
 #[test]
-fn check_does_not_fall_back_to_stdlib_when_a_locked_cache_is_missing() {
+fn check_rejects_a_missing_locked_cache_without_stdlib_substitution() {
     let dir = temp_dir("yar-cli-missing-locked-cache");
     let cache_dir = dir.join("cache");
     let git = "https://example.com/strings.git";
@@ -607,7 +625,7 @@ fn main() i32 {
 
     assert!(
         !output.status.success(),
-        "missing locked dependency silently fell back to the same-named stdlib package"
+        "missing locked dependency was replaced by the same-named stdlib package"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -617,7 +635,7 @@ fn main() i32 {
 }
 
 #[test]
-fn check_rejects_a_missing_direct_lock_entry_before_stdlib_fallback() {
+fn check_rejects_a_missing_direct_lock_entry_without_stdlib_substitution() {
     let dir = temp_dir("yar-cli-missing-direct-lock-entry");
     let cache_dir = dir.join("cache");
     fs::write(
@@ -866,7 +884,7 @@ name = "local"
 }
 
 #[test]
-fn check_does_not_fall_back_to_stdlib_for_a_missing_path_dependency() {
+fn check_rejects_a_missing_path_dependency_without_stdlib_substitution() {
     let dir = temp_dir("yar-cli-missing-path-dependency");
     let cache_dir = dir.join("cache");
     fs::write(
@@ -889,7 +907,7 @@ fs = { path = "../missing" }
 
     assert!(
         !output.status.success(),
-        "missing path dependency silently fell back to stdlib"
+        "missing path dependency was replaced by stdlib"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -930,7 +948,7 @@ fs = { path = "local-fs" }
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("has no .yar files") && stderr.contains("could not be loaded"),
-        "declared path dependency fell through to stdlib: {stderr}"
+        "declared path dependency was replaced by stdlib: {stderr}"
     );
 }
 

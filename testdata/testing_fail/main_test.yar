@@ -1,6 +1,6 @@
 package main
 
-import "testing"
+import "std/testing"
 
 fn test_pass(t *testing.T) void {
     testing.equal[i32](t, 1, 1)

@@ -1,6 +1,6 @@
 package main
 
-import "http"
+import "std/http"
 
 fn handle(req http.Request) !http.Response {
     if req.method != "POST" {

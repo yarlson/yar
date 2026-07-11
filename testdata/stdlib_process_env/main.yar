@@ -1,8 +1,8 @@
 package main
 
-import "env"
-import "process"
-import "stdio"
+import "std/env"
+import "std/process"
+import "std/stdio"
 
 fn main() !i32 {
     args := process.args()

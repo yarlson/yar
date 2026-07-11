@@ -127,12 +127,15 @@ Status: accepted
 Packages may span multiple files, imports are explicit, cross-package references
 stay qualified, and top-level declarations are package-local unless marked
 `pub`. A package's compiler identity is `PackageId = (source origin,
-source-relative subpath)`; import text is only a binding. Import resolution is
-scoped to the importer origin: same-origin packages, then aliases declared by
-that origin, then embedded stdlib. Stdlib imports are sealed to the stdlib
-origin. Package graphs, lowering, and cycle checks retain typed `PackageId`
-values, and lowering emits origin-safe canonical symbols. Distinct imports with
-the same final qualifier segment are rejected as ambiguous.
+source-relative subpath)`; import text is only a binding. The compiler-owned
+`std/<package>` namespace resolves exclusively to embedded stdlib before any
+project or dependency lookup. Other imports are scoped to the importer origin:
+same-origin packages, then aliases declared by that origin, then error.
+Dependency aliases cannot be named `std`, and unresolved bare names of known
+stdlib packages receive a migration diagnostic. Package graphs, lowering, and
+cycle checks retain typed `PackageId` values, and lowering emits origin-safe
+canonical symbols. Distinct imports with the same final qualifier segment are
+rejected as ambiguous.
 
 ### Slices
 
@@ -314,11 +317,12 @@ slicing returning `str`. Out-of-range operations trap at runtime.
 
 Status: accepted
 
-The compiler embeds a standard library written in Yar. Non-stdlib importers use
-stdlib only after same-origin packages and directly declared aliases. Imports
-inside stdlib are sealed to the embedded stdlib origin and cannot be shadowed by
-project or dependency sources. Packages: `strings`, `utf8`, `conv`, `sort`,
-`path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and `testing`.
+The compiler embeds a standard library written in Yar. Its packages use the
+reserved import paths `std/strings`, `std/utf8`, `std/conv`, `std/sort`,
+`std/path`, `std/fs`, `std/io`, `std/process`, `std/env`, `std/stdio`,
+`std/net`, `std/http`, and `std/testing`. Direct and stdlib-internal imports
+resolve only to the embedded stdlib origin and cannot be shadowed by project or
+dependency sources.
 
 ### Text and UTF-8 helpers
 

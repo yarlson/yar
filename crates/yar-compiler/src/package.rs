@@ -10,8 +10,9 @@ use crate::{
     diag::{Diagnostic, List},
     lock_graph::{reconcile_lock_entries, requires_lock, verify_locked_dependency_manifest},
     manifest::{
-        Dependency, LOCK_FILE, LockDependency, MANIFEST_FILE, ManifestError, cache_dir_from_env,
-        cache_path, clean_path, read_lock_file, read_manifest, verify_cached_dependency,
+        Dependency, LOCK_FILE, LockDependency, MANIFEST_FILE, ManifestError, STDLIB_IMPORT_ROOT,
+        cache_dir_from_env, cache_path, clean_path, read_lock_file, read_manifest,
+        verify_cached_dependency,
     },
     parser::parse_file,
     token::Position,
@@ -259,8 +260,14 @@ impl PackageLoader {
                 let location = self
                     .dependency_index
                     .resolve(&package.id.source, &decl.path)?;
-                let Some(target_id) = self.load_package(location)? else {
-                    let message = if self
+                let Some(location) = location else {
+                    let message = if stdlib_entries(&decl.path).is_some() {
+                        format!(
+                            "standard library package {:?} must be imported as {:?}",
+                            decl.path,
+                            format!("{STDLIB_IMPORT_ROOT}/{}", decl.path),
+                        )
+                    } else if self
                         .dependency_index
                         .is_reachable_but_undeclared(&package.id.source, &decl.path)
                     {
@@ -271,6 +278,21 @@ impl PackageLoader {
                         format!(
                             "dependency alias {alias:?} is reachable but not declared by this package origin"
                         )
+                    } else {
+                        format!("import {:?} could not be loaded", decl.path)
+                    };
+                    self.diag.add(decl.path_pos.clone(), message);
+                    continue;
+                };
+                let selected_stdlib = matches!(location.id.source, SourceId::Stdlib);
+                let Some(target_id) = self.load_package(location)? else {
+                    let message = if selected_stdlib && decl.path == STDLIB_IMPORT_ROOT {
+                        format!(
+                            "standard library import {STDLIB_IMPORT_ROOT:?} must name a package as {:?}",
+                            format!("{STDLIB_IMPORT_ROOT}/<package>"),
+                        )
+                    } else if selected_stdlib {
+                        format!("standard library package {:?} does not exist", decl.path)
                     } else {
                         format!("import {:?} could not be loaded", decl.path)
                     };
@@ -551,9 +573,18 @@ impl DependencyIndex {
         &mut self,
         owner: &SourceId,
         import_path: &str,
-    ) -> Result<PackageLocation, LoadError> {
+    ) -> Result<Option<PackageLocation>, LoadError> {
+        if import_path == STDLIB_IMPORT_ROOT {
+            return Ok(Some(stdlib_location("")));
+        }
+        if let Some(subpath) = import_path
+            .strip_prefix(STDLIB_IMPORT_ROOT)
+            .and_then(|suffix| suffix.strip_prefix('/'))
+        {
+            return Ok(Some(stdlib_location(subpath)));
+        }
         if matches!(owner, SourceId::Stdlib) {
-            return Ok(stdlib_location(import_path));
+            return Ok(None);
         }
 
         let Some(scope) = self.sources.get(owner).cloned() else {
@@ -565,37 +596,37 @@ impl DependencyIndex {
         let (alias, subpath) = import_path.split_once('/').unwrap_or((import_path, ""));
 
         if scope.self_aliases.contains(alias) {
-            return Ok(filesystem_location(
+            return Ok(Some(filesystem_location(
                 owner.clone(),
                 subpath,
                 owner_root,
                 import_path,
-            ));
+            )));
         }
 
         let local_dir = package_dir(&owner_root, import_path);
         if local_dir.exists() {
-            return Ok(PackageLocation {
+            return Ok(Some(PackageLocation {
                 id: PackageId {
                     source: owner.clone(),
                     subpath: import_path.to_owned(),
                 },
                 dir: Some(local_dir),
                 import_path: import_path.to_owned(),
-            });
+            }));
         }
 
         if let Some(target) = scope.dependencies.get(alias) {
             let target_root = self.verify_source(target, Some(alias))?;
-            return Ok(filesystem_location(
+            return Ok(Some(filesystem_location(
                 target.clone(),
                 subpath,
                 target_root,
                 import_path,
-            ));
+            )));
         }
 
-        Ok(stdlib_location(import_path))
+        Ok(None)
     }
 
     fn verify_source(
@@ -1007,12 +1038,16 @@ mod tests {
     }
 
     #[test]
-    fn loads_stdlib_fallback_graph() {
+    fn loads_reserved_stdlib_graph() {
         let root = repo_root();
         let (graph, diagnostics) =
             load_package_graph(root.join("testdata/stdlib_http/main.yar"), false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
+        let entry_import = &graph.packages[&PackageId::default()].imports[0];
+        assert_eq!(entry_import.name, "http");
+        assert_eq!(entry_import.path, "std/http");
+        assert_eq!(entry_import.target, stdlib_package_id("http"));
         assert!(graph.packages[&stdlib_package_id("http")].stdlib);
         assert!(graph.packages[&stdlib_package_id("net")].stdlib);
         assert!(graph.packages[&stdlib_package_id("strings")].stdlib);
@@ -1060,8 +1095,8 @@ mod tests {
     }
 
     #[test]
-    fn local_package_shadowing_stdlib_does_not_mark_resources() {
-        let dir = temp_dir("yar-rust-stdlib-shadow");
+    fn bare_local_package_with_stdlib_name_remains_user_owned() {
+        let dir = temp_dir("yar-rust-bare-local-stdlib-name");
         fs::create_dir_all(dir.join("fs")).unwrap();
         fs::write(
             dir.join("main.yar"),
@@ -1105,6 +1140,205 @@ pub fn read_file(path str) str {
                 .functions
                 .iter()
                 .all(|decl| !decl.host_intrinsic)
+        );
+    }
+
+    #[test]
+    fn reserved_stdlib_import_ignores_local_package() {
+        let dir = temp_dir("yar-rust-reserved-stdlib");
+        fs::create_dir_all(dir.join("std").join("fs")).unwrap();
+        fs::write(
+            dir.join("main.yar"),
+            r#"package main
+
+import "std/fs"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("std").join("fs").join("fs.yar"),
+            r#"package fs
+
+pub fn local_value() i32 {
+    return 1
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(graph.packages[&stdlib_package_id("fs")].stdlib);
+        assert!(!graph.packages.contains_key(&entry_package_id("std/fs")));
+        assert_eq!(
+            graph.packages[&PackageId::default()].imports[0].target,
+            stdlib_package_id("fs")
+        );
+    }
+
+    #[test]
+    fn bare_stdlib_import_reports_migration_path() {
+        let dir = temp_dir("yar-rust-bare-stdlib-migration");
+        fs::write(
+            dir.join("main.yar"),
+            r#"package main
+
+import "strings"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+
+        let (_, diagnostics) = load_package_graph(&dir, false).unwrap();
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "standard library package \"strings\" must be imported as \"std/strings\""
+        );
+        assert_eq!(diagnostics[0].pos.line, 3);
+    }
+
+    #[test]
+    fn unknown_reserved_stdlib_import_does_not_fall_through() {
+        let dir = temp_dir("yar-rust-unknown-reserved-stdlib");
+        fs::create_dir_all(dir.join("std").join("missing")).unwrap();
+        fs::write(
+            dir.join("main.yar"),
+            r#"package main
+
+import "std/missing"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("std").join("missing").join("missing.yar"),
+            r#"package missing
+
+pub fn local_value() i32 {
+    return 1
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "standard library package \"std/missing\" does not exist"
+        );
+        assert!(
+            !graph
+                .packages
+                .contains_key(&entry_package_id("std/missing"))
+        );
+    }
+
+    #[test]
+    fn reserved_stdlib_root_does_not_fall_through() {
+        let dir = temp_dir("yar-rust-reserved-stdlib-root");
+        fs::create_dir_all(dir.join("std")).unwrap();
+        fs::write(
+            dir.join("main.yar"),
+            r#"package main
+
+import "std"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("std").join("std.yar"),
+            r#"package std
+
+pub fn local_value() i32 {
+    return 1
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "standard library import \"std\" must name a package as \"std/<package>\""
+        );
+        assert!(!graph.packages.contains_key(&entry_package_id("std")));
+    }
+
+    #[test]
+    fn declared_dependency_with_stdlib_name_remains_user_owned() {
+        let dir = temp_dir("yar-rust-dependency-stdlib-name");
+        let app_dir = dir.join("app");
+        let dep_dir = dir.join("dependency");
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::create_dir_all(&dep_dir).unwrap();
+        fs::write(
+            app_dir.join("yar.toml"),
+            r#"[package]
+name = "app"
+
+[dependencies]
+fs = { path = "../dependency" }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("main.yar"),
+            r#"package main
+
+import "fs"
+
+fn main() i32 {
+    return fs.local_value()
+}
+"#,
+        )
+        .unwrap();
+        fs::write(dep_dir.join("yar.toml"), "[package]\nname = \"fs\"\n").unwrap();
+        fs::write(
+            dep_dir.join("fs.yar"),
+            r#"package fs
+
+pub fn local_value() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&app_dir, false).unwrap();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "../dependency".to_owned(),
+            },
+            subpath: String::new(),
+        };
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(!graph.packages[&dependency_id].stdlib);
+        assert_eq!(
+            graph.packages[&PackageId::default()].imports[0].target,
+            dependency_id
         );
     }
 

@@ -23,7 +23,7 @@ myproject/
 package main
 
 import "util"
-import "strings"
+import "std/strings"
 
 struct Point {
     x i32
@@ -41,9 +41,11 @@ fn main() i32 {
 - Imports: `import "path"` (slash-separated, qualified usage: `path.func()`)
 - Package identity: `PackageId = (source origin, source-relative subpath)`;
   import text and dependency aliases are bindings, not identity
-- Resolution is scoped to the importer origin: same-origin packages → aliases
-  directly declared by that origin → embedded stdlib
-- Imports inside embedded stdlib are sealed to the stdlib origin
+- `std/<package>` is a reserved compiler-owned namespace that resolves only to
+  embedded stdlib; legacy bare stdlib imports receive a migration diagnostic
+- Other imports resolve within the importer origin: same-origin packages →
+  aliases directly declared by that origin → error
+- Dependency aliases cannot be named `std`
 - Distinct imports in one package cannot have the same final qualifier segment
 - Visibility: `pub` on struct/fn/enum/interface to export; private by default
 - Comments: `// line comments` only
@@ -466,8 +468,9 @@ taskgroup []void {
 
 ## Standard Library
 
-Import with `import "pkgname"`, use as `pkgname.func()`. Stdlib packages resolve
-their own imports only from the embedded stdlib origin.
+Import with `import "std/pkgname"`, use the final package name as the qualifier:
+`pkgname.func()`. Stdlib packages resolve their own imports only from the
+embedded stdlib origin.
 
 ### strings
 
@@ -696,8 +699,8 @@ middleware, auth, TLS, or stdlib session/JWT support.
 Example:
 
 ```yar
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 fn handle(req http.Request) !http.Response {
     return http.text(200, "hello\n")
@@ -742,7 +745,7 @@ Files ending in `_test.yar` in the same package. Excluded from `build`/`run`/`ch
 ```yar
 package main
 
-import "testing"
+import "std/testing"
 
 fn add(a i32, b i32) i32 {
     return a + b
@@ -847,7 +850,7 @@ fn main() i32 {
 ```yar
 package main
 
-import "testing"
+import "std/testing"
 
 fn test_fizzbuzz_number(t *testing.T) void {
     testing.equal[str](t, fizzbuzz(1), "1")
@@ -912,7 +915,7 @@ local_lib = { path = "../my-local-lib" }
   reusing one alias for different targets in different owner scopes needs lock v2
 - A selected locked git dependency is hash-verified before cached source is
   read, then its manifest is checked against the recorded child edges; missing,
-  mismatched, or edge-divergent selected entries fail before stdlib fallback,
+  mismatched, or edge-divergent selected entries fail without stdlib substitution,
   while unused or locally shadowed entries do not require a cache
 - `yar fetch` verifies existing entries and verifies fresh clones before
   publishing them; cached git trees reject symlinks and special files. A graph

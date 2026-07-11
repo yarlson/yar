@@ -38,8 +38,8 @@ shape:
 The router lives in `http`.
 
 ```yar
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 pub struct Request {
     method str
@@ -94,8 +94,8 @@ Example:
 ```yar
 package main
 
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 fn show_user(req http.Request) !http.Response {
     id := http.param(req, "id")?

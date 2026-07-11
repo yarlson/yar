@@ -18,8 +18,9 @@ use yar_compiler::{
     },
     manifest::{
         Dependency, LOCK_FILE, LockEntry, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
-        cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file, read_manifest,
-        resolve_dependencies, to_lock_entries, valid_alias, write_lock_file, write_manifest,
+        STDLIB_IMPORT_ROOT, cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file,
+        read_manifest, resolve_dependencies, to_lock_entries, valid_alias, valid_dependency_alias,
+        write_lock_file, write_manifest,
     },
 };
 
@@ -184,7 +185,12 @@ fn run_add(args: &[OsString]) -> Result<(), CliError> {
     }
 
     let alias = args[0].to_string_lossy();
-    if !valid_alias(&alias) {
+    if alias == STDLIB_IMPORT_ROOT {
+        return Err(CliError::other(format!(
+            "dependency alias {alias:?} is reserved for the standard library"
+        )));
+    }
+    if !valid_dependency_alias(&alias) {
         return Err(CliError::other(format!("invalid alias {alias:?}")));
     }
 

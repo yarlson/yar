@@ -1,6 +1,6 @@
 package conv
 
-import "strings"
+import "std/strings"
 
 pub fn itoa(n i32) str {
     if n == 0 {

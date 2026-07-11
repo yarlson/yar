@@ -51,9 +51,9 @@ Adding new stdlib packages follows the established pattern.
 ```
 package main
 
-import "utf8"
-import "strings"
-import "conv"
+import "std/utf8"
+import "std/strings"
+import "std/conv"
 
 fn advance(src str, offset i32) !i32 {
     w := utf8.width(src, offset)?

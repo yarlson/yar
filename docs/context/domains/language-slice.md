@@ -14,8 +14,9 @@
   rejected.
 - A loaded package has `PackageId(origin, subpath)`, where the subpath is
   relative to one entry, path-dependency, pinned-git, or stdlib origin.
-- Imports resolve in the importer origin: own packages, aliases declared by
-  that origin, then embedded stdlib. Stdlib imports are sealed to stdlib.
+- `std/<package>` imports resolve exclusively to embedded stdlib. Other imports
+  resolve in the importer origin: own packages, aliases declared by that
+  origin, then error. Dependency aliases cannot be named `std`.
 - Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
   receiver-style method declarations, optionally prefixed with `pub`.
 - Top-level `struct` and `fn` declarations may declare explicit type
@@ -136,6 +137,9 @@
 - Calling a zero-valued interface traps via `panic("nil interface method call")`.
 - The import path's final segment is its package qualifier. Distinct imports
   with the same final segment are rejected as ambiguous.
+- Bare user packages may share a name with a stdlib package. If no user package
+  or declared alias resolves a bare known stdlib name, the diagnostic points to
+  its required `std/...` spelling.
 - Package lowering uses origin-safe canonical names, so equal logical package
   paths from different origins do not collide.
 - Imported packages expose only `pub` top-level declarations.

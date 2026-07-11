@@ -15,17 +15,21 @@
 - A loaded package is identified by `PackageId`: its source origin plus its
   source-relative package subpath. Import text is a binding request, not
   package identity.
-- Imports resolve within the importing package's origin: the origin's own
-  package tree first, then aliases declared for that origin, then the embedded
-  stdlib. An origin's self alias also resolves back into its own package tree.
+- `std/<package>` is a compiler-owned namespace resolved exclusively to the
+  embedded standard library before project or dependency lookup.
+- Other imports resolve within the importing package's origin: the origin's
+  own package tree first, then aliases declared for that origin, then error. An
+  origin's self alias also resolves back into its own package tree.
 - Entry-package aliases come from the root manifest, path-dependency aliases
   come from that dependency's manifest, and locked-package aliases come from
   that lock node's child edges. Reachability elsewhere in the graph does not
   make an alias visible.
-- Embedded stdlib imports are sealed to the stdlib origin. They do not consult
-  entry-local packages or external dependency aliases.
+- Dependency aliases cannot be named `std`. Embedded stdlib imports use the
+  same canonical namespace and do not consult user-controlled sources.
+- Bare user packages may share stdlib package names. An unresolved bare known
+  stdlib name gets a migration diagnostic naming its `std/...` path.
 - A selected dependency entry is authoritative; a missing declared path does
-  not fall through to a same-named stdlib package.
+  not receive stdlib substitution.
 - A versioned `yar.lock` records the complete reachable git dependency graph.
   Git declarations in the root manifest and manifests of root path
   dependencies, plus lock child edges, must agree on alias, git URL, ref kind,

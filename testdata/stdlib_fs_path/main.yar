@@ -1,7 +1,7 @@
 package main
 
-import "fs"
-import "path"
+import "std/fs"
+import "std/path"
 
 fn kind_code(kind fs.EntryKind) i32 {
     match kind {
