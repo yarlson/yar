@@ -315,7 +315,12 @@ before `yar fetch` uses the cache or network, Yar requires the manifest roots
 and lock graph to match exactly. Duplicate aliases or edges, missing nodes,
 cycles, source/ref conflicts, and unreachable entries are rejected. Old or
 unversioned lock files must be regenerated with `yar lock`; review that diff
-because normal resolution can select a new commit for a moved tag or branch.
+because lock/update resolution can select a new commit for a moved tag or
+branch. `yar fetch` retrieves an existing lock by its commit SHAs and does not
+re-resolve those mutable refs. Valid cache entries are verified offline; a
+missing SHA that the remote cannot provide fails without falling back to its
+recorded ref. Run `yar lock` or `yar update` to make that version change
+explicit.
 
 The compiler hash-verifies a selected cache tree before reading its manifest or
 source, then verifies the manifest against the recorded child edges. A missing,

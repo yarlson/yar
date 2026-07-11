@@ -14,8 +14,8 @@ The implemented version provides:
   commit SHAs and content hashes and recording full source/ref child edges
 - alias-based import mapping (dependency alias becomes the top-level import
   path segment)
-- git-based fetching to a global user cache, with shallow clones for tags and
-  branches
+- ref-based lock/update resolution plus direct locked-commit fetching to a
+  global user cache
 - SHA-256 lock hashes verified before cached source is loaded
 - temporary verification before newly fetched content is published
 - transitive dependency resolution with conflict detection
@@ -124,10 +124,13 @@ Invalid because `path` and `git` are mutually exclusive.
   Missing or unsupported lock versions are rejected with guidance to run
   `yar lock`. Regeneration performs ordinary full resolution, so a moved tag or
   branch can produce a different commit and the lock diff must be reviewed.
-- `yar fetch` verifies both existing entries and fresh temporary checkouts
-  against `yar.lock`. A fresh entry is moved to its final cache path only after
-  its commit and content hash match. Each fetched manifest is also checked
-  against its package node's child edges.
+- `yar fetch` verifies valid cached entries offline. For each missing entry it
+  requests the locked commit object directly rather than re-resolving the
+  node's recorded tag, branch, or revision. It verifies both existing entries
+  and fresh temporary checkouts against `yar.lock`. A fresh entry is moved to
+  its final cache path only after its HEAD, content hash, and manifest edges
+  match. If the remote cannot provide that object, fetch fails without ref
+  fallback; lock/update is the explicit path to a different commit.
 - During compilation, the package loader builds origin-scoped source records
   and alias bindings from `yar.toml` and `yar.lock`. Reserved `std/...` paths
   resolve to embedded packages; other paths check same-origin packages and then
@@ -224,9 +227,9 @@ None.
 
 - `crates/yar-compiler/src/manifest.rs` — parse and write `yar.toml`
 - `crates/yar-compiler/src/manifest.rs` — parse and write `yar.lock`
-- `crates/yar-compiler/src/manifest.rs` — git clone to cache, SHA-256 hash
-  computation, pre-publication verification, transitive resolution, and
-  conflict detection
+- `crates/yar-compiler/src/manifest.rs` — ref-based lock resolution, direct
+  locked-object fetch, SHA-256 hashing, pre-publication verification,
+  transitive resolution, and conflict detection
 - `crates/yar-compiler/src/lock_graph.rs` — graph reconciliation, selected
   manifest-edge verification, and targeted-update merge/prune behavior
 - `crates/yar-compiler/src/package.rs` — origin-scoped source and alias lookup
@@ -368,7 +371,8 @@ owner-local alias reuse.
 
 - [x] `crates/yar-compiler/src/manifest.rs` — yar.toml parsing
 - [x] `crates/yar-compiler/src/manifest.rs` — yar.lock parsing and writing
-- [x] `crates/yar-compiler/src/manifest.rs` — git clone, caching, hashing
+- [x] `crates/yar-compiler/src/manifest.rs` — ref resolution, locked-object
+      fetch, caching, and hashing
 - [x] `crates/yar-compiler/src/manifest.rs` — transitive resolution, conflict
       detection
 - [x] `crates/yar-compiler/src/lock_graph.rs` — exact graph reconciliation,

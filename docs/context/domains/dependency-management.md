@@ -69,16 +69,19 @@ bare known stdlib name receives a migration diagnostic.
 
 ## Fetching
 
-- Dependencies are fetched via `git clone`, shallow for tags and branches, to a
-  global cache at
+- Lock generation and updates resolve declared tags, branches, or revisions.
+  For each missing cache entry, `yar fetch` instead initializes a temporary
+  repository and requests the locked 40-hex commit directly with a shallow,
+  no-tags fetch; mutable ref data never selects content for an existing lock.
+- Dependencies are published to a global cache at
   `$HOME/Library/Caches/yar/deps/` on macOS or `$HOME/.cache/yar/deps/` on
   other supported hosts (overridable via `YAR_CACHE`).
 - Cache layout: `{cache}/{urlHash16}/{commitSHA}/` where `urlHash16` is the
   first 16 hex characters of SHA-256 of the git URL.
-- The `.git` directory is stripped after cloning.
-- `yar fetch` verifies existing entries before reporting success. Fresh clones
-  are checked against the locked commit and hash in temporary storage before
-  they are published at the final cache path.
+- The `.git` directory is stripped after checkout.
+- `yar fetch` verifies existing entries before reporting success. Fresh locked
+  checkouts must match the requested commit, content hash, and manifest edges
+  in temporary storage before publication at the final cache path.
 - When the effective graph has no git roots, `yar fetch` succeeds without a
   lock file or dependency-cache work.
 - The dependency index stores sources and alias bindings per owner origin. When
@@ -139,9 +142,13 @@ bare known stdlib name receives a migration diagnostic.
 
 ## Constraints
 
-- `git` must be available on `PATH` for fetching git dependencies.
-- Fetching requires network access. Building with only local/path dependencies
-  does not require network access.
+- `yar fetch` requires `git` and network access only when a locked cache entry
+  is missing; valid cached entries are verified offline. Lock-generating and
+  update commands require both to resolve declared refs. Path-only graphs need
+  neither.
+- If the remote cannot provide a missing locked object, fetch fails without
+  falling back to the recorded tag, branch, or revision. `yar lock` or
+  `yar update` is an explicit version change.
 - The `YAR_CACHE` environment variable overrides the default cache directory.
 - Local `path` dependencies are live filesystem inputs and are not hashed.
 - Locked git packages cannot contain `path` dependencies.
