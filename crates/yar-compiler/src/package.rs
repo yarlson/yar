@@ -10,7 +10,7 @@ use crate::{
     diag::{Diagnostic, List},
     manifest::{
         Dependency, LOCK_FILE, MANIFEST_FILE, ManifestError, cache_dir_from_env, cache_path,
-        read_lock_file, read_manifest,
+        read_lock_file, read_manifest, verify_cached_dependency,
     },
     parser::parse_file,
     token::Position,
@@ -126,7 +126,7 @@ impl PackageLoader {
 
         if !import_path.is_empty()
             && !dir.exists()
-            && let Some(dependency_dir) = self.dependency_index.resolve(import_path)
+            && let Some(dependency_dir) = self.dependency_index.resolve(import_path)?
             && dependency_dir != dir
         {
             return self.load_package(import_path, &dependency_dir);
@@ -284,7 +284,19 @@ impl PackageLoader {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct DependencyIndex {
-    entries: BTreeMap<String, PathBuf>,
+    entries: BTreeMap<String, DependencyEntry>,
+    verified: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DependencyEntry {
+    Local(PathBuf),
+    Locked {
+        cache_dir: PathBuf,
+        git: String,
+        commit: String,
+        hash: String,
+    },
 }
 
 impl DependencyIndex {
@@ -315,27 +327,61 @@ impl DependencyIndex {
             for entry in lock_entries {
                 entries.insert(
                     entry.name,
-                    cache_path(&cache_dir, &entry.git, &entry.commit),
+                    DependencyEntry::Locked {
+                        cache_dir: cache_dir.clone(),
+                        git: entry.git,
+                        commit: entry.commit,
+                        hash: entry.hash,
+                    },
                 );
             }
         }
 
         for (alias, dependency) in manifest.dependencies {
             if dependency.is_local() {
-                entries.insert(alias, dependency_dir(root_dir, &dependency));
+                entries.insert(
+                    alias,
+                    DependencyEntry::Local(dependency_dir(root_dir, &dependency)),
+                );
             }
         }
 
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            verified: BTreeSet::new(),
+        })
     }
 
-    fn resolve(&self, import_path: &str) -> Option<PathBuf> {
+    fn resolve(&mut self, import_path: &str) -> Result<Option<PathBuf>, LoadError> {
         let (alias, sub_path) = import_path.split_once('/').unwrap_or((import_path, ""));
-        let dir = self.entries.get(alias)?;
+        let Some(entry) = self.entries.get(alias).cloned() else {
+            return Ok(None);
+        };
+        let dir = match entry {
+            DependencyEntry::Local(dir) => dir,
+            DependencyEntry::Locked {
+                cache_dir,
+                git,
+                commit,
+                hash,
+            } => {
+                if !self.verified.contains(alias) {
+                    verify_cached_dependency(&cache_dir, &git, &commit, &hash).map_err(|err| {
+                        LoadError::Manifest(ManifestError::Invalid(format!(
+                            "dependency {alias:?} cache verification failed: {err}; remove or repair the reported cache path, then run 'yar fetch'"
+                        )))
+                    })?;
+                    self.verified.insert(alias.to_string());
+                }
+                cache_path(cache_dir, &git, &commit)
+            }
+        };
         if sub_path.is_empty() {
-            return Some(dir.clone());
+            return Ok(Some(dir));
         }
-        Some(dir.join(sub_path.replace('/', std::path::MAIN_SEPARATOR_STR)))
+        Ok(Some(dir.join(
+            sub_path.replace('/', std::path::MAIN_SEPARATOR_STR),
+        )))
     }
 }
 

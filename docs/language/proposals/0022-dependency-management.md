@@ -14,8 +14,10 @@ The implemented version provides:
   content hashes
 - alias-based import mapping (dependency alias becomes the top-level import
   path segment)
-- git-based fetching with shallow clone to a global user cache
-- SHA-256 content hashing for integrity verification
+- git-based fetching to a global user cache, with shallow clones for tags and
+  branches
+- SHA-256 lock hashes verified before cached source is loaded
+- temporary verification before newly fetched content is published
 - transitive dependency resolution with conflict detection
 - local path overrides for development workflows
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
@@ -106,9 +108,28 @@ Invalid because `path` and `git` are mutually exclusive.
   import path in source code.
 - `yar lock` resolves all git dependencies, clones them, computes content
   hashes, and writes `yar.lock`.
+- Lock generation hashes the fresh checkout. If an existing cache entry for the
+  resolved commit differs, lock generation fails instead of trusting that
+  cache content.
+- `yar fetch` verifies both existing entries and fresh temporary checkouts
+  against `yar.lock`. A fresh entry is moved to its final cache path only after
+  its commit and content hash match.
 - During compilation, the package loader builds a dependency index from
   `yar.toml` and `yar.lock`. When a local import path is not found, the loader
   checks the dependency index before falling back to stdlib.
+- The dependency index stores lock metadata. When resolution selects a locked
+  dependency, its cache tree is hash-verified before the path is returned or
+  source is parsed. Missing or corrupt selected entries stop package loading;
+  compilation performs no cache repair and does not substitute a same-named
+  stdlib package. Unused and locally shadowed entries do not require a cache.
+- Cached git trees contain only real directories and regular files. Symlinks
+  and special filesystem entries are rejected. Local path dependencies remain
+  live, unhashed filesystem inputs.
+- The current flat lock remains the dependency-index input as written. It does
+  not encode dependency edges. Package loading does not reject duplicate
+  package names, prove that every declared git dependency has a matching lock
+  entry, reconstruct the manifest-reachable closure, or reconcile locked source
+  tuples with manifest declarations.
 - Resolution order: local → dependency → stdlib.
 - Local packages shadow dependencies. Dependencies shadow stdlib.
 - Transitive dependencies are discovered by reading `yar.toml` in each
@@ -150,11 +171,14 @@ packages.
 
 ### Compiler package loader impact
 
-- `packageLoader` gains a `depIndex *deps.Index` field.
-- `loadPackageGraph()` calls `loadDepIndex(rootDir)` to build the index from
-  `yar.toml` and `yar.lock`.
-- `loadPackage()` checks `l.depIndex.Resolve(importPath)` when a local
-  directory is not found, before the stdlib fallback.
+- `load_package_graph()` constructs a `DependencyIndex` from `yar.toml` and
+  `yar.lock` and gives it to `PackageLoader`.
+- `DependencyIndex::load()` stores locked metadata without requiring every
+  cache entry to exist.
+- `DependencyIndex::resolve()` verifies a locked cache tree when its alias is
+  selected, before exposing the path.
+- `PackageLoader::load_package()` resolves through the dependency index when a
+  local directory is not found, before the stdlib fallback.
 
 ### Runtime impact
 
@@ -165,9 +189,10 @@ None.
 - `crates/yar-compiler/src/manifest.rs` — parse and write `yar.toml`
 - `crates/yar-compiler/src/manifest.rs` — parse and write `yar.lock`
 - `crates/yar-compiler/src/manifest.rs` — git clone to cache, SHA-256 hash
-  computation, verification, transitive resolution, and conflict detection
+  computation, pre-publication verification, transitive resolution, and
+  conflict detection
 - `crates/yar-compiler/src/package.rs` — alias-to-path lookup for the package
-  loader
+  loader with selected locked-cache verification
 
 ### External dependency
 
@@ -192,7 +217,8 @@ package source. Cycles through dependencies are detected identically.
 ### Stdlib
 
 Dependencies shadow stdlib packages with the same alias name. This is
-consistent with local packages already shadowing stdlib.
+consistent with local packages already shadowing stdlib. A locked dependency
+whose cache is missing or corrupt fails before stdlib fallback.
 
 ### Testing
 

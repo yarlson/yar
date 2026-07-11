@@ -1,11 +1,13 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use yar_compiler::manifest::{cache_path, parse_lock_file, parse_manifest};
+use yar_compiler::manifest::{
+    LockEntry, cache_path, hash_dir, parse_lock_file, parse_manifest, write_lock_file,
+};
 
 #[test]
 fn check_accepts_testdata_fixture() {
@@ -531,6 +533,263 @@ fn add_and_remove_local_dependency_updates_manifest() {
     assert!(!dir.join("yar.lock").exists());
 }
 
+#[test]
+fn check_verifies_a_locked_dependency_before_parsing_it() {
+    let project = locked_dependency_project("yar-cli-tampered-locked-cache");
+    let valid = run_yar(&project.dir, &project.cache_dir, &["check", "."]);
+    assert!(
+        valid.status.success(),
+        "valid locked cache failed: {}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+
+    let source = project.dependency_dir.join("dep.yar");
+    fs::write(&source, "this is not valid Yar source\n").unwrap();
+
+    let output = run_yar(&project.dir, &project.cache_dir, &["check", "."]);
+
+    assert!(!output.status.success(), "expected check to fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hash mismatch"),
+        "stderr did not report cache corruption: {stderr}"
+    );
+    assert!(
+        !stderr.contains("expected package declaration"),
+        "tampered source was parsed before its cache hash was checked: {stderr}"
+    );
+}
+
+#[test]
+fn check_does_not_fall_back_to_stdlib_when_a_locked_cache_is_missing() {
+    let dir = temp_dir("yar-cli-missing-locked-cache");
+    let cache_dir = dir.join("cache");
+    let git = "https://example.com/strings.git";
+    let commit = "3333333333333333333333333333333333333333";
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+strings = { git = "https://example.com/strings.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry(
+            "strings",
+            git,
+            commit,
+            format!("sha256:{}", "0".repeat(64)),
+        )]),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        r#"package main
+
+import "strings"
+
+fn main() i32 {
+    if strings.contains("yar", "ar") {
+        return 0
+    }
+    return 1
+}
+"#,
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(
+        !output.status.success(),
+        "missing locked dependency silently fell back to the same-named stdlib package"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("strings") && stderr.contains("run 'yar fetch'"),
+        "stderr did not report the missing locked cache: {stderr}"
+    );
+}
+
+#[test]
+fn check_only_verifies_a_locked_cache_when_the_dependency_is_selected() {
+    let dir = temp_dir("yar-cli-lazy-locked-cache");
+    let cache_dir = dir.join("cache");
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+dep = { git = "https://example.com/dep.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry(
+            "dep",
+            "https://example.com/dep.git",
+            "3333333333333333333333333333333333333333",
+            format!("sha256:{}", "0".repeat(64)),
+        )]),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let unused = run_yar(&dir, &cache_dir, &["check", "."]);
+    assert!(
+        unused.status.success(),
+        "unused locked dependency required a cache: {}",
+        String::from_utf8_lossy(&unused.stderr)
+    );
+
+    fs::create_dir_all(dir.join("dep")).unwrap();
+    fs::write(
+        dir.join("dep").join("dep.yar"),
+        "package dep\n\npub fn value() i32 { return 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nimport \"dep\"\n\nfn main() i32 { return dep.value() }\n",
+    )
+    .unwrap();
+
+    let shadowed = run_yar(&dir, &cache_dir, &["check", "."]);
+    assert!(
+        shadowed.status.success(),
+        "local package did not shadow the uncached dependency: {}",
+        String::from_utf8_lossy(&shadowed.stderr)
+    );
+}
+
+#[test]
+fn fetch_validates_an_existing_locked_dependency_cache() {
+    let project = locked_dependency_project("yar-cli-fetch-tampered-cache");
+
+    let valid = run_yar(&project.dir, &project.cache_dir, &["fetch"]);
+    assert!(
+        valid.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&valid.stdout).contains("all dependencies fetched"),
+        "fetch did not report success for a valid cache: {}",
+        String::from_utf8_lossy(&valid.stdout)
+    );
+
+    fs::write(
+        project.dependency_dir.join("dep.yar"),
+        "package dep\n\npub fn value() i32 { return 99 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&project.dir, &project.cache_dir, &["fetch"]);
+
+    assert!(
+        !output.status.success(),
+        "expected fetch to reject corruption"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hash mismatch"),
+        "stderr did not report cache corruption: {stderr}"
+    );
+    assert!(
+        !stdout.contains("all dependencies fetched"),
+        "fetch reported success for a corrupt cache: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_does_not_publish_a_fresh_dependency_with_the_wrong_hash() {
+    let dir = temp_dir("yar-cli-fetch-wrong-hash");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = "https://example.com/child.git";
+    let commit = "2222222222222222222222222222222222222222";
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry(
+            "child",
+            git,
+            commit,
+            format!("sha256:{}", "0".repeat(64)),
+        )]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(
+        !output.status.success(),
+        "expected fetch to reject the hash"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hash mismatch"),
+        "stderr did not report the bad lock hash: {stderr}"
+    );
+    assert!(
+        !stdout.contains("all dependencies fetched"),
+        "fetch reported success for a dependency with the wrong hash: {stdout}"
+    );
+    assert!(
+        !cache_path(&cache_dir, git, commit).exists(),
+        "fetch published a dependency before verifying its lock hash"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_does_not_bless_a_corrupt_preexisting_dependency_cache() {
+    let (dir, cache_dir, path) = corrupt_parent_cache("yar-cli-lock-corrupt-cache");
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["lock"]);
+
+    assert!(
+        !output.status.success(),
+        "yar lock accepted a cache that differed from the fresh checkout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hash mismatch"),
+        "stderr did not report cache corruption: {stderr}"
+    );
+    assert!(
+        !dir.join("yar.lock").exists(),
+        "yar lock wrote a hash for corrupt cached content"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn add_git_dependency_resolves_transitive_lock_and_fetches_without_network() {
@@ -637,21 +896,21 @@ name = "child"
 git = "https://example.com/child.git"
 tag = "v0"
 commit = "0000000000000000000000000000000000000000"
-hash = "sha256:old-child"
+hash = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 [[package]]
 name = "parent"
 git = "https://example.com/parent.git"
 tag = "v0"
 commit = "0000000000000000000000000000000000000000"
-hash = "sha256:old-parent"
+hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
 [[package]]
 name = "sibling"
 git = "https://example.com/sibling.git"
 tag = "v1"
 commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-hash = "sha256:old-sibling"
+hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 "#,
     )
     .unwrap();
@@ -694,7 +953,10 @@ hash = "sha256:old-sibling"
         entry("sibling").commit,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
-    assert_eq!(entry("sibling").hash, "sha256:old-sibling");
+    assert_eq!(
+        entry("sibling").hash,
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    );
 }
 
 #[cfg(unix)]
@@ -767,6 +1029,119 @@ fn temp_dir(prefix: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+struct LockedDependencyProject {
+    dir: PathBuf,
+    cache_dir: PathBuf,
+    dependency_dir: PathBuf,
+}
+
+fn locked_dependency_project(prefix: &str) -> LockedDependencyProject {
+    let dir = temp_dir(prefix);
+    let cache_dir = dir.join("cache");
+    let git = "https://example.com/dep.git";
+    let commit = "3333333333333333333333333333333333333333";
+    let dependency_dir = cache_path(&cache_dir, git, commit);
+    fs::create_dir_all(&dependency_dir).unwrap();
+    fs::write(
+        dependency_dir.join("dep.yar"),
+        "package dep\n\npub fn value() i32 { return 42 }\n",
+    )
+    .unwrap();
+    let hash = hash_dir(&dependency_dir).unwrap();
+
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+dep = { git = "https://example.com/dep.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry("dep", git, commit, hash)]),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        r#"package main
+
+import "dep"
+
+fn main() i32 {
+    return dep.value()
+}
+"#,
+    )
+    .unwrap();
+
+    LockedDependencyProject {
+        dir,
+        cache_dir,
+        dependency_dir,
+    }
+}
+
+fn locked_entry(name: &str, git: &str, commit: &str, hash: String) -> LockEntry {
+    LockEntry {
+        name: name.to_string(),
+        git: git.to_string(),
+        tag: "v1".to_string(),
+        commit: commit.to_string(),
+        hash,
+        ..LockEntry::default()
+    }
+}
+
+fn run_yar(dir: &Path, cache_dir: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(args)
+        .current_dir(dir)
+        .env("YAR_CACHE", cache_dir)
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn run_yar_with_path(
+    dir: &Path,
+    cache_dir: &Path,
+    path: &str,
+    args: &[&str],
+) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("YAR_CACHE", cache_dir)
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn corrupt_parent_cache(prefix: &str) -> (PathBuf, PathBuf, String) {
+    let dir = temp_dir(prefix);
+    let cache_dir = dir.join("cache");
+    let git = "https://example.com/parent.git";
+    let commit = "1111111111111111111111111111111111111111";
+    let dependency_dir = cache_path(&cache_dir, git, commit);
+    fs::create_dir_all(&dependency_dir).unwrap();
+    fs::write(
+        dependency_dir.join("parent.yar"),
+        "package parent\n\npub fn compromised() bool { return true }\n",
+    )
+    .unwrap();
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    (dir, cache_dir, path)
 }
 
 #[cfg(unix)]

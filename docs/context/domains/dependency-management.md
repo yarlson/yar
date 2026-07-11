@@ -19,8 +19,8 @@
 ## Lock File (`yar.lock`)
 
 - Auto-generated TOML file. Each `[[package]]` entry records `name`, `git`,
-  version ref, `commit` (full 40-char SHA), and `hash` (SHA-256 of directory
-  tree contents excluding `.git/`).
+  version ref, `commit` (full 40-character lowercase SHA), and `hash` (SHA-256
+  of directory tree paths and file contents excluding `.git/`).
 - Local `path` dependencies are not written to the lock file.
 - Entries are sorted by name for deterministic output.
 
@@ -37,13 +37,26 @@ Local packages shadow dependencies. Dependencies shadow stdlib.
 
 ## Fetching
 
-- Dependencies are fetched via shallow `git clone` to a global cache at
-  `os.UserCacheDir()/yar/deps/` (overridable via `YAR_CACHE`).
+- Dependencies are fetched via `git clone`, shallow for tags and branches, to a
+  global cache at
+  `$HOME/Library/Caches/yar/deps/` on macOS or `$HOME/.cache/yar/deps/` on
+  other supported hosts (overridable via `YAR_CACHE`).
 - Cache layout: `{cache}/{urlHash16}/{commitSHA}/` where `urlHash16` is the
   first 16 hex characters of SHA-256 of the git URL.
 - The `.git` directory is stripped after cloning.
-- Content integrity is verified by comparing SHA-256 of the directory tree
-  against the hash in `yar.lock`.
+- `yar fetch` verifies existing entries before reporting success. Fresh clones
+  are checked against the locked commit and hash in temporary storage before
+  they are published at the final cache path.
+- The dependency index stores lock metadata. When package resolution selects a
+  locked dependency, the loader verifies its cache tree before returning the
+  path or parsing source. Missing, unreadable, symlinked, or hash-mismatched
+  selected entries stop compilation with repair guidance. Unused dependencies
+  and dependencies shadowed by local packages do not require a cache.
+- Cached git trees may contain only real directories and regular files.
+  Symlinks and special filesystem entries are rejected.
+- Lock generation hashes the fresh checkout. If the same commit already has a
+  different cached tree, generation fails instead of recording the cached
+  content as trusted.
 
 ## Transitive Dependencies
 
@@ -70,10 +83,11 @@ Local packages shadow dependencies. Dependencies shadow stdlib.
 ## Infrastructure
 
 - `crates/yar-compiler/src/manifest.rs` is the Rust manifest, lock, cache,
-  fetch, hash, and recursive dependency resolver implementation used by the
-  Rust CLI and package loader.
+  fetch, hash-verification, and recursive dependency resolver implementation
+  used by the Rust CLI and package loader.
 - `crates/yar-compiler/src/package.rs` builds a Rust dependency index from
-  local path dependencies and locked cache paths during package loading.
+  local path dependencies and locked metadata, then verifies a selected cache
+  path during package resolution.
 
 ## Constraints
 
@@ -81,6 +95,13 @@ Local packages shadow dependencies. Dependencies shadow stdlib.
 - Fetching requires network access. Building with only local/path dependencies
   does not require network access.
 - The `YAR_CACHE` environment variable overrides the default cache directory.
+- Local `path` dependencies are live filesystem inputs and are not hashed.
+- Corrupt cache entries are not repaired or deleted automatically; commands
+  fail without publishing or trusting their contents.
+- The current flat lock format is still indexed as written. Package loading
+  does not reject duplicate package names, prove that every declared git
+  dependency has a matching entry, prove that every entry is reachable from
+  `yar.toml`, or reconcile locked source tuples with manifest declarations.
 - No version range negotiation or automatic resolution. All versions are exact.
 - Branch-pinned dependencies are non-reproducible across machines unless the
   lock file is committed and kept up to date.
