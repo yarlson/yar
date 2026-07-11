@@ -2819,7 +2819,7 @@ impl Checker {
         if expr_type.base != TYPE_UNTYPED_INT || !matches!(target, TYPE_I32 | TYPE_I64) {
             return expr_type;
         }
-        if self.int_literal_fits(expr, target) {
+        if self.int_expression_fits(expr, target) {
             ExprType::plain(target.to_string())
         } else {
             expr_type
@@ -2838,10 +2838,10 @@ impl Checker {
         }
         match (left.base.as_str(), right.base.as_str()) {
             (TYPE_UNTYPED_INT, TYPE_UNTYPED_INT) => Some(TYPE_UNTYPED_INT.to_string()),
-            (TYPE_UNTYPED_INT, _) if self.int_literal_fits(left_expr, &right.base) => {
+            (TYPE_UNTYPED_INT, _) if self.int_expression_fits(left_expr, &right.base) => {
                 Some(right.base)
             }
-            (_, TYPE_UNTYPED_INT) if self.int_literal_fits(right_expr, &left.base) => {
+            (_, TYPE_UNTYPED_INT) if self.int_expression_fits(right_expr, &left.base) => {
                 Some(left.base)
             }
             _ if left.base == right.base => Some(left.base),
@@ -2855,25 +2855,17 @@ impl Checker {
             || (right == TYPE_NIL && is_pointer_type(left))
     }
 
-    fn int_literal_fits(&self, expr: &Expression, target: &str) -> bool {
-        let Some(value) = unwrap_int_literal(expr) else {
-            return false;
-        };
-        match target {
-            TYPE_I32 => i32::try_from(value).is_ok(),
-            TYPE_I64 => true,
-            _ => false,
+    fn int_expression_fits(&self, expr: &Expression, target: &str) -> bool {
+        match const_integer_expression(expr) {
+            Some(value) => int_value_fits(value, target),
+            None => int_expression_operands_fit(expr, target),
         }
     }
 
     fn default_untyped_integer_type(&self, expr: &Expression) -> Type {
-        if self.int_literal_fits(expr, TYPE_I32) {
-            TYPE_I32.to_string()
-        } else if self.int_literal_fits(expr, TYPE_I64) {
-            TYPE_I64.to_string()
-        } else {
-            TYPE_INVALID.to_string()
-        }
+        infer_untyped_integer_type(expr)
+            .unwrap_or(TYPE_INVALID)
+            .to_string()
     }
 
     fn block_definitely_returns(&self, block: &BlockStmt) -> bool {
@@ -3910,17 +3902,17 @@ fn last_top_level_dot(text: &str) -> Option<usize> {
     None
 }
 
-fn unwrap_int_literal(expr: &Expression) -> Option<i64> {
+pub(crate) fn const_integer_expression(expr: &Expression) -> Option<i64> {
     match expr {
         Expression::Int(expr) => Some(expr.value),
         Expression::Char(expr) => Some(expr.value as i64),
-        Expression::Group(expr) => unwrap_int_literal(&expr.inner),
+        Expression::Group(expr) => const_integer_expression(&expr.inner),
         Expression::Unary(expr) if expr.operator == Kind::Minus => {
-            unwrap_int_literal(&expr.inner).map(|value| -value)
+            const_integer_expression(&expr.inner)?.checked_neg()
         }
         Expression::Binary(expr) => {
-            let left = unwrap_int_literal(&expr.left)?;
-            let right = unwrap_int_literal(&expr.right)?;
+            let left = const_integer_expression(&expr.left)?;
+            let right = const_integer_expression(&expr.right)?;
             match expr.operator {
                 Kind::Plus => left.checked_add(right),
                 Kind::Minus => left.checked_sub(right),
@@ -3931,6 +3923,75 @@ fn unwrap_int_literal(expr: &Expression) -> Option<i64> {
             }
         }
         _ => None,
+    }
+}
+
+pub(crate) fn is_untyped_integer_expression(expr: &Expression) -> bool {
+    match expr {
+        Expression::Int(_) => true,
+        Expression::Group(expr) => is_untyped_integer_expression(&expr.inner),
+        Expression::Unary(expr) if expr.operator == Kind::Minus => {
+            is_untyped_integer_expression(&expr.inner)
+        }
+        Expression::Binary(expr)
+            if matches!(
+                expr.operator,
+                Kind::Plus | Kind::Minus | Kind::Star | Kind::Slash | Kind::Percent
+            ) =>
+        {
+            is_untyped_integer_expression(&expr.left) && is_untyped_integer_expression(&expr.right)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn infer_untyped_integer_type(expr: &Expression) -> Option<&'static str> {
+    if !is_untyped_integer_expression(expr) {
+        return None;
+    }
+    if let Some(value) = const_integer_expression(expr) {
+        return Some(if int_value_fits(value, TYPE_I32) {
+            TYPE_I32
+        } else {
+            TYPE_I64
+        });
+    }
+    if int_expression_operands_fit(expr, TYPE_I32) {
+        Some(TYPE_I32)
+    } else if int_expression_operands_fit(expr, TYPE_I64) {
+        Some(TYPE_I64)
+    } else {
+        None
+    }
+}
+
+fn int_expression_operands_fit(expr: &Expression, target: &str) -> bool {
+    if let Some(value) = const_integer_expression(expr) {
+        return int_value_fits(value, target);
+    }
+    match expr {
+        Expression::Group(expr) => int_expression_operands_fit(&expr.inner, target),
+        Expression::Unary(expr) if expr.operator == Kind::Minus => {
+            int_expression_operands_fit(&expr.inner, target)
+        }
+        Expression::Binary(expr)
+            if matches!(
+                expr.operator,
+                Kind::Plus | Kind::Minus | Kind::Star | Kind::Slash | Kind::Percent
+            ) =>
+        {
+            int_expression_operands_fit(&expr.left, target)
+                && int_expression_operands_fit(&expr.right, target)
+        }
+        _ => false,
+    }
+}
+
+fn int_value_fits(value: i64, target: &str) -> bool {
+    match target {
+        TYPE_I32 => i32::try_from(value).is_ok(),
+        TYPE_I64 => true,
+        _ => false,
     }
 }
 

@@ -68,6 +68,14 @@ Status: accepted
 `&&` and `||` are supported for `bool` operands and lower to explicit
 short-circuit control flow rather than eager evaluation.
 
+### Integer arithmetic is wrapping with explicit division traps
+
+Status: accepted
+
+For `i32` and `i64`, addition, subtraction, multiplication, and unary negation
+wrap to the operand width. Division and remainder terminate deterministically
+for a zero divisor and for the signed overflow pair `MIN` and `-1`.
+
 ### Bare `for` loops
 
 Status: accepted

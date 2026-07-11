@@ -155,6 +155,25 @@ pub extern "C" fn yar_set_args(argc: i32, argv: *mut *mut std::ffi::c_char) {
     host::set_args(argc, argv);
 }
 
+fn check_integer_divrem(dividend: i64, divisor: i64, min: i64) {
+    if divisor == 0 {
+        runtime_fail(b"runtime failure: integer division or remainder by zero\n");
+    }
+    if dividend == min && divisor == -1 {
+        runtime_fail(b"runtime failure: integer division or remainder overflow\n");
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_i32_divrem_check(dividend: i32, divisor: i32) {
+    check_integer_divrem(i64::from(dividend), i64::from(divisor), i64::from(i32::MIN));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_i64_divrem_check(dividend: i64, divisor: i64) {
+    check_integer_divrem(dividend, divisor, i64::MIN);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_array_index_check(index: i64, len: i64) {
     if index < 0 || index >= len {

@@ -654,6 +654,19 @@ Integer literals start as untyped integers and are coerced by context into `i32`
 or `i64`. Binary expressions on untyped integer literals (e.g., `0 - 1`) remain
 untyped until a concrete type is required, allowing `var x i64 = 0 - 1`.
 
+### Integer Arithmetic
+
+`i32` and `i64` use two's-complement arithmetic:
+
+- `+`, `-`, `*`, and unary `-` wrap to the operand width
+- compound `+=`, `-=`, and `*=` use the same wrapping behavior
+- `/` and `%` trap when the divisor is zero
+- `/` and `%` also trap for the signed overflow pair `MIN` and `-1`
+
+The zero-divisor trap is `runtime failure: integer division or remainder by
+zero`. The overflow trap is `runtime failure: integer division or remainder
+overflow`.
+
 ### Strings
 
 Supported string operations:
