@@ -21,7 +21,9 @@ model.
 Status: accepted
 
 `expr?` is allowed on `!T` and `error` expressions and propagates failure from
-the current function.
+the current function. It is rejected inside a taskgroup body because every
+accepted taskgroup path must reach the join; nested function literals are
+separate propagation scopes.
 
 ### Local error handling with `or |err| { ... }`
 

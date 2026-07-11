@@ -1456,6 +1456,8 @@ exploration in a few ways:
 - it uses native POSIX threads rather than an M:N scheduler
 - it currently rejects `return` in a taskgroup body and rejects `break` /
   `continue` that would exit the taskgroup through an enclosing loop
+- it rejects same-function `?` propagation inside a taskgroup body so accepted
+  control-flow paths cannot bypass the join
 - it does not yet include a race-detector mode
 - Windows concurrency entry points currently fail at runtime with a clear
   unsupported message

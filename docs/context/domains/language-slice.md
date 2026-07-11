@@ -198,6 +198,8 @@
 - `spawn` is only valid inside the lexical body of a `taskgroup`, not inside a
   function literal nested under that body.
 - `return` is not currently allowed inside a taskgroup body.
+- `?` is not allowed inside a taskgroup body at the current function-literal
+  depth because propagation would bypass the taskgroup join.
 - `break` and `continue` may not exit through an enclosing loop outside the
   current taskgroup body.
 - A spawned expression must be a call, and its return shape must match the

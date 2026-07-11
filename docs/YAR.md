@@ -620,6 +620,8 @@ Taskgroup rules:
 - `spawn` is only valid inside the taskgroup body
 - `spawn` is rejected inside a function literal nested under that taskgroup body
 - `return` is not currently allowed inside a taskgroup body
+- `?` is rejected inside a taskgroup body because propagation could bypass the
+  taskgroup join; nested function literals may propagate from their own bodies
 - `break` and `continue` may not exit through an enclosing loop outside the taskgroup body
 - tasks start when `spawn` executes, but the taskgroup expression waits for all tasks before yielding its result
 - `taskgroup []void` is valid for side-effecting tasks

@@ -1180,6 +1180,13 @@ impl Checker {
 
     fn check_propagate(&mut self, expr: &PropagateExpr) -> ExprType {
         let inner = self.check_expression(&expr.inner);
+        if self.current_taskgroup().is_some() {
+            self.diag.add(
+                expr.question_pos.clone(),
+                "? is not allowed inside a taskgroup body because it could skip the taskgroup join",
+            );
+            return ExprType::invalid();
+        }
         let value_type = if inner.errorable {
             Some(inner.base)
         } else if let Some(value_type) = parse_errorable_type(&inner.base) {
@@ -4802,6 +4809,91 @@ fn main() i32 {
             "spawn does not currently support builtin \"len\" directly; wrap it in a function literal",
         );
         assert_has(&diagnostics, "break cannot exit a taskgroup body");
+    }
+
+    #[test]
+    fn rejects_propagation_that_can_exit_a_taskgroup_body() {
+        let valid = parse_ok(
+            r#"
+package main
+
+fn maybe() !i32 {
+    return 1
+}
+
+fn wrapped() !i32 {
+    values := taskgroup []!i32 {
+        spawn fn() !i32 {
+            return maybe()?
+        }()
+    }
+    return values[0]?
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&valid);
+        assert_eq!(diagnostics, Vec::new());
+
+        let invalid = parse_ok(
+            r#"
+package main
+
+fn maybe() !i32 {
+    return 1
+}
+
+fn consume(value i32) i32 {
+    return value
+}
+
+fn invalid() !i32 {
+    values := taskgroup []i32 {
+        spawn consume(maybe()?)
+        direct := maybe()?
+        if true {
+            nested := maybe()?
+        }
+        for false {
+            inside_loop := maybe()?
+        }
+        error.Fail or |_| {
+            inside_handler := maybe()?
+        }
+        inner := taskgroup []i32 {
+            inside_nested_group := maybe()?
+        }
+        fallible := fn() !i32 {
+            return maybe()?
+        }
+        from_closure := fallible()?
+        error.Fail?
+    }
+    return len(values)
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&invalid);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.message
+                        == "? is not allowed inside a taskgroup body because it could skip the taskgroup join"
+                })
+                .count(),
+            8,
+            "{diagnostics:?}"
+        );
     }
 
     #[test]
