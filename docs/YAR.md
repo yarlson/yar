@@ -21,6 +21,9 @@ Current implementation note: the shipped CLI is the Rust 2024 `yar` binary from
 `test`, `init`, and dependency manifest, lock, fetch, and update commands. The
 Rust compiler path produces a checked program after semantic analysis; `check`
 stops there, while code-producing commands explicitly invoke LLVM emission.
+The shared `crates/yar-process-control` boundary applies typed tool-start
+errors, absolute deadlines, and descendant containment to external build, test,
+and Git processes.
 It enforces package export visibility for imported declarations and exported
 API types, and its LLVM emitter has clang-accepted coverage for
 every current `testdata/**/main.yar` entry program, including host-backed `fs`,
@@ -1355,6 +1358,33 @@ PASS: test_greeting
 ```
 
 Exit code is `0` when all tests pass, `1` when any test fails.
+
+## Compiler CLI
+
+`yar --help` and `yar --version` report root information, and
+`yar <command> --help` reports command-specific usage without resolving a
+project, target, or external tool.
+
+The host execution form is:
+
+```bash
+yar run <file-or-directory> [-- <argument>...]
+```
+
+When arguments are present, the `--` delimiter is required. Every value after
+it is forwarded unchanged after the temporary executable's argv element zero.
+The program inherits the invocation directory, environment, and standard
+streams, and its numeric exit status becomes the `yar run` exit status.
+
+External native-build, test-binary, and Git subprocesses use positive-integer
+second limits from `YAR_BUILD_TIMEOUT_SECS`, `YAR_TEST_TIMEOUT_SECS`, and
+`YAR_GIT_TIMEOUT_SECS`; their defaults are 30, 30, and 300 seconds. One build
+deadline is shared by its Cargo and clang subprocesses, and one Git deadline is
+shared by all Git subprocesses in a dependency command. The program launched by
+`yar run` has no default deadline. Timed subprocesses use Unix process-group or
+Windows Job Object containment so timeouts terminate ordinary descendants; a
+Unix descendant that deliberately creates a new session is outside that
+containment boundary.
 
 ## Dependencies
 

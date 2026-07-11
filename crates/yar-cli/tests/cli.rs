@@ -11,6 +11,89 @@ use yar_compiler::manifest::{
 };
 
 #[test]
+fn root_help_and_version_are_successful_information_commands() {
+    for flag in ["-h", "--help"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .arg(flag)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "flag {flag:?}");
+        assert!(output.stderr.is_empty(), "flag {flag:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("usage: yar"), "stdout: {stdout}");
+        for command in [
+            "check", "emit-ir", "build", "run", "test", "init", "add", "remove", "fetch", "lock",
+            "update",
+        ] {
+            assert!(stdout.contains(command), "missing {command:?}: {stdout}");
+        }
+    }
+
+    let expected_version = option_env!("YAR_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    for flag in ["-V", "--version"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .arg(flag)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "flag {flag:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("yar {expected_version}\n")
+        );
+        assert!(output.stderr.is_empty(), "flag {flag:?}");
+    }
+}
+
+#[test]
+fn every_command_help_is_side_effect_free() {
+    let dir = temp_dir("yar-cli-command-help");
+    let missing_manifest = dir.join("missing/yar.toml");
+    let commands = [
+        ("check", "yar check <file|dir>"),
+        ("emit-ir", "yar emit-ir <file|dir>"),
+        ("build", "yar build <file|dir>"),
+        ("run", "yar run <file|dir> [-- <argument>...]"),
+        ("test", "yar test <file|dir>"),
+        ("init", "yar init"),
+        ("add", "yar add <alias>"),
+        ("remove", "yar remove <alias>"),
+        ("fetch", "yar fetch"),
+        ("lock", "yar lock"),
+        ("update", "yar update [alias]"),
+    ];
+
+    for (command, usage) in commands {
+        for flag in ["-h", "--help"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+                .args([
+                    "--manifest-path",
+                    missing_manifest.to_str().unwrap(),
+                    command,
+                    flag,
+                ])
+                .env("YAR_OS", "invalid")
+                .env("YAR_ARCH", "invalid")
+                .output()
+                .unwrap();
+
+            assert!(
+                output.status.success(),
+                "{command} {flag}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stderr.is_empty(), "{command} {flag}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains(usage),
+                "{command} {flag}: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+}
+
+#[test]
 fn check_accepts_testdata_fixture() {
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .args([
@@ -221,6 +304,62 @@ fn run_executes_testdata_fixture() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello, world\n");
 }
 
+#[test]
+fn run_forwards_arguments_after_the_delimiter_verbatim() {
+    let dir = temp_dir("yar-cli-run-arguments");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"package main
+
+import "std/process"
+
+fn main() i32 {
+    args := process.args()
+    if len(args) != 5 {
+        return 1
+    }
+    if args[1] != "plain" || args[2] != "--help" || args[3] != "" || args[4] != "--" {
+        return 2
+    }
+    return 7
+}
+"#,
+    )
+    .unwrap();
+    let runtime_archive = build_runtime_archive(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("run")
+        .arg(&source)
+        .arg("--")
+        .arg("plain")
+        .arg("--help")
+        .arg("")
+        .arg("--")
+        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+
+    let usage = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("run")
+        .arg(&source)
+        .arg("plain")
+        .output()
+        .unwrap();
+    assert_eq!(usage.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: yar run"));
+}
+
 #[cfg(unix)]
 #[test]
 fn build_uses_explicit_runtime_archive_without_cargo() {
@@ -253,6 +392,276 @@ fn build_uses_explicit_runtime_archive_without_cargo() {
     assert!(
         cc_args.contains(archive.to_str().unwrap()),
         "cc args did not include explicit runtime archive: {cc_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_timeout_terminates_the_compiler_process() {
+    let dir = temp_dir("yar-cli-build-timeout");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let compiler = dir.join("slow-cc");
+    write_executable(&compiler, "#!/bin/sh\nsleep 2\nexit 0\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            dir.join("program").to_str().unwrap(),
+        ])
+        .env("CC", &compiler)
+        .env("YAR_BUILD_TIMEOUT_SECS", "1")
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected build timeout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("slow-cc"), "stderr: {stderr}");
+    assert!(stderr.contains("timed out after 1s"), "stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_timeout_terminates_the_test_binary() {
+    let dir = temp_dir("yar-cli-test-timeout");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let compiler = fake_program_cc(&dir, "test-cc", "sleep 2");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["test", fixture("testdata/testing_basic").to_str().unwrap()])
+        .env("CC", &compiler)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_TEST_TIMEOUT_SECS", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected test timeout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("timed out after 1s"), "stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn run_program_has_no_default_timeout() {
+    let dir = temp_dir("yar-cli-run-without-timeout");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let compiler = fake_program_cc(&dir, "run-cc", "sleep 6\nexit 0");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["run", fixture("testdata/hello/main.yar").to_str().unwrap()])
+        .env("CC", &compiler)
+        .env("YAR_BUILD_TIMEOUT_SECS", "5")
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_build_timeout_fails_before_starting_the_compiler() {
+    let dir = temp_dir("yar-cli-invalid-build-timeout");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let compiler = fake_cc(&dir);
+
+    for value in ["0", "18446744073709551615"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .args([
+                "build",
+                fixture("testdata/hello/main.yar").to_str().unwrap(),
+                "-o",
+                dir.join("program").to_str().unwrap(),
+            ])
+            .env("CC", &compiler)
+            .env("YAR_BUILD_TIMEOUT_SECS", value)
+            .env("YAR_RUNTIME_ARCHIVE", &archive)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "timeout {value:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("YAR_BUILD_TIMEOUT_SECS must be a positive integer"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(!dir.join("cc-args").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_external_tools_are_named() {
+    let dir = temp_dir("yar-cli-missing-tools");
+    let archive = dir.join("runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    let missing_compiler = dir.join("missing-cc");
+
+    let compiler_output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            dir.join("program").to_str().unwrap(),
+        ])
+        .env("CC", &missing_compiler)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .output()
+        .unwrap();
+    assert!(!compiler_output.status.success());
+    let compiler_stderr = String::from_utf8_lossy(&compiler_output.stderr);
+    assert!(
+        compiler_stderr.contains("required executable") && compiler_stderr.contains("missing-cc"),
+        "stderr: {compiler_stderr}"
+    );
+
+    let cargo_output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            dir.join("program").to_str().unwrap(),
+        ])
+        .env("PATH", "")
+        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .output()
+        .unwrap();
+    assert!(!cargo_output.status.success());
+    let cargo_stderr = String::from_utf8_lossy(&cargo_output.stderr);
+    assert!(
+        cargo_stderr.contains("required executable") && cargo_stderr.contains("cargo"),
+        "stderr: {cargo_stderr}"
+    );
+
+    let git_project = dir.join("git-project");
+    fs::create_dir(&git_project).unwrap();
+    let git_output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "dep", "https://example.com/dep.git", "--tag=v1"])
+        .current_dir(&git_project)
+        .env("PATH", "")
+        .env("YAR_CACHE", dir.join("cache"))
+        .output()
+        .unwrap();
+    assert!(!git_output.status.success());
+    let git_stderr = String::from_utf8_lossy(&git_output.stderr);
+    assert!(
+        git_stderr.contains("required executable") && git_stderr.contains("git"),
+        "stderr: {git_stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn git_timeout_applies_to_the_whole_dependency_operation() {
+    let dir = temp_dir("yar-cli-git-timeout");
+    let project = dir.join("project");
+    let tools = dir.join("tools");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir(&tools).unwrap();
+    write_executable(
+        &tools.join("git"),
+        r#"#!/bin/sh
+set -eu
+if [ "$1" = "clone" ]; then
+  sleep 2
+  for arg in "$@"; do destination="$arg"; done
+  mkdir -p "$destination/.git"
+  printf 'package dep\n' > "$destination/dep.yar"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then
+  sleep 9
+  printf '1111111111111111111111111111111111111111\n'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let path = format!("{}:/bin:/usr/bin", tools.display());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "dep", "https://example.com/dep.git", "--tag=v1"])
+        .current_dir(&project)
+        .env("PATH", path)
+        .env("YAR_CACHE", dir.join("cache"))
+        .env("YAR_GIT_TIMEOUT_SECS", "10")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected git timeout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("git rev-parse"), "stderr: {stderr}");
+    assert!(stderr.contains("timed out after 10s"), "stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_preserves_interrupted_process_exit_status() {
+    let dir = temp_dir("yar-cli-fetch-interrupt");
+    let project = dir.join("project");
+    let tools = dir.join("tools");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir(&tools).unwrap();
+    fs::write(
+        project.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+dep = { git = "https://example.com/dep.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("yar.lock"),
+        write_lock_file(&[LockEntry {
+            name: "dep".to_string(),
+            git: "https://example.com/dep.git".to_string(),
+            tag: "v1".to_string(),
+            commit: "1".repeat(40),
+            hash: format!("sha256:{}", "1".repeat(64)),
+            ..LockEntry::default()
+        }]),
+    )
+    .unwrap();
+    write_executable(
+        &tools.join("git"),
+        "#!/bin/sh\n: > \"$(dirname \"$0\")/started\"\nsleep 30\n",
+    );
+
+    let path = format!("{}:/bin:/usr/bin", tools.display());
+    let child = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("fetch")
+        .current_dir(&project)
+        .env("PATH", path)
+        .env("YAR_CACHE", dir.join("cache"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_for_file(&tools.join("started"));
+    let signal = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(signal.success());
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(143),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -391,30 +800,14 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
         "#!/bin/sh\nprintf 'inherit stdout\\n'\nprintf 'inherit stderr\\n' >&2\nexit 3\n",
     );
     let runtime_archive = build_runtime_archive(&dir);
-    let program = dir.join("process-env");
 
-    let build = Command::new(env!("CARGO_BIN_EXE_yar"))
-        .args([
-            "build",
-            fixture("testdata/stdlib_process_env/main.yar")
-                .to_str()
-                .unwrap(),
-            "-o",
-            program.to_str().unwrap(),
-        ])
-        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
-        .output()
-        .unwrap();
-
-    assert!(
-        build.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-
-    let output = Command::new(&program)
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("run")
+        .arg(fixture("testdata/stdlib_process_env/main.yar"))
+        .arg("--")
         .arg(&capture_script)
         .arg(&inherit_script)
+        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
         .env("YAR_PROCESS_ENV_TEST", "env ok")
         .output()
         .unwrap();
@@ -3049,6 +3442,17 @@ fn write_executable(path: &std::path::Path, content: &str) {
     fs::set_permissions(path, permissions).unwrap();
 }
 
+#[cfg(unix)]
+fn wait_for_file(path: &Path) {
+    for _ in 0..500 {
+        if path.is_file() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
 fn build_runtime_archive(dir: &std::path::Path) -> PathBuf {
     let target_dir = dir.join("cargo-target");
     let output = Command::new("cargo")
@@ -3113,6 +3517,33 @@ fi
     permissions.set_mode(0o755);
     fs::set_permissions(&script, permissions).unwrap();
     script
+}
+
+#[cfg(unix)]
+fn fake_program_cc(dir: &std::path::Path, name: &str, program: &str) -> PathBuf {
+    let compiler = dir.join(name);
+    write_executable(
+        &compiler,
+        &format!(
+            r#"#!/bin/sh
+set -eu
+out=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "-o" ]; then
+    out="$arg"
+  fi
+  previous="$arg"
+done
+cat > "$out" <<'EOF'
+#!/bin/sh
+{program}
+EOF
+chmod +x "$out"
+"#
+        ),
+    );
+    compiler
 }
 
 #[cfg(unix)]

@@ -2,6 +2,7 @@
 members = [
     "crates/yar-cli",
     "crates/yar-compiler",
+    "crates/yar-process-control",
     "crates/yar-runtime",
 ]
 resolver = "3"

@@ -192,7 +192,7 @@ The Rust 2024 CLI is the shipped `yar` command:
 ./target/release/yar check main.yar
 ./target/release/yar emit-ir main.yar
 ./target/release/yar build main.yar
-./target/release/yar run main.yar
+./target/release/yar run main.yar -- first-argument --flag
 ./target/release/yar test .
 ./target/release/yar init
 ./target/release/yar add local_lib --path=../local-lib
@@ -217,6 +217,22 @@ Override the C compiler if needed:
 CC=clang-17 ./bin/yar build main.yar
 ```
 
+External build, test, and Git subprocesses have configurable operation
+deadlines. The defaults are 30 seconds for native builds, 30 seconds for test
+binaries, and 300 seconds for one dependency command:
+
+```bash
+YAR_BUILD_TIMEOUT_SECS=60 yar build main.yar
+YAR_TEST_TIMEOUT_SECS=60 yar test .
+YAR_GIT_TIMEOUT_SECS=600 yar lock
+```
+
+Values must be positive integer seconds. A `yar run` program itself has no
+deadline; only its build phase uses `YAR_BUILD_TIMEOUT_SECS`. Timed subprocesses
+are contained as a Unix process group or Windows Job Object so a timeout also
+terminates ordinary descendants. A Unix descendant that deliberately creates a
+new session is outside that containment boundary.
+
 <details>
 <summary>Installing clang</summary>
 
@@ -234,6 +250,8 @@ CC=clang-17 ./bin/yar build main.yar
 ```text
 yar <command> [arguments]
 yar --manifest-path <path/to/yar.toml> <command> [arguments]
+yar --help
+yar --version
 ```
 
 | Command   | What it does                                      |
@@ -249,6 +267,11 @@ yar --manifest-path <path/to/yar.toml> <command> [arguments]
 | `fetch`   | Download dependencies from `yar.lock` to cache    |
 | `lock`    | Regenerate `yar.lock` from `yar.toml`             |
 | `update`  | Re-resolve dependencies and update `yar.lock`     |
+
+Use `yar <command> --help` for command-specific usage. The form
+`yar run <path> -- <arguments...>` forwards every argument after the required
+`--` delimiter unchanged. The executed program remains responsible for its own
+lifetime, and its numeric exit status becomes the `yar run` exit status.
 
 ## Testing
 
@@ -426,8 +449,9 @@ cargo test --workspace
 CI runs those gates on pull requests and pushes to `main`, with Linux and macOS
 coverage for the native `clang` build boundary, the Rust workspace, and Rust
 CLI native builds plus successful fixture execution for every checked-in
-`testdata/**/main.yar` fixture that is expected to exit successfully.
-Release packaging is validated with a GoReleaser snapshot dry run.
+`testdata/**/main.yar` fixture that is expected to exit successfully. A targeted
+Windows job exercises the subprocess Job Object lifecycle. Release packaging is
+validated with a GoReleaser snapshot dry run.
 
 Version tags matching `v*` publish GitHub Release assets through GoReleaser.
 Manual release workflow runs are snapshot-only and do not publish.
@@ -436,6 +460,7 @@ Manual release workflow runs are snapshot-only and do not publish.
 crates/
   yar-cli/        Rust 2024 CLI entry point
   yar-compiler/   Rust 2024 compiler crate
+  yar-process-control/ Shared subprocess deadlines and containment
   yar-runtime/    Rust 2024 runtime crate
 stdlib/           Embedded standard library (Yar source)
 testdata/         Representative sample programs

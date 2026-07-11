@@ -194,6 +194,9 @@ bare known stdlib name receives a migration diagnostic.
 
 - `crates/yar-compiler/src/manifest.rs` is the Rust manifest, lock, cache,
   fetch, hash-verification, and recursive dependency resolver implementation.
+- `crates/yar-process-control` executes Git with typed missing-tool and timeout
+  errors. The CLI supplies one absolute `YAR_GIT_TIMEOUT_SECS` deadline (300
+  seconds by default) shared by every Git subprocess in a dependency command.
 - `crates/yar-compiler/src/lock_graph.rs` validates and reconciles lock graphs,
   verifies selected manifests against recorded edges, and merges selective
   updates.
@@ -211,6 +214,8 @@ bare known stdlib name receives a migration diagnostic.
   is missing; valid cached entries are verified offline. Lock-generating and
   update commands require both to resolve declared refs. Path-only graphs need
   neither.
+- Timeout cleanup terminates the Git process and its ordinary descendants before
+  the resolver removes temporary checkout state.
 - If the remote cannot provide a missing locked object, fetch fails without
   falling back to the recorded tag, branch, or revision. `yar lock` or
   `yar update` is an explicit version change.

@@ -9,6 +9,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use yar_process_control::{Deadline, ProcessError, output as process_output};
 
 pub const MANIFEST_FILE: &str = "yar.toml";
 pub const LOCK_FILE: &str = "yar.lock";
@@ -138,6 +139,31 @@ pub enum ManifestError {
     TomlDeserialize(toml::de::Error),
     TomlSerialize(toml::ser::Error),
     Invalid(String),
+    Context {
+        context: String,
+        source: Box<ManifestError>,
+    },
+    Process {
+        context: String,
+        source: ProcessError,
+    },
+}
+
+impl ManifestError {
+    pub fn interrupted_signal(&self) -> Option<i32> {
+        match self {
+            ManifestError::Context { source, .. } => source.interrupted_signal(),
+            ManifestError::Process { source, .. } => source.interrupted_signal(),
+            _ => None,
+        }
+    }
+
+    pub fn context(self, context: impl Into<String>) -> Self {
+        ManifestError::Context {
+            context: context.into(),
+            source: Box::new(self),
+        }
+    }
 }
 
 impl fmt::Display for ManifestError {
@@ -147,6 +173,8 @@ impl fmt::Display for ManifestError {
             ManifestError::TomlDeserialize(err) => write!(f, "parsing yar.toml: {err}"),
             ManifestError::TomlSerialize(err) => write!(f, "encoding yar.toml: {err}"),
             ManifestError::Invalid(message) => f.write_str(message),
+            ManifestError::Context { context, source } => write!(f, "{context}: {source}"),
+            ManifestError::Process { context, source } => write!(f, "{context}: {source}"),
         }
     }
 }
@@ -158,6 +186,8 @@ impl Error for ManifestError {
             ManifestError::TomlDeserialize(err) => Some(err),
             ManifestError::TomlSerialize(err) => Some(err),
             ManifestError::Invalid(_) => None,
+            ManifestError::Context { source, .. } => Some(source),
+            ManifestError::Process { source, .. } => Some(source),
         }
     }
 }
@@ -295,6 +325,7 @@ pub fn fetch_locked_dependency<F>(
     git_url: &str,
     commit: &str,
     expected_hash: &str,
+    deadline: Deadline,
     validate: F,
 ) -> Result<PathBuf, ManifestError>
 where
@@ -327,9 +358,9 @@ where
 
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
     let checkout_dir = tmp_dir.path().join("repo");
-    git_fetch_commit(git_url, commit, &checkout_dir)?;
+    git_fetch_commit(git_url, commit, &checkout_dir, deadline)?;
 
-    let actual_commit = git_rev_parse(&checkout_dir)?;
+    let actual_commit = git_rev_parse(&checkout_dir, deadline)?;
     if actual_commit != commit {
         return Err(invalid(format!(
             "commit mismatch for {}: expected {}, got {}",
@@ -353,14 +384,15 @@ where
 pub fn fetch_and_resolve_commit(
     cache_dir: impl AsRef<Path>,
     dependency: &Dependency,
+    deadline: Deadline,
 ) -> Result<(String, String), ManifestError> {
     let cache_dir = cache_dir.as_ref();
     let cache_bucket = prepare_cache_bucket(cache_dir, &dependency.git)?;
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
     let clone_dir = tmp_dir.path().join("repo");
-    git_clone_ref(dependency, &clone_dir)?;
+    git_clone_ref(dependency, &clone_dir, deadline)?;
 
-    let commit = git_rev_parse(&clone_dir)?;
+    let commit = git_rev_parse(&clone_dir, deadline)?;
     if !is_lower_hex(&commit, 40) {
         return Err(invalid(format!(
             "git returned invalid commit {commit:?}: expected 40 lowercase hex characters"
@@ -461,12 +493,14 @@ pub fn resolve_dependencies(
     root_dir: impl AsRef<Path>,
     manifest: &Manifest,
     cache_dir: impl AsRef<Path>,
+    deadline: Deadline,
 ) -> Result<Vec<ResolvedDep>, ManifestError> {
     let mut resolver = Resolver {
         cache_dir: cache_dir.as_ref().to_path_buf(),
         resolved: BTreeMap::new(),
         visiting: BTreeSet::new(),
         edges: BTreeMap::new(),
+        deadline,
     };
     for (alias, dependency) in &manifest.dependencies {
         resolver.resolve(alias, dependency, root_dir.as_ref(), &[], None)?;
@@ -753,7 +787,18 @@ fn with_context(context: impl Into<String>, err: io::Error) -> ManifestError {
     invalid(format!("{}: {err}", context.into()))
 }
 
-fn git_clone_ref(dependency: &Dependency, destination: &Path) -> Result<(), ManifestError> {
+fn process_error(context: impl Into<String>, source: ProcessError) -> ManifestError {
+    ManifestError::Process {
+        context: context.into(),
+        source,
+    }
+}
+
+fn git_clone_ref(
+    dependency: &Dependency,
+    destination: &Path,
+    deadline: Deadline,
+) -> Result<(), ManifestError> {
     if !valid_git_url(&dependency.git) {
         return Err(invalid(format!(
             "unsupported git URL scheme: {}",
@@ -779,7 +824,7 @@ fn git_clone_ref(dependency: &Dependency, destination: &Path) -> Result<(), Mani
     args.push(dependency.git.clone());
     args.push(destination.display().to_string());
 
-    run_git(&args, format!("git clone {}", dependency.git))?;
+    run_git(&args, format!("git clone {}", dependency.git), deadline)?;
 
     if !dependency.rev.is_empty() {
         run_git(
@@ -790,12 +835,18 @@ fn git_clone_ref(dependency: &Dependency, destination: &Path) -> Result<(), Mani
                 dependency.rev.clone(),
             ],
             format!("git checkout {}", dependency.rev),
+            deadline,
         )?;
     }
     Ok(())
 }
 
-fn git_fetch_commit(git_url: &str, commit: &str, destination: &Path) -> Result<(), ManifestError> {
+fn git_fetch_commit(
+    git_url: &str,
+    commit: &str,
+    destination: &Path,
+    deadline: Deadline,
+) -> Result<(), ManifestError> {
     if !valid_git_url(git_url) {
         return Err(invalid(format!("unsupported git URL scheme: {git_url}")));
     }
@@ -804,6 +855,7 @@ fn git_fetch_commit(git_url: &str, commit: &str, destination: &Path) -> Result<(
     run_git(
         &["init".to_string(), destination.clone()],
         format!("git init {destination}"),
+        deadline,
     )?;
     run_git(
         &[
@@ -816,6 +868,7 @@ fn git_fetch_commit(git_url: &str, commit: &str, destination: &Path) -> Result<(
             commit.to_string(),
         ],
         format!("git fetch locked commit {commit} from {git_url}"),
+        deadline,
     )?;
     run_git(
         &[
@@ -826,13 +879,16 @@ fn git_fetch_commit(git_url: &str, commit: &str, destination: &Path) -> Result<(
             commit.to_string(),
         ],
         format!("git checkout locked commit {commit}"),
+        deadline,
     )
 }
 
-fn git_rev_parse(dir: &Path) -> Result<String, ManifestError> {
-    let output = Command::new("git")
-        .args(["-C", &dir.display().to_string(), "rev-parse", "HEAD"])
-        .output()?;
+fn git_rev_parse(dir: &Path, deadline: Deadline) -> Result<String, ManifestError> {
+    let mut command = Command::new("git");
+    command.args(["-C", &dir.display().to_string(), "rev-parse", "HEAD"]);
+    let output = process_output(command, deadline).map_err(|source| {
+        process_error(format!("git rev-parse HEAD in {}", dir.display()), source)
+    })?;
     if !output.status.success() {
         return Err(invalid(format!(
             "git rev-parse HEAD in {} failed: {}\n{}",
@@ -844,8 +900,11 @@ fn git_rev_parse(dir: &Path) -> Result<String, ManifestError> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn run_git(args: &[String], context: String) -> Result<(), ManifestError> {
-    let output = Command::new("git").args(args).output()?;
+fn run_git(args: &[String], context: String, deadline: Deadline) -> Result<(), ManifestError> {
+    let mut command = Command::new("git");
+    command.args(args);
+    let output = process_output(command, deadline)
+        .map_err(|source| process_error(context.clone(), source))?;
     if output.status.success() {
         return Ok(());
     }
@@ -899,6 +958,7 @@ struct Resolver {
     resolved: BTreeMap<String, ResolvedDep>,
     visiting: BTreeSet<String>,
     edges: BTreeMap<String, BTreeMap<String, Dependency>>,
+    deadline: Deadline,
 }
 
 impl Resolver {
@@ -989,8 +1049,8 @@ impl Resolver {
         alias: &str,
         dependency: &Dependency,
     ) -> Result<ResolvedDep, ManifestError> {
-        let (commit, hash) = fetch_and_resolve_commit(&self.cache_dir, dependency)
-            .map_err(|err| invalid(format!("resolving {alias}: {err}")))?;
+        let (commit, hash) = fetch_and_resolve_commit(&self.cache_dir, dependency, self.deadline)
+            .map_err(|error| error.context(format!("resolving {alias}")))?;
         let dir = cache_path(&self.cache_dir, &dependency.git, &commit);
         Ok(ResolvedDep {
             name: alias.to_string(),
@@ -1706,6 +1766,7 @@ hash = "sha256:abc123"
             )]),
             visiting: BTreeSet::new(),
             edges: BTreeMap::new(),
+            deadline: Deadline::none(),
         };
         let error = resolver
             .resolve("shared", &branch, Path::new("."), &[], None)

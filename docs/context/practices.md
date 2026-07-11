@@ -164,8 +164,15 @@
 - The `to_str` builtin is polymorphic and accepts `i32`, `i64`, `bool`, `str`,
   and `error` arguments. For error values, code generation emits a switch over
   the program-wide error-code table to produce `"error.Name"` strings.
-- The CLI places a timeout around `build`, `run`, and `test` operations before
-  invoking external processes.
+- Native build subprocesses share one absolute deadline configured by
+  `YAR_BUILD_TIMEOUT_SECS` (30 seconds by default). Generated test binaries use
+  `YAR_TEST_TIMEOUT_SECS` (30 seconds), while a `yar run` program has no default
+  deadline. All Git subprocesses in one dependency command share
+  `YAR_GIT_TIMEOUT_SECS` (300 seconds).
+- Timed subprocesses use the shared `yar-process-control` boundary, which drains
+  captured output, reports missing executables by name, forwards Unix
+  interrupts, and terminates ordinary descendants through a Unix process group
+  or Windows Job Object before temporary files are removed.
 - Cross-compilation is configured through `YAR_OS` and `YAR_ARCH` environment
   variables. The compiler maps the pair to an LLVM target triple internally.
   `yar run` rejects cross-compilation targets.

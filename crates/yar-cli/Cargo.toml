@@ -10,3 +10,4 @@ path = "src/main.rs"
 
 [dependencies]
 yar-compiler = { path = "../yar-compiler" }
+yar-process-control = { path = "../yar-process-control" }

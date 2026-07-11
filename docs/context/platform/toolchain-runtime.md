@@ -29,10 +29,10 @@
   `net` host-intrinsic runtime calls, captured closure environments, pointer
   operations, enum match lowering with payload constructors, and
   stdlib-internal builtins.
-- The `CC` environment variable overrides the default compiler command; the
-  Rust CLI checks `CC` first, then falls back to `clang`.
-- When the compiler is not found, the error message names the missing command
-  and suggests installing clang or setting `CC`.
+- `CC` overrides `clang`; shared process control preserves missing command names
+  and applies one `YAR_BUILD_TIMEOUT_SECS` deadline to Cargo and clang.
+- Tests use `YAR_TEST_TIMEOUT_SECS`; `yar run` programs remain unbounded after
+  their build phase. Timed descendants are terminated before the command returns.
 - On Windows, temporary executables produced by `Run` and `RunPath` use a
   `.exe` suffix so the OS can execute them.
 - The default output name for `build` is `a.out` on Unix and `a.exe` on
