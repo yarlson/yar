@@ -177,6 +177,7 @@ pub struct TypeParam {
 pub struct StructDecl {
     pub struct_pos: Position,
     pub exported: bool,
+    pub resource: bool,
     pub name: String,
     pub name_pos: Position,
     pub type_params: Vec<TypeParam>,
@@ -227,6 +228,7 @@ pub struct EnumCaseDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionDecl {
     pub exported: bool,
+    pub host_intrinsic: bool,
     pub name: String,
     pub name_pos: Position,
     pub type_params: Vec<TypeParam>,
@@ -485,6 +487,7 @@ pub struct CallExpr {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionLiteralExpr {
     pub fn_pos: Position,
+    pub enclosing_function: String,
     pub params: Vec<Param>,
     pub return_type: TypeRef,
     pub return_is_bang: bool,

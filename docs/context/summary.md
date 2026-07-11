@@ -49,8 +49,8 @@ runtime static library to produce or run a native executable.
 - Build and run native executables backed by the Rust runtime static library.
 - Propagate errors with direct `return` or postfix `?`.
 - Handle errors locally with `or |err| { ... }`.
-- Run structured concurrent tasks with `taskgroup` and communicate through
-  bounded typed channels.
+- Run share-safe structured concurrent tasks with `taskgroup` and communicate
+  through bounded typed channels.
 - Model closed variants with enums, payload-carrying enum cases, and exhaustive `match`.
 - Support aggregate values and return types with structs, fixed arrays, slices, maps, and pointers.
 - Reuse code through explicit generic structs and generic functions.
@@ -67,7 +67,7 @@ runtime static library to produce or run a native executable.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Stream file and TCP connection data through shared `io.Reader`, `io.Writer`, and `io.Closer` interfaces.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
-- Serve small HTTP/1.1 responses over TCP with one request per connection through the stdlib `http` package.
+- Serve small HTTP/1.1 responses sequentially over TCP with one request per connection through the stdlib `http` package.
 - Cross-compile to different OS/architecture targets using `YAR_OS` and `YAR_ARCH` environment variables without requiring knowledge of LLVM triples.
 - Discover and run test functions from `_test.yar` files using `yar test`, with generic assertion helpers from the `testing` stdlib package.
 - Convert primitive values to their string representation with `to_str`.

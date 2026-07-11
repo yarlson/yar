@@ -27,13 +27,11 @@ pub fn text(status i32, body str) Response {
 pub fn serve(addr net.Addr, handler fn(Request) !Response) !void {
     listener := net.listen(addr.host, addr.port)?
 
-    taskgroup []void {
-        for true {
-            conn := net.accept(listener) or |err| {
-                break
-            }
-            spawn handle(conn, handler)
+    for true {
+        conn := net.accept(listener) or |err| {
+            break
         }
+        handle(conn, handler)
     }
 
     close_listener_quiet(listener)

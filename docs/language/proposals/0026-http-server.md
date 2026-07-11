@@ -60,8 +60,7 @@ fn main() !i32 {
 
 ## 3. Semantics
 
-- `serve` calls `net.listen`, accepts TCP connections, and handles each
-  connection concurrently with a taskgroup.
+- `serve` calls `net.listen` and processes TCP connections sequentially.
 - Each connection carries exactly one HTTP request and one HTTP response.
 - The connection is closed after the response is written.
 - Request header names are normalized to lowercase.
@@ -80,6 +79,7 @@ fn main() !i32 {
 - no sessions, JWT, or password handling
 - no TLS
 - no HTTP client
+- no concurrent connection handling
 
 ## 5. Implementation Notes
 
@@ -88,6 +88,8 @@ Response headers are emitted in sorted order for deterministic output.
 
 Top-level functions are not first-class values in the current language, so
 callers pass a function literal when adapting a named handler to `serve`.
+`serve` does not move that arbitrary handler value across a spawn boundary;
+it finishes the current connection before accepting the next one.
 
 ## 6. Tests
 

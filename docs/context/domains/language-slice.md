@@ -204,6 +204,17 @@
   current taskgroup body.
 - A spawned expression must be a call, and its return shape must match the
   taskgroup element type exactly, including `!T` vs `T`.
+- A spawn target must be a named function or an immediately called inline
+  function literal; arbitrary function values, builtins, and methods cannot be
+  spawned. Direct host intrinsics need task-wrapper support, currently limited
+  to `fs.read_file`; an inline literal can wrap other host calls.
+- Spawn arguments and inline-literal captures must be recursively share-safe.
+  Scalars, `str`, `error`, fixed arrays, enums, non-resource structs, `!T`,
+  and `chan[T]` compose when their contained types are share-safe; `!void` is
+  also share-safe. Pointers, slices, maps, interfaces, function values, and
+  resource structs do not.
+- Spawn results do not need to be share-safe because the taskgroup exposes
+  them only after joining every task.
 - Taskgroup results preserve spawn order.
 - `taskgroup []!T` is valid and yields first-class errorable values that may be
   handled with `?` or `or |err| { ... }` after indexing or binding.
@@ -293,9 +304,9 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
   timeouts, and DNS resolution. It also provides `Conn` and `Listener` wrapper
   structs with methods that satisfy the `io` stream interfaces.
 - `http` provides `Request`, `Response`, `text`, and `serve` for small
-  HTTP/1.1 servers. `serve` accepts one request per connection, closes the
-  connection after writing the response, and converts handler errors to `500`
-  responses while continuing to accept new connections.
+  HTTP/1.1 servers. `serve` processes connections sequentially, accepts one
+  request per connection, closes the connection after writing the response,
+  and converts handler errors to `500` responses while continuing to accept.
 - Host process/environment failures surface through ordinary `error` values
   using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and
   `IO`.

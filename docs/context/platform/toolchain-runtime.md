@@ -24,9 +24,9 @@
   slice descriptors/literals/indexing/slicing/append, map literals,
   lookup/assignment, `len`, `has`, `delete`, `keys`, function literals,
   function values, closure calls, concrete method calls, interface calls,
-  taskgroups/spawn wrappers for user-function and function-value calls, channel
-  builtin runtime calls, direct `fs`, `process`, `env`, `stdio`, and `net`
-  host-intrinsic runtime calls, captured closure environments, pointer
+  taskgroups/spawn wrappers for named functions and immediate inline literals,
+  channel builtin runtime calls, direct `fs`, `process`, `env`, `stdio`, and
+  `net` host-intrinsic runtime calls, captured closure environments, pointer
   operations, enum match lowering with payload constructors, and
   stdlib-internal builtins.
 - The `CC` environment variable overrides the default compiler command; the

@@ -21,7 +21,7 @@ pub fn monomorphize_program(program: &Program) -> (Program, Vec<Diagnostic>) {
     }
     for decl in &program.functions {
         if decl.type_params.is_empty() {
-            let rewritten = mono.rewrite_function(decl, None);
+            let rewritten = mono.rewrite_function(decl, None, &decl.name);
             mono.output.functions.push(rewritten);
         }
     }
@@ -37,6 +37,7 @@ struct Monomorphizer {
     non_generic_named_types: BTreeSet<String>,
     struct_instantiating: BTreeSet<String>,
     function_instantiating: BTreeSet<String>,
+    current_function: String,
     output: Program,
 }
 
@@ -50,6 +51,7 @@ impl Monomorphizer {
             non_generic_named_types: BTreeSet::new(),
             struct_instantiating: BTreeSet::new(),
             function_instantiating: BTreeSet::new(),
+            current_function: String::new(),
             output: Program {
                 package_pos: program.package_pos.clone(),
                 package_name: program.package_name.clone(),
@@ -92,6 +94,7 @@ impl Monomorphizer {
         StructDecl {
             struct_pos: decl.struct_pos.clone(),
             exported: decl.exported,
+            resource: decl.resource,
             name: decl.name.clone(),
             name_pos: decl.name_pos.clone(),
             type_params: Vec::new(),
@@ -135,9 +138,13 @@ impl Monomorphizer {
         &mut self,
         decl: &FunctionDecl,
         subst: Option<&BTreeMap<String, TypeRef>>,
+        instance_name: &str,
     ) -> FunctionDecl {
-        FunctionDecl {
+        let previous_function =
+            std::mem::replace(&mut self.current_function, instance_name.to_string());
+        let rewritten = FunctionDecl {
             exported: decl.exported,
+            host_intrinsic: decl.host_intrinsic,
             name: decl.name.clone(),
             name_pos: decl.name_pos.clone(),
             type_params: Vec::new(),
@@ -150,7 +157,9 @@ impl Monomorphizer {
             return_type: self.rewrite_type_ref(&decl.return_type, subst),
             return_is_bang: decl.return_is_bang,
             body: self.rewrite_block(&decl.body, subst),
-        }
+        };
+        self.current_function = previous_function;
+        rewritten
     }
 
     fn rewrite_params(
@@ -303,6 +312,7 @@ impl Monomorphizer {
             Expression::FunctionLiteral(expr) => {
                 Expression::FunctionLiteral(Box::new(FunctionLiteralExpr {
                     fn_pos: expr.fn_pos.clone(),
+                    enclosing_function: self.current_function.clone(),
                     params: self.rewrite_params(&expr.params, subst),
                     return_type: self.rewrite_type_ref(&expr.return_type, subst),
                     return_is_bang: expr.return_is_bang,
@@ -662,7 +672,7 @@ impl Monomorphizer {
 
         self.function_instantiating.insert(name.clone());
         let subst = make_type_substitution(&decl.type_params, type_args);
-        let mut instantiated = self.rewrite_function(decl, Some(&subst));
+        let mut instantiated = self.rewrite_function(decl, Some(&subst), &name);
         instantiated.name = name.clone();
         self.output.functions.push(instantiated);
         self.function_instantiating.remove(&name);
@@ -727,7 +737,7 @@ fn is_builtin_function(name: &str) -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::{lower::lower_package_graph, package::load_package_graph};
+    use crate::{lower::lower_package_graph, package::load_package_graph, parser::parse_file};
 
     use super::*;
 
@@ -798,6 +808,39 @@ mod tests {
                 .functions
                 .iter()
                 .any(|decl| decl.name == "lib.wrap[str]")
+        );
+    }
+
+    #[test]
+    fn preserves_resource_metadata_on_instantiated_structs() {
+        let (mut program, diagnostics) = parse_file(
+            "<test>",
+            r#"package main
+
+struct Resource[T] {
+    value T
+}
+
+fn consume(resource Resource[i32]) void {
+    return
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+        assert_eq!(diagnostics, Vec::new());
+        program.structs[0].resource = true;
+
+        let (program, diagnostics) = monomorphize_program(&program);
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(
+            program
+                .structs
+                .iter()
+                .any(|decl| decl.name == "Resource[i32]" && decl.resource)
         );
     }
 

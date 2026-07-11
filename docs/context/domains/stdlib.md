@@ -124,6 +124,7 @@ Types:
 
 - `DirEntry { name str, is_dir bool }`
 - `EntryKind { File, Directory, Other }`
+- `File { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
 
 Functions:
 
@@ -232,8 +233,8 @@ Host-backed TCP networking primitives.
 Types:
 
 - `Addr { host str, port i32 }`
-- `Conn { handle i64 }`
-- `Listener { handle i64 }`
+- `Conn { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
+- `Listener { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
 
 Functions:
 
@@ -310,6 +311,8 @@ Functions:
 
 Semantics:
 
+- Connections are processed sequentially; `serve` accepts the next connection
+  after the current connection is closed.
 - Request header names are normalized to lowercase.
 - `Content-Length` is honored for bodies up to 65536 bytes. Larger or invalid
   lengths return `error.InvalidRequest` inside the package.

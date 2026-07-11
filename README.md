@@ -141,12 +141,18 @@ operand width. Invalid division and remainder terminate deterministically.
 
 - `taskgroup []R { ... }` spawns concurrent calls and yields results in spawn
   order.
-- `spawn call(...)` is valid only inside a taskgroup body.
+- `spawn` accepts named function calls and immediately called inline function
+  literals inside a taskgroup body; arbitrary function values cannot be
+  spawned. Builtins, methods, and host intrinsics without a dedicated task
+  wrapper must be called from an inline literal instead.
+- Spawn arguments and inline-literal captures must be recursively share-safe;
+  pointers, slices, maps, interfaces, functions, and resource structs cannot
+  cross the task boundary.
 - `?` is rejected inside a taskgroup body because propagation could bypass the
   mandatory join; handle errors locally or propagate after the group yields.
 - `chan[T]` is a bounded typed channel created with `chan_new[T](capacity)`.
 - `chan_send`, `chan_recv`, and `chan_close` provide the channel operations.
-- The current implementation uses POSIX threads under the hood.
+- Each successful `spawn` starts one POSIX thread immediately.
 - Windows builds compile, but concurrency operations currently fail at runtime
   with an unsupported message.
 

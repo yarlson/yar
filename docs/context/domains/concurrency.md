@@ -18,6 +18,20 @@
   - `taskgroup []void` when tasks return no value
 - Each `spawn` target must be a call expression whose return shape matches the
   taskgroup element type.
+- A spawn target must be a named function or an immediately called inline
+  function literal. Arbitrary function values, builtins, and methods are not
+  valid spawn targets.
+- A direct host-intrinsic spawn also needs a task wrapper. Only `fs.read_file`
+  currently has one; other host calls can be made from an inline literal.
+- Spawn arguments and inline-literal captures must be share-safe. Scalars,
+  `str`, and `error` are share-safe. Fixed arrays, enums, and non-resource
+  structs are share-safe only when every contained value is share-safe.
+  `!T` and `chan[T]` are share-safe only when `T` is share-safe; `!void` is
+  also share-safe.
+- Pointers, slices, maps, interfaces, function values, resource structs, and
+  aggregates containing any of them cannot cross a spawn boundary.
+- Spawn result types are unrestricted by share-safety because results become
+  visible to the parent only after the taskgroup joins.
 - `spawn` is rejected outside a taskgroup body.
 - `spawn` is also rejected inside a function literal nested under a taskgroup
   body. A nested closure may create and use its own inner taskgroup instead.
@@ -28,8 +42,20 @@
 - `break` and `continue` may be used for loops nested inside the taskgroup
   body, but may not jump out through an enclosing loop outside the taskgroup.
 - Taskgroup bodies execute sequentially, but each `spawn` starts work
-  immediately. Tasks may overlap with later statements in the same body.
+  immediately on one native thread. Tasks may overlap with later statements in
+  the same body.
 - The final result slice preserves spawn order, not completion order.
+
+## Value Boundary
+
+- Spawn arguments and captures use the ordinary calling convention, so the
+  task receives shallow value copies rather than deep copies.
+- The checker applies the share-safety rule transitively to prevent those
+  copies from carrying mutable aliases into another thread. Channels are the
+  explicit exception because their runtime operations synchronize shared use.
+- Bare `i64` values are treated as scalars. The checker cannot distinguish an
+  ordinary integer from a raw runtime or OS handle represented as `i64`, so
+  such handles are not rejected by this boundary.
 
 ## Error Model Integration
 
@@ -54,8 +80,8 @@
 
 ## Runtime Notes
 
-- The current implementation uses native POSIX threads, not the M:N scheduler
-  explored in the original proposal.
+- The current implementation creates one native POSIX thread immediately for
+  each successful `spawn`; it does not use a thread pool or M:N scheduler.
 - Taskgroup and channel helpers live in `crates/yar-runtime` for native build
   paths.
 - Non-Windows builds pass `-pthread` during linking.

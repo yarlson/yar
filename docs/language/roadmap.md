@@ -111,6 +111,7 @@ It is intentionally scoped to small native service demos:
 - `http.text(status, body)`
 - `http.serve(net.Addr, fn(http.Request) !http.Response)`
 - one request per connection
+- sequential connection processing
 - handler errors become `500` responses
 
 Non-goals remain explicit: no router, keep-alive, query parser, middleware,

@@ -52,6 +52,7 @@ pub struct Signature {
     pub return_type: Type,
     pub errorable: bool,
     pub builtin: bool,
+    pub host_intrinsic: bool,
     pub exported: bool,
 }
 
@@ -65,6 +66,7 @@ pub struct StructField {
 pub struct StructInfo {
     pub name: String,
     pub exported: bool,
+    pub resource: bool,
     pub fields: Vec<StructField>,
 }
 
@@ -150,7 +152,7 @@ struct Checker {
 #[derive(Clone, Debug)]
 struct FunctionContext {
     signature: Signature,
-    literal_key: Option<String>,
+    literal_keys: Vec<String>,
     scopes: Vec<BTreeMap<String, LocalBinding>>,
     loop_depth: usize,
     closure_depth: usize,
@@ -168,6 +170,59 @@ struct TaskgroupContext {
     result_type: Type,
     loop_depth: usize,
     closure_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallUse {
+    Ordinary,
+    Spawn,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TaskShareSafetyViolation {
+    path: Vec<String>,
+    type_: Type,
+    resource: bool,
+}
+
+impl TaskShareSafetyViolation {
+    fn disallowed(type_: impl Into<Type>) -> Self {
+        Self {
+            path: Vec::new(),
+            type_: type_.into(),
+            resource: false,
+        }
+    }
+
+    fn resource(type_: impl Into<Type>) -> Self {
+        Self {
+            path: Vec::new(),
+            type_: type_.into(),
+            resource: true,
+        }
+    }
+
+    fn prepend(mut self, segment: impl Into<String>) -> Self {
+        self.path.insert(0, segment.into());
+        self
+    }
+
+    fn describe(&self) -> String {
+        let type_name = diagnostic_type_name(&self.type_);
+        if self.path.is_empty() {
+            if self.resource {
+                return format!("resource type {type_name:?} is not share-safe");
+            }
+            return format!("type {type_name:?} is not share-safe");
+        }
+
+        let path = self.path.join(" -> ");
+        if self.resource {
+            format!("{path} contains non-share-safe resource type {type_name:?}")
+        } else {
+            format!("{path} has non-share-safe type {type_name:?}")
+        }
+    }
 }
 
 impl Checker {
@@ -281,6 +336,7 @@ impl Checker {
             let mut info = StructInfo {
                 name: decl.name.clone(),
                 exported: decl.exported,
+                resource: decl.resource,
                 fields: Vec::new(),
             };
             let mut seen_fields = BTreeSet::new();
@@ -423,6 +479,7 @@ impl Checker {
                     let mut payload = StructInfo {
                         name: payload_name.clone(),
                         exported: false,
+                        resource: false,
                         fields: Vec::new(),
                     };
                     let mut seen_fields = BTreeSet::new();
@@ -497,6 +554,7 @@ impl Checker {
                 return_type: self.resolve_type_ref(&function.return_type),
                 errorable: function.return_is_bang,
                 builtin: false,
+                host_intrinsic: function.host_intrinsic,
                 exported: function.exported,
             };
 
@@ -625,7 +683,7 @@ impl Checker {
     fn check_function_body(&mut self, function: &FunctionDecl, signature: Signature) {
         let mut ctx = FunctionContext {
             signature: signature.clone(),
-            literal_key: None,
+            literal_keys: Vec::new(),
             scopes: vec![BTreeMap::new()],
             loop_depth: 0,
             closure_depth: 0,
@@ -1128,7 +1186,7 @@ impl Checker {
             Expression::Ident(expr) => match self.lookup_local(&expr.name) {
                 Some(binding) => {
                     if self.is_captured_local(&expr.name) {
-                        self.record_capture(&expr.name, &binding.type_);
+                        self.record_capture(&expr.name, &binding.type_, binding.closure_depth);
                     }
                     ExprType::plain(binding.type_)
                 }
@@ -1159,7 +1217,7 @@ impl Checker {
             Expression::ArrayLiteral(expr) => self.check_array_literal(expr),
             Expression::SliceLiteral(expr) => self.check_slice_literal(expr),
             Expression::MapLiteral(expr) => self.check_map_literal(expr),
-            Expression::Call(expr) => self.check_call(expr),
+            Expression::Call(expr) => self.check_call(expr, CallUse::Ordinary),
             Expression::Propagate(expr) => self.check_propagate(expr),
             Expression::Handle(expr) => self.check_handle(expr),
             Expression::FunctionLiteral(expr) => self.check_function_literal(expr),
@@ -1760,12 +1818,21 @@ impl Checker {
         ExprType::plain(type_)
     }
 
-    fn check_call(&mut self, call: &CallExpr) -> ExprType {
+    fn check_call(&mut self, call: &CallExpr, call_use: CallUse) -> ExprType {
         if let Some(result) = self.check_chan_new_call(call) {
+            if call_use == CallUse::Spawn {
+                self.diag.add(
+                    call.callee.pos(),
+                    "spawn does not currently support builtin \"chan_new\" directly; wrap it in an inline function literal",
+                );
+            }
             return result;
         }
         if let Some((name, name_pos)) = call_name(&call.callee) {
             if let Some(binding) = self.lookup_local(&name) {
+                if self.is_captured_local(&name) {
+                    self.record_capture(&name, &binding.type_, binding.closure_depth);
+                }
                 let Some(function_type) = parse_function_type(&binding.type_) else {
                     self.diag.add(name_pos, "call target must be callable");
                     return ExprType::invalid();
@@ -1780,15 +1847,37 @@ impl Checker {
                     return_type: function_type.return_type,
                     errorable: function_type.errorable,
                     builtin: false,
+                    host_intrinsic: false,
                     exported: false,
                 };
-                self.check_call_args(&sig.name.clone(), &name_pos, &sig, call, 0);
+                if call_use == CallUse::Spawn {
+                    self.diag.add(
+                        name_pos.clone(),
+                        "spawn cannot call an arbitrary function value; use a named function or an inline function literal with share-safe captures",
+                    );
+                }
+                self.check_call_args(
+                    &sig.name.clone(),
+                    &name_pos,
+                    &sig,
+                    call,
+                    0,
+                    CallUse::Ordinary,
+                );
                 return ExprType {
                     base: sig.return_type,
                     errorable: sig.errorable,
                 };
             }
             if let Some(result) = self.check_special_builtin_call(&name, &name_pos, call) {
+                if call_use == CallUse::Spawn {
+                    self.diag.add(
+                        name_pos,
+                        format!(
+                            "spawn does not currently support builtin {name:?} directly; wrap it in an inline function literal"
+                        ),
+                    );
+                }
                 return result;
             }
 
@@ -1797,8 +1886,32 @@ impl Checker {
                     .add(name_pos, format!("unknown function {:?}", name));
                 return ExprType::invalid();
             };
-            self.check_call_args(&name, &name_pos, &sig, call, 0);
-            self.register_host_error_names(&sig.full_name);
+            let arg_use = if call_use == CallUse::Spawn {
+                if sig.builtin {
+                    self.diag.add(
+                        name_pos.clone(),
+                        format!(
+                            "spawn does not currently support builtin {name:?} directly; wrap it in an inline function literal"
+                        ),
+                    );
+                    CallUse::Ordinary
+                } else if sig.host_intrinsic && sig.full_name != "fs.read_file" {
+                    self.diag.add(
+                        name_pos.clone(),
+                        format!(
+                            "spawn does not currently support host intrinsic {:?} directly; wrap it in an inline function literal",
+                            sig.full_name
+                        ),
+                    );
+                    CallUse::Ordinary
+                } else {
+                    CallUse::Spawn
+                }
+            } else {
+                CallUse::Ordinary
+            };
+            self.check_call_args(&name, &name_pos, &sig, call, 0, arg_use);
+            self.register_host_error_names(&sig);
             return ExprType {
                 base: sig.return_type,
                 errorable: sig.errorable,
@@ -1806,12 +1919,19 @@ impl Checker {
         }
 
         if let Expression::Selector(selector) = &call.callee {
+            if call_use == CallUse::Spawn {
+                self.diag.add(
+                    call.callee.pos(),
+                    "spawn does not currently support selector or method calls directly; wrap the call in an inline function literal",
+                );
+            }
             if let Some(result) = self.check_enum_positional_constructor_call(selector, call) {
                 return result;
             }
             return self.check_selector_call(selector, call);
         }
 
+        let direct_literal_key = direct_function_literal(&call.callee).map(function_literal_key);
         let callee_type = self.check_expression(&call.callee);
         if callee_type.errorable {
             self.diag
@@ -1829,9 +1949,32 @@ impl Checker {
                 return_type: function_type.return_type,
                 errorable: function_type.errorable,
                 builtin: false,
+                host_intrinsic: false,
                 exported: false,
             };
-            self.check_call_args(&sig.name.clone(), &call.callee.pos(), &sig, call, 0);
+            let arg_use = if call_use == CallUse::Spawn && direct_literal_key.is_some() {
+                CallUse::Spawn
+            } else {
+                CallUse::Ordinary
+            };
+            self.check_call_args(
+                &sig.name.clone(),
+                &call.callee.pos(),
+                &sig,
+                call,
+                0,
+                arg_use,
+            );
+            if call_use == CallUse::Spawn {
+                if let Some(key) = direct_literal_key {
+                    self.check_spawn_closure_captures(&key, call.callee.pos());
+                } else {
+                    self.diag.add(
+                        call.callee.pos(),
+                        "spawn cannot call an arbitrary function value; use a named function or an inline function literal with share-safe captures",
+                    );
+                }
+            }
             return ExprType {
                 base: sig.return_type,
                 errorable: sig.errorable,
@@ -1947,24 +2090,7 @@ impl Checker {
             self.check_expression(&stmt.call);
             return;
         };
-        if let Some((name, _)) = call_name(&call.callee)
-            && builtin_functions()
-                .get(&name)
-                .is_some_and(|sig| sig.builtin)
-            && !matches!(
-                name.as_str(),
-                "chan_new" | "chan_send" | "chan_recv" | "chan_close"
-            )
-        {
-            self.diag.add(
-                stmt.call.pos(),
-                format!(
-                    "spawn does not currently support builtin {:?} directly; wrap it in a function literal",
-                    name
-                ),
-            );
-        }
-        let result = self.check_expression(&stmt.call);
+        let result = self.check_call(call, CallUse::Spawn);
         if let Some(inner) = parse_errorable_type(&group.result_type) {
             if !result.errorable || result.base != inner {
                 self.diag.add(
@@ -1988,6 +2114,126 @@ impl Checker {
                 ),
             );
         }
+    }
+
+    fn check_spawn_closure_captures(
+        &mut self,
+        literal_key: &str,
+        position: crate::token::Position,
+    ) {
+        let captures = self
+            .info
+            .function_literals
+            .get(literal_key)
+            .map(|info| info.captures.clone())
+            .unwrap_or_default();
+        for capture in captures {
+            self.check_spawn_boundary_type(
+                position.clone(),
+                format!("spawned closure capture {:?}", capture.name),
+                &capture.type_,
+            );
+        }
+    }
+
+    fn check_spawn_boundary_type(
+        &mut self,
+        position: crate::token::Position,
+        boundary: String,
+        type_: &str,
+    ) {
+        let mut visiting = BTreeSet::new();
+        let Some(violation) = self.task_share_safety_violation(type_, &mut visiting) else {
+            return;
+        };
+        self.diag.add(
+            position,
+            format!(
+                "{boundary} cannot cross a task boundary: {}",
+                violation.describe()
+            ),
+        );
+    }
+
+    fn task_share_safety_violation(
+        &self,
+        type_: &str,
+        visiting: &mut BTreeSet<Type>,
+    ) -> Option<TaskShareSafetyViolation> {
+        if matches!(
+            type_,
+            TYPE_BOOL | TYPE_I32 | TYPE_I64 | TYPE_STR | TYPE_ERROR
+        ) {
+            return None;
+        }
+        if type_ == TYPE_INVALID {
+            return None;
+        }
+        if let Some(inner) = parse_errorable_type(type_) {
+            if inner == TYPE_VOID {
+                return None;
+            }
+            return self
+                .task_share_safety_violation(&inner, visiting)
+                .map(|violation| violation.prepend("error value"));
+        }
+        if parse_pointer_type(type_).is_some()
+            || parse_slice_type(type_).is_some()
+            || parse_map_type(type_).is_some()
+            || parse_function_type(type_).is_some()
+            || self.info.interfaces.contains_key(type_)
+        {
+            return Some(TaskShareSafetyViolation::disallowed(type_));
+        }
+        if let Some(elem_type) = parse_chan_type(type_) {
+            return self
+                .task_share_safety_violation(&elem_type, visiting)
+                .map(|violation| violation.prepend("channel element"));
+        }
+        if let Some((_, elem_type)) = parse_array_type(type_) {
+            return self
+                .task_share_safety_violation(&elem_type, visiting)
+                .map(|violation| violation.prepend("array element"));
+        }
+        if let Some(info) = self.info.structs.get(type_) {
+            if info.resource {
+                return Some(TaskShareSafetyViolation::resource(type_));
+            }
+            if !visiting.insert(type_.to_string()) {
+                return None;
+            }
+            for field in &info.fields {
+                if let Some(violation) = self.task_share_safety_violation(&field.type_, visiting) {
+                    visiting.remove(type_);
+                    return Some(violation.prepend(format!("field {:?}", field.name)));
+                }
+            }
+            visiting.remove(type_);
+            return None;
+        }
+        if let Some(info) = self.info.enums.get(type_) {
+            if !visiting.insert(type_.to_string()) {
+                return None;
+            }
+            for case in &info.cases {
+                for field in &case.fields {
+                    if let Some(violation) =
+                        self.task_share_safety_violation(&field.type_, visiting)
+                    {
+                        visiting.remove(type_);
+                        return Some(
+                            violation
+                                .prepend(format!("field {:?}", field.name))
+                                .prepend(format!("enum case {:?}", case.name)),
+                        );
+                    }
+                }
+            }
+            visiting.remove(type_);
+            return None;
+        }
+
+        Some(TaskShareSafetyViolation::disallowed(type_))
     }
 
     fn check_function_literal(&mut self, literal: &FunctionLiteralExpr) -> ExprType {
@@ -2037,6 +2283,7 @@ impl Checker {
             return_type: return_type.clone(),
             errorable: literal.return_is_bang,
             builtin: false,
+            host_intrinsic: false,
             exported: false,
         };
 
@@ -2053,7 +2300,7 @@ impl Checker {
             return ExprType::invalid();
         };
         let previous_signature = std::mem::replace(&mut ctx.signature, sig);
-        let previous_literal_key = ctx.literal_key.replace(literal_key.clone());
+        ctx.literal_keys.push(literal_key.clone());
         ctx.closure_depth += 1;
         ctx.scopes.push(BTreeMap::new());
         let literal_depth = ctx.closure_depth;
@@ -2085,7 +2332,7 @@ impl Checker {
         ctx.scopes.pop();
         ctx.closure_depth = ctx.closure_depth.saturating_sub(1);
         let literal_signature = std::mem::replace(&mut ctx.signature, previous_signature);
-        ctx.literal_key = previous_literal_key;
+        ctx.literal_keys.pop();
 
         if literal_signature.return_type != TYPE_VOID
             && !self.block_definitely_returns(&literal.body)
@@ -2151,6 +2398,7 @@ impl Checker {
                 return_type: method.return_type.clone(),
                 errorable: method.errorable,
                 builtin: false,
+                host_intrinsic: false,
                 exported: true,
             }
         } else {
@@ -2188,7 +2436,14 @@ impl Checker {
             return ExprType::invalid();
         }
 
-        self.check_call_args(&selector.name, &selector.name_pos, &sig, call, 1);
+        self.check_call_args(
+            &selector.name,
+            &selector.name_pos,
+            &sig,
+            call,
+            1,
+            CallUse::Ordinary,
+        );
         ExprType {
             base: sig.return_type,
             errorable: sig.errorable,
@@ -2501,6 +2756,7 @@ impl Checker {
         sig: &Signature,
         call: &CallExpr,
         arg_offset: usize,
+        call_use: CallUse,
     ) {
         let want = sig.params.len().saturating_sub(arg_offset);
         if call.args.len() != want {
@@ -2545,6 +2801,14 @@ impl Checker {
                         diagnostic_type_name(param_type),
                         diagnostic_type_name(&arg_type.base)
                     ),
+                );
+                continue;
+            }
+            if call_use == CallUse::Spawn {
+                self.check_spawn_boundary_type(
+                    arg.pos(),
+                    format!("spawn argument {}", idx + 1),
+                    param_type,
                 );
             }
         }
@@ -3040,7 +3304,7 @@ impl Checker {
                 if !self.is_captured_local(&expr.name) {
                     return None;
                 }
-                self.record_capture(&expr.name, &binding.type_);
+                self.record_capture(&expr.name, &binding.type_, binding.closure_depth);
                 Some(expr.name.clone())
             }
             Expression::Group(expr) => self.address_root_captured_outer_local(&expr.inner),
@@ -3132,48 +3396,42 @@ impl Checker {
             .is_some_and(|ctx| ctx.signature.errorable || ctx.signature.return_type == TYPE_ERROR)
     }
 
-    fn record_capture(&mut self, name: &str, type_: &str) {
-        let Some(key) = self
+    fn record_capture(&mut self, name: &str, type_: &str, binding_depth: usize) {
+        let keys = self
             .current
             .as_ref()
-            .and_then(|ctx| ctx.literal_key.clone())
-        else {
-            return;
-        };
-        let info = self
-            .info
-            .function_literals
-            .entry(key)
-            .or_insert_with(|| FunctionLiteralInfo {
-                signature: Signature {
-                    name: "function value".to_string(),
-                    package: String::new(),
-                    full_name: "function value".to_string(),
-                    method: false,
-                    receiver: String::new(),
-                    params: Vec::new(),
-                    return_type: TYPE_INVALID.to_string(),
-                    errorable: false,
-                    builtin: false,
-                    exported: false,
-                },
-                captures: Vec::new(),
+            .map(|ctx| {
+                ctx.literal_keys
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| idx + 1 > binding_depth)
+                    .map(|(_, key)| key.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for key in keys {
+            let Some(info) = self.info.function_literals.get_mut(&key) else {
+                continue;
+            };
+            if info.captures.iter().any(|capture| capture.name == name) {
+                continue;
+            }
+            info.captures.push(CaptureInfo {
+                name: name.to_string(),
+                type_: type_.to_string(),
             });
-        if info.captures.iter().any(|capture| capture.name == name) {
-            return;
         }
-        info.captures.push(CaptureInfo {
-            name: name.to_string(),
-            type_: type_.to_string(),
-        });
     }
 
     fn record_error(&mut self, name: &str) {
         self.info.error_codes.entry(name.to_string()).or_insert(0);
     }
 
-    fn register_host_error_names(&mut self, full_name: &str) {
-        if is_fs_host_intrinsic(full_name) {
+    fn register_host_error_names(&mut self, signature: &Signature) {
+        if !signature.host_intrinsic {
+            return;
+        }
+        if is_fs_host_intrinsic(&signature.full_name) {
             for name in [
                 "AlreadyExists",
                 "Closed",
@@ -3188,14 +3446,14 @@ impl Checker {
             return;
         }
 
-        if is_process_env_host_intrinsic(full_name) {
+        if is_process_env_host_intrinsic(&signature.full_name) {
             for name in ["IO", "InvalidArgument", "NotFound", "PermissionDenied"] {
                 self.record_error(name);
             }
             return;
         }
 
-        if is_net_host_intrinsic(full_name) {
+        if is_net_host_intrinsic(&signature.full_name) {
             for name in [
                 "AddrInUse",
                 "Closed",
@@ -3587,6 +3845,7 @@ fn builtin_functions() -> BTreeMap<String, Signature> {
                 return_type: return_type.to_string(),
                 errorable,
                 builtin: true,
+                host_intrinsic: false,
                 exported: false,
             },
         )
@@ -3745,10 +4004,15 @@ fn format_function_type(params: &[Type], return_type: &str, errorable: bool) -> 
 }
 
 pub(crate) fn function_literal_key(literal: &FunctionLiteralExpr) -> String {
-    format!(
+    let source_key = format!(
         "{}:{}:{}",
         literal.fn_pos.file, literal.fn_pos.line, literal.fn_pos.column
-    )
+    );
+    if literal.enclosing_function.is_empty() {
+        source_key
+    } else {
+        format!("{}@{source_key}", literal.enclosing_function)
+    }
 }
 
 fn format_expr_type(expr_type: &ExprType) -> Type {
@@ -3867,6 +4131,14 @@ fn function_signature_key(function: &FunctionDecl) -> String {
 fn call_name(expr: &Expression) -> Option<(String, crate::token::Position)> {
     match expr {
         Expression::Ident(expr) => Some((expr.name.clone(), expr.name_pos.clone())),
+        _ => None,
+    }
+}
+
+fn direct_function_literal(expr: &Expression) -> Option<&FunctionLiteralExpr> {
+    match expr {
+        Expression::FunctionLiteral(literal) => Some(literal),
+        Expression::Group(group) => direct_function_literal(&group.inner),
         _ => None,
     }
 }
@@ -4806,9 +5078,272 @@ fn main() i32 {
         );
         assert_has(
             &diagnostics,
-            "spawn does not currently support builtin \"len\" directly; wrap it in a function literal",
+            "spawn does not currently support builtin \"len\" directly; wrap it in an inline function literal",
         );
         assert_has(&diagnostics, "break cannot exit a taskgroup body");
+    }
+
+    #[test]
+    fn rejects_non_share_safe_spawn_arguments_transitively() {
+        let program = parse_ok(
+            r#"
+package main
+
+interface Reader {
+    read() i32
+}
+
+struct ReaderImpl {
+    value i32
+}
+
+fn (reader ReaderImpl) read() i32 {
+    return reader.value
+}
+
+struct WithSlice {
+    items []i32
+}
+
+enum Choice {
+    Safe { value i32 }
+    Unsafe { values map[str]i32 }
+}
+
+struct Box[T] {
+    value T
+}
+
+fn take_pointer(value *i32) void { return }
+fn take_slice(value []i32) void { return }
+fn take_map(value map[str]i32) void { return }
+fn take_interface(value Reader) void { return }
+fn take_function(value fn() void) void { return }
+fn take_array(value [1][]i32) void { return }
+fn take_struct(value WithSlice) void { return }
+fn take_enum(value Choice) void { return }
+fn take_box(value Box[map[str]i32]) void { return }
+fn take_channel(value chan[WithSlice]) void { return }
+
+fn main() i32 {
+    number := 1
+    items := []i32{1}
+    lookup := map[str]i32{"a": 1}
+    callback := fn() void { return }
+    reader := ReaderImpl{value: 1}
+    channel := chan_new[WithSlice](1)
+
+    taskgroup []void {
+        spawn take_pointer(&number)
+        spawn take_slice(items)
+        spawn take_map(lookup)
+        spawn take_interface(reader)
+        spawn take_function(callback)
+        spawn take_array([1][]i32{items})
+        spawn take_struct(WithSlice{items: items})
+        spawn take_enum(Choice.Safe{value: 1})
+        spawn take_box(Box[map[str]i32]{value: lookup})
+        spawn take_channel(channel)
+    }
+
+    chan_close(channel)
+    return 0
+}
+"#,
+        );
+        let (program, diagnostics) = monomorphize_program(&program);
+        assert_eq!(diagnostics, Vec::new());
+
+        let (_info, diagnostics) = check_program(&program);
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains("cannot cross a task boundary"))
+                .count(),
+            10,
+            "unexpected diagnostics: {diagnostics:?}",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: type \"*i32\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: type \"[]i32\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: type \"map[str]i32\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: type \"Reader\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: type \"fn() void\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: array element has non-share-safe type \"[]i32\"",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: field \"items\" has non-share-safe type \"[]i32\"",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: enum case \"Unsafe\" -> field \"values\" has non-share-safe type \"map[str]i32\"",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: field \"value\" has non-share-safe type \"map[str]i32\"",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: channel element -> field \"items\" has non-share-safe type \"[]i32\"",
+        );
+    }
+
+    #[test]
+    fn keeps_spawn_capture_types_separate_across_generic_instantiations() {
+        let program = parse_ok(
+            r#"
+package main
+
+fn launch[T](value T) i32 {
+    results := taskgroup []i32 {
+        spawn fn() i32 {
+            value
+            return 1
+        }()
+    }
+    return results[0]
+}
+
+fn main() i32 {
+    safe := launch[i32](1)
+    unsafe := launch[[]i32]([]i32{1})
+    return safe + unsafe
+}
+"#,
+        );
+        let (program, diagnostics) = monomorphize_program(&program);
+        assert_eq!(diagnostics, Vec::new());
+
+        let (info, diagnostics) = check_program(&program);
+
+        assert_has(
+            &diagnostics,
+            "spawned closure capture \"value\" cannot cross a task boundary: type \"[]i32\" is not share-safe",
+        );
+        let mut capture_types = info
+            .function_literals
+            .values()
+            .flat_map(|literal| literal.captures.iter())
+            .filter(|capture| capture.name == "value")
+            .map(|capture| capture.type_.as_str())
+            .collect::<Vec<_>>();
+        capture_types.sort_unstable();
+        assert_eq!(capture_types, vec!["[]i32", "i32"]);
+    }
+
+    #[test]
+    fn rejects_unsafe_captures_and_unsupported_spawn_targets() {
+        let program = parse_ok(
+            r#"
+package main
+
+struct Worker {
+    value i32
+}
+
+fn (worker Worker) run() i32 {
+    return worker.value
+}
+
+fn main() i32 {
+    items := []i32{1}
+    callable := fn(value i32) i32 {
+        return value
+    }
+    callback := fn() i32 {
+        return 1
+    }
+    worker := Worker{value: 1}
+    channel := chan_new[i32](1)
+
+    captured := taskgroup []i32 {
+        spawn fn() i32 {
+            return items[0]
+        }()
+    }
+
+    nested_capture := taskgroup []i32 {
+        spawn fn() i32 {
+            read := fn() i32 {
+                return items[0]
+            }
+            return read()
+        }()
+    }
+
+    function_capture := taskgroup []i32 {
+        spawn fn() i32 {
+            return callback()
+        }()
+    }
+
+    opaque := taskgroup []i32 {
+        spawn callable(1)
+    }
+
+    method := taskgroup []i32 {
+        spawn worker.run()
+    }
+
+    taskgroup []void {
+        spawn chan_close(channel)
+    }
+
+    return len(captured) + len(nested_capture) + len(function_capture) + len(opaque) + len(method)
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&program);
+
+        assert_has(
+            &diagnostics,
+            "spawned closure capture \"items\" cannot cross a task boundary: type \"[]i32\" is not share-safe",
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic
+                    .message
+                    .starts_with("spawned closure capture \"items\" cannot cross a task boundary"))
+                .count(),
+            2,
+            "unexpected diagnostics: {diagnostics:?}",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn cannot call an arbitrary function value; use a named function or an inline function literal with share-safe captures",
+        );
+        assert_has(
+            &diagnostics,
+            "spawned closure capture \"callback\" cannot cross a task boundary: type \"fn() i32\" is not share-safe",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn does not currently support selector or method calls directly; wrap the call in an inline function literal",
+        );
+        assert_has(
+            &diagnostics,
+            "spawn does not currently support builtin \"chan_close\" directly; wrap it in an inline function literal",
+        );
     }
 
     #[test]
