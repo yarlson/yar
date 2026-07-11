@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 pub const MANIFEST_FILE: &str = "yar.toml";
 pub const LOCK_FILE: &str = "yar.lock";
 pub const LOCK_VERSION: u32 = 1;
+pub const STDLIB_IMPORT_ROOT: &str = "std";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -509,6 +510,10 @@ pub fn valid_alias(name: &str) -> bool {
     chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
+pub fn valid_dependency_alias(name: &str) -> bool {
+    name != STDLIB_IMPORT_ROOT && valid_alias(name)
+}
+
 fn validate_manifest(manifest: Manifest) -> Result<Manifest, ManifestError> {
     if manifest.package.name.is_empty() {
         return Err(invalid("yar.toml: [package] name is required"));
@@ -520,7 +525,12 @@ fn validate_manifest(manifest: Manifest) -> Result<Manifest, ManifestError> {
         )));
     }
     for (alias, dependency) in &manifest.dependencies {
-        if !valid_alias(alias) {
+        if alias == STDLIB_IMPORT_ROOT {
+            return Err(invalid(format!(
+                "yar.toml: dependency alias {alias:?} is reserved for the standard library"
+            )));
+        }
+        if !valid_dependency_alias(alias) {
             return Err(invalid(format!(
                 "yar.toml: invalid dependency alias {alias:?}"
             )));
@@ -550,7 +560,13 @@ fn validate_lock_entry(index: usize, entry: &LockEntry) -> Result<(), ManifestEr
     } else {
         format!("package {:?}", entry.name)
     };
-    if !valid_alias(&entry.name) {
+    if entry.name == STDLIB_IMPORT_ROOT {
+        return Err(invalid(format!(
+            "yar.lock: dependency alias {:?} is reserved for the standard library",
+            entry.name
+        )));
+    }
+    if !valid_dependency_alias(&entry.name) {
         return Err(invalid(format!(
             "yar.lock: {label} has invalid name {:?}",
             entry.name
@@ -569,7 +585,13 @@ fn validate_lock_entry(index: usize, entry: &LockEntry) -> Result<(), ManifestEr
     }
     let mut dependencies = BTreeSet::new();
     for dependency in &entry.dependencies {
-        if !valid_alias(&dependency.name) {
+        if dependency.name == STDLIB_IMPORT_ROOT {
+            return Err(invalid(format!(
+                "yar.lock: dependency alias {:?} is reserved for the standard library",
+                dependency.name
+            )));
+        }
+        if !valid_dependency_alias(&dependency.name) {
             return Err(invalid(format!(
                 "yar.lock: {label} has invalid dependency name {:?}",
                 dependency.name
@@ -1190,6 +1212,66 @@ name = "myapp"
         ] {
             assert_eq!(valid_alias(name), want, "{name}");
         }
+        assert!(valid_dependency_alias("http"));
+        assert!(!valid_dependency_alias(STDLIB_IMPORT_ROOT));
+    }
+
+    #[test]
+    fn rejects_reserved_std_dependency_aliases() {
+        let manifest_error = parse_manifest(
+            r#"[package]
+name = "myapp"
+
+[dependencies]
+std = { path = "../stdlib-shadow" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            manifest_error.to_string(),
+            "yar.toml: dependency alias \"std\" is reserved for the standard library"
+        );
+
+        let commit = "1".repeat(40);
+        let hash = format!("sha256:{}", "a".repeat(64));
+        let lock_error = parse_lock_file(&format!(
+            r#"version = 1
+
+[[package]]
+name = "std"
+git = "https://example.com/shadow.git"
+tag = "v1"
+commit = "{commit}"
+hash = "{hash}"
+"#,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            lock_error.to_string(),
+            "yar.lock: dependency alias \"std\" is reserved for the standard library"
+        );
+
+        let edge_error = parse_lock_file(&format!(
+            r#"version = 1
+
+[[package]]
+name = "parent"
+git = "https://example.com/parent.git"
+tag = "v1"
+commit = "{commit}"
+hash = "{hash}"
+
+[[package.dependencies]]
+name = "std"
+git = "https://example.com/shadow.git"
+tag = "v1"
+"#,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            edge_error.to_string(),
+            "yar.lock: dependency alias \"std\" is reserved for the standard library"
+        );
     }
 
     #[test]

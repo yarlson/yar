@@ -26,7 +26,7 @@ and the user-facing API idiomatic.
 ### Valid examples
 
 ```
-import "net"
+import "std/net"
 
 // TCP echo server
 fn main() !i32 {
@@ -45,7 +45,7 @@ fn main() !i32 {
 ```
 
 ```
-import "net"
+import "std/net"
 
 // TCP client
 fn main() !i32 {
@@ -59,7 +59,7 @@ fn main() !i32 {
 ```
 
 ```
-import "net"
+import "std/net"
 
 // Port 0 with address discovery
 fn main() !i32 {
@@ -128,7 +128,7 @@ All functions that can fail return errorable types (`!i64`, `!str`, `!i32`,
 ## 6. Grammar / Parsing Shape
 
 No language grammar changes. The `net` package is a stdlib package imported with
-`import "net"`. All functions are called with qualified names (`net.listen`,
+`import "std/net"`. All functions are called with qualified names (`net.listen`,
 `net.read`, etc.).
 
 ## 7. Lowering / Implementation Model

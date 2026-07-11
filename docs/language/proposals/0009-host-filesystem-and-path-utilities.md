@@ -57,8 +57,8 @@ them.
 ### Valid examples
 
 ```
-import "fs"
-import "path"
+import "std/fs"
+import "std/path"
 
 fn load_source(root str, pkg str, file str) !str {
     full := path.join([]str{root, pkg, file})
@@ -67,8 +67,8 @@ fn load_source(root str, pkg str, file str) !str {
 ```
 
 ```
-import "fs"
-import "path"
+import "std/fs"
+import "std/path"
 
 fn collect_yar_files(dir str) ![]str {
     entries := fs.read_dir(dir)?
@@ -87,8 +87,8 @@ fn collect_yar_files(dir str) ![]str {
 ```
 
 ```
-import "fs"
-import "path"
+import "std/fs"
+import "std/path"
 
 fn emit_ir(out_dir str, ir str) !void {
     fs.mkdir_all(out_dir)?
@@ -331,9 +331,6 @@ boundary.
 - What is the smallest low-level host primitive set that still lets Yar
   implement `fs.mkdir_all` and `fs.remove_all` without pushing that logic back
   into the runtime?
-- Should local packages be allowed to shadow host stdlib package names such as
-  `fs` and `path`, or should some package names be reserved?
-
 ## 13. Decision
 
 Proposed.

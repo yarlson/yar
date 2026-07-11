@@ -1,7 +1,7 @@
 package main
 
-import "fs"
-import "path"
+import "std/fs"
+import "std/path"
 
 fn main() !i32 {
 	root := fs.temp_dir("yar-concurrency-fs")?

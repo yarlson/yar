@@ -1,7 +1,7 @@
 package main
 
-import "utf8"
-import "strings"
+import "std/utf8"
+import "std/strings"
 
 fn make2(b0 i32, b1 i32) str {
     return strings.from_byte(b0) + strings.from_byte(b1)

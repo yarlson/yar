@@ -41,7 +41,7 @@ a reliable test harness is needed to validate compiler and stdlib changes.
 
 ```
 // math_test.yar
-import "testing"
+import "std/testing"
 
 fn test_addition(t *testing.T) void {
     testing.equal[i32](t, 1 + 1, 2)

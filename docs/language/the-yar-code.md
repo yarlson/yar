@@ -36,8 +36,8 @@ aliases, and no injected names. When you read `strings.contains(s, sub)`, you
 know where `contains` lives.
 
 ```
-import "strings"
-import "fs"
+import "std/strings"
+import "std/fs"
 
 ok := strings.has_prefix(name, "test_")
 data := fs.read_file(name)?
@@ -170,13 +170,13 @@ fn make_adder(base i32) fn(i32) i32 {
 **XII. Use the stdlib before writing your own.**
 The embedded standard library covers strings, UTF-8, conversions, sorting,
 paths, filesystem, process execution, environment, and stderr. Stdlib packages
-are imported like any other package, and local packages shadow them if you need
-to replace one.
+use compiler-owned `std/...` paths and cannot be shadowed. Same-named bare user
+packages remain separate packages.
 
 ```
-import "strings"
-import "sort"
-import "conv"
+import "std/strings"
+import "std/sort"
+import "std/conv"
 
 parts := []str{"c", "a", "b"}
 sort.strings(parts)

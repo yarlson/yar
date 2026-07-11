@@ -129,6 +129,69 @@ fn main() i32 {
 }
 
 #[test]
+fn bare_stdlib_migration_precedes_an_undeclared_transitive_alias() {
+    let fixture = TestProject::new("stdlib-migration-transitive-alias");
+    let parent_git = "https://example.com/parent.git";
+    let strings_git = "https://example.com/strings.git";
+    fixture.write(
+        "project/yar.toml",
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+"#,
+    );
+    fixture.write(
+        "project/main.yar",
+        r#"package main
+
+import "strings"
+
+fn main() i32 {
+    return 0
+}
+"#,
+    );
+
+    let mut parent = locked_entry(
+        "parent",
+        parent_git,
+        "1111111111111111111111111111111111111111",
+        'a',
+    );
+    parent.dependencies.push(LockDependency {
+        name: "strings".to_owned(),
+        git: strings_git.to_owned(),
+        tag: "v1".to_owned(),
+        ..LockDependency::default()
+    });
+    let strings = locked_entry(
+        "strings",
+        strings_git,
+        "2222222222222222222222222222222222222222",
+        'b',
+    );
+    fixture.write("project/yar.lock", &write_lock_file(&[parent, strings]));
+
+    let cache = fixture.path("cache");
+    let failure = compile_rejection_in_isolated_process(&fixture.path("project/main.yar"), &cache);
+
+    assert!(
+        failure
+            .contains("standard library package \"strings\" must be imported as \"std/strings\""),
+        "unexpected rejection: {failure}"
+    );
+    assert!(
+        !failure.contains("not declared")
+            && !failure.contains("cache")
+            && !failure.contains("hash mismatch"),
+        "migration diagnostic inspected or exposed the transitive dependency: {failure}"
+    );
+    assert!(!cache.exists(), "migration diagnostic created a cache");
+}
+
+#[test]
 fn same_git_commit_with_conflicting_hashes_fails_package_index_construction() {
     let fixture = TestProject::new("conflicting-git-source-hashes");
     let git = "https://example.com/shared.git";
@@ -237,7 +300,7 @@ fn stdlib_internal_import_coexists_with_root_shadow() {
         "main.yar",
         r#"package main
 
-import "http"
+import "std/http"
 import "net"
 
 fn main() i32 {

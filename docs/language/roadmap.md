@@ -82,8 +82,8 @@ Git-based dependency management is now implemented:
 - git-based fetching to a global cache with integrity verification
 - transitive dependency resolution with conflict detection
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
-- compiler integration: same-origin lookup, owner-declared aliases, sealed
-  stdlib fallback, and origin-safe package identities
+- compiler integration: reserved `std/...` lookup, same-origin packages,
+  owner-declared aliases, and origin-safe package identities
 - lock v1 retains global alias/source uniqueness even though visibility is
   owner-scoped
 

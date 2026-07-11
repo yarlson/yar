@@ -131,8 +131,8 @@ pub fn (c Conn) set_write_deadline(millis i32) !void
 ```yar
 package main
 
-import "fs"
-import "io"
+import "std/fs"
+import "std/io"
 
 fn main() !i32 {
     src := fs.open_read("input.txt")?

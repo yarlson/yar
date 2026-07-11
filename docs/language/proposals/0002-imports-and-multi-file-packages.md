@@ -124,15 +124,14 @@ dependency, one pinned git source, or embedded stdlib. Import text and
 dependency aliases are bindings owned by an origin; they are not package
 identity.
 
-For each non-stdlib importer, resolution checks:
-
-1. the importer's same-origin package tree, including its self alias
-2. aliases declared directly by that origin
-3. embedded stdlib
-
-Imports originating in embedded stdlib resolve only within the stdlib origin.
-The final import-path segment is the source qualifier. Two distinct imports in
-one package with the same final segment are rejected as ambiguous.
+Resolution checks the reserved `std/<package>` namespace first; those paths
+resolve only within the embedded stdlib origin. All other imports check the
+importer's same-origin package tree, including its self alias, followed by
+aliases declared directly by that origin, then fail. Dependency aliases cannot
+be named `std`. An unresolved bare name matching a known stdlib package gets a
+migration diagnostic naming its `std/...` path. The final import-path segment
+is the source qualifier. Two distinct imports in one package with the same
+final segment are rejected as ambiguous.
 
 The initial source syntax intentionally avoids import aliases, dot imports,
 wildcard imports, re-exports, and implicit visibility.

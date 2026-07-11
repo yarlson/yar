@@ -1,6 +1,6 @@
 package main
 
-import "strings"
+import "std/strings"
 
 fn main() i32 {
     if !strings.contains("hello world", "world") {

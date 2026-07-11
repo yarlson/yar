@@ -1,7 +1,7 @@
 package main
 
-import "strings"
-import "conv"
+import "std/strings"
+import "std/conv"
 
 fn test_parse_error_empty() bool {
     v := strings.parse_i64("") or |err| {

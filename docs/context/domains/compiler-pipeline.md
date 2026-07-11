@@ -71,8 +71,7 @@
   helpers used by heap-backed features. The current Rust runtime leaves that GC
   hook inactive and retains allocations until process exit.
 - `stdlib/packages` contains the standard library written in Yar. The Rust
-  package loader embeds those files and uses them as the final fallback after
-  local and dependency imports.
+  package loader embeds those files behind the reserved `std/...` namespace.
 
 ## Stage Contracts
 
@@ -80,8 +79,8 @@
 - Diagnostics stop code generation but are reported as Yar diagnostics rather
   than host-language errors.
 - `Compile` works on one already-loaded source string. `CompilePath` is the
-  path-based entrypoint that supports packages, imports, stdlib fallback, and
-  export validation.
+  path-based entrypoint that supports packages, imports, reserved stdlib
+  routing, and export validation.
 - The loader sorts file names inside each package directory, requires every
   file in a package directory to share the same package name, and rejects
   package directories without `.yar` files.
@@ -91,8 +90,9 @@
 - Imported package names must match the final segment of the import path, and
   `package main` cannot be imported.
 - Distinct imports with the same final segment are rejected because that segment is the source qualifier.
-- Resolution checks packages in the importer origin, aliases declared by that
-  origin, then embedded stdlib. Stdlib-origin imports stay inside stdlib.
+- `std/<package>` resolves only to embedded stdlib before source or alias
+  lookup. Other paths check packages in the importer origin, then aliases
+  declared by that origin. Stdlib-origin imports also use `std/...`.
 - Manifest roots and the versioned lock graph are reconciled before dependency
   cache access. Duplicate aliases or edges, missing nodes, source/ref
   mismatches, dependency cycles, and unreachable nodes stop package loading.
@@ -100,9 +100,9 @@
   is parsed. The manifest's git dependencies must then match the recorded lock
   edges. Unused and locally shadowed lock entries are not opened. Compilation
   never repairs a missing or corrupt cache.
-- A selected dependency must exist and does not fall through to a same-named
-  embedded stdlib package. Lock v1 retains global alias/source uniqueness even
-  though alias visibility is owner-scoped.
+- A selected dependency must exist and receives no stdlib substitution.
+  Unresolved bare stdlib names receive a migration diagnostic. Lock v1 retains
+  global alias/source uniqueness even though alias visibility is owner-scoped.
 - Code generation depends on `checker.Info` for expression types, function
   signatures, struct metadata, local types, and the program-wide error-code
   table.

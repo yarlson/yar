@@ -1,7 +1,7 @@
 use std::{error::Error, fmt, path::Path};
 
 use crate::{
-    ast::{FunctionDecl, PackageGraph, PackageImport, Program, TypeRefKind},
+    ast::{FunctionDecl, PackageGraph, PackageImport, Program, SourceId, TypeRefKind},
     checker::{Info, check_program},
     codegen::{CodegenError, emit_llvm_with_options},
     diag::Diagnostic,
@@ -10,6 +10,8 @@ use crate::{
     package::{LoadError, load_package_graph},
     parser::parse_file,
 };
+
+const TESTING_IMPORT_PATH: &str = "std/testing";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompileOptions {
@@ -118,6 +120,9 @@ fn discover_test_functions(graph: &PackageGraph) -> Vec<TestFunction> {
     let Some(entry) = graph.packages.get(&graph.entry) else {
         return Vec::new();
     };
+    if !entry.imports.iter().any(is_testing_import) {
+        return Vec::new();
+    }
 
     let mut tests = Vec::new();
     for file in &entry.files {
@@ -133,6 +138,12 @@ fn discover_test_functions(graph: &PackageGraph) -> Vec<TestFunction> {
         }
     }
     tests
+}
+
+fn is_testing_import(import: &PackageImport) -> bool {
+    import.path == TESTING_IMPORT_PATH
+        && matches!(&import.target.source, SourceId::Stdlib)
+        && import.target.subpath == "testing"
 }
 
 fn is_test_file(program: &Program) -> bool {
@@ -174,7 +185,7 @@ fn generate_test_main(package_name: &str, tests: &[TestFunction]) -> String {
     src.push_str("package ");
     src.push_str(package_name);
     src.push_str("\n\n");
-    src.push_str("import \"testing\"\n\n");
+    src.push_str("import \"std/testing\"\n\n");
     src.push_str("fn main() i32 {\n");
     src.push_str("    passed := 0\n");
     src.push_str("    failed := 0\n\n");
@@ -244,7 +255,7 @@ fn inject_test_runner(graph: &mut PackageGraph) -> Result<(), CompileError> {
             entry_package
                 .imports
                 .iter()
-                .find(|import| import.path == decl.path)
+                .find(|import| import.path == decl.path && is_testing_import(import))
                 .map(|import| PackageImport {
                     name: import.name.clone(),
                     path: decl.path.clone(),
@@ -343,6 +354,43 @@ mod tests {
     }
 
     #[test]
+    fn does_not_discover_tests_bound_to_a_local_testing_package() {
+        let root = temp_dir("yar-rust-local-testing-package");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+        write_source(
+            &root.join("main_test.yar"),
+            r#"package main
+
+import "testing"
+
+fn test_local(t *testing.T) void {
+    return
+}
+"#,
+        );
+        write_source(
+            &root.join("testing/testing.yar"),
+            r#"package testing
+
+pub struct T {}
+"#,
+        );
+
+        let (graph, diagnostics) = load_package_graph(&root, true).unwrap();
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(discover_test_functions(&graph).is_empty());
+    }
+
+    #[test]
     fn generates_test_runner_source() {
         let source = generate_test_main(
             "main",
@@ -357,7 +405,7 @@ mod tests {
         );
 
         assert!(source.contains("package main"));
-        assert!(source.contains("import \"testing\""));
+        assert!(source.contains("import \"std/testing\""));
         assert!(source.contains("test_add(t0)"));
         assert!(source.contains("test_sub(t1)"));
     }
@@ -451,7 +499,7 @@ fn hidden() i32 {
             &root.join("main.yar"),
             r#"package main
 
-import "fs"
+import "std/fs"
 
 fn consume(file fs.File) void {
     return
@@ -541,7 +589,7 @@ pub fn read_file(value i32) i32 {
             &root.join("main.yar"),
             r#"package main
 
-import "fs"
+import "std/fs"
 
 fn main() i32 {
     taskgroup []!void {

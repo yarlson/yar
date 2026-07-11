@@ -158,7 +158,7 @@ fn worker(jobs chan[i32], results chan[i32]) void {
 
 ```
 // Error handling: each task result is independently success or error
-import "fs"
+import "std/fs"
 
 fn main() i32 {
     results := taskgroup []!str {

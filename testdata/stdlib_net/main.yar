@@ -1,6 +1,6 @@
 package main
 
-import "net"
+import "std/net"
 
 fn main() !i32 {
     ln := net.listen("127.0.0.1", 0)?

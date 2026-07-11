@@ -1,6 +1,6 @@
 package io
 
-import "conv"
+import "std/conv"
 
 pub interface Reader {
     read(max_bytes i32) !str

@@ -15,7 +15,7 @@ Read [The Yar Code](docs/language/the-yar-code.md) before you write a line.
 ```
 package main
 
-import "strings"
+import "std/strings"
 
 fn greet(name str) !void {
     if strings.contains(name, " ") {
@@ -256,7 +256,7 @@ Test files end in `_test.yar`. Test functions take `*testing.T` and return `void
 ```
 package main
 
-import "testing"
+import "std/testing"
 
 fn add(a i32, b i32) i32 {
     return a + b
@@ -296,10 +296,11 @@ http = { git = "https://github.com/user/yar-http.git", tag = "v0.3.1" }
 local_lib = { path = "../my-local-lib" }
 ```
 
-The alias becomes the first import-path segment: `import "http"`. Imports are
-resolved in the importing source's origin: same-origin packages first, then
-aliases declared directly by that origin, then embedded stdlib. Imports inside
-stdlib are sealed to the stdlib origin.
+The alias becomes the first import-path segment: `import "http"`. The `std`
+segment is reserved for compiler-owned packages such as `std/http`; dependency
+aliases cannot use it. `std/...` imports resolve only to the embedded standard
+library. Other imports resolve within the importing source's origin, checking
+same-origin packages before aliases declared directly by that origin.
 
 Compiler package identity is `PackageId = (source origin, source-relative
 subpath)`, not the import text. Equal logical paths from different origins

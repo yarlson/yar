@@ -15,8 +15,8 @@ runtime intrinsic.
 ## 2. User-Facing API
 
 ```
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 pub struct Request {
     method str
@@ -40,8 +40,8 @@ Example:
 ```yar
 package main
 
-import "http"
-import "net"
+import "std/http"
+import "std/net"
 
 fn handle(req http.Request) !http.Response {
     if req.path == "/health" {
