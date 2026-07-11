@@ -18,7 +18,9 @@
   reachable aliases, and distinct imports with the same final-segment
   qualifier.
 - Lowering follows each import's resolved `PackageId` and gives declarations
-  origin-safe canonical names before monomorphization, checking, and codegen.
+  origin-safe canonical names before monomorphization and checking. Those
+  frontend stages produce a `CheckedProgram`; LLVM generation is an explicit
+  downstream step for code-producing commands.
 
 ## `check`
 
@@ -27,11 +29,11 @@
 - Resolves the named entry file or package directory on disk.
 - When a root manifest is selected, builds origin-scoped dependency bindings
   from it, path-dependency manifests, and reconciled lock child edges.
-- Runs package loading, lowering, checking, and IR generation through
-  `yar_compiler::compile_path`.
+- Runs package loading, lowering, monomorphization, and semantic checking
+  through `yar_compiler::check_path`, then stops at `CheckedProgram`.
 - Prints formatted diagnostics to stderr and exits non-zero when parsing or
   checking fails.
-- Produces no IR or executable artifact.
+- Does not invoke LLVM generation or produce an executable artifact.
 
 ## `emit-ir`
 
@@ -44,10 +46,10 @@
   `env`, `stdio`, and `net` host-intrinsic runtime calls, pointer operations,
   enum match lowering, and stdlib-internal builtins.
 - Resolves the build target from `YAR_OS` and `YAR_ARCH` environment variables
-  using `compiler.ResolveTarget`, falling back to the host platform when neither
-  is set.
-- Runs the same package loading, lowering, checking, and code-generation stages
-  as `check`, passing the resolved target triple into code generation.
+  through the CLI target resolver, falling back to the host platform when
+  neither is set.
+- Runs the same checked-program frontend as `check`, then explicitly emits LLVM
+  with the resolved target triple.
 - When a target is resolved, the generated LLVM IR includes a `target triple`
   directive.
 - Writes the generated LLVM IR text to stdout on success.
@@ -67,7 +69,8 @@
   `clang`. Supported targets: `darwin/amd64`, `darwin/arm64`, `linux/amd64`,
   `linux/arm64`, `windows/amd64`. The Windows target uses the GNU triple
   `x86_64-pc-windows-gnu`, matching the Rust release runtime archive.
-- Re-runs `CompilePath` before native build and aborts on diagnostics.
+- Runs `yar_compiler::compile_path`, which composes the checked-program frontend
+  with LLVM generation, and aborts on diagnostics or code-generation failure.
 - Emits `target triple` in the generated LLVM IR when a target is resolved.
 - Creates a temporary build directory.
 - Writes generated IR to `main.ll`.

@@ -9,6 +9,16 @@ Entries should be short and clear.
 
 ## Accepted
 
+### Checking and code generation are separate stages
+
+Status: accepted
+
+Package loading, lowering, monomorphization, and semantic checking produce a
+`CheckedProgram` that owns the program and its matching checker metadata. LLVM
+generation accepts that paired value explicitly. The `check` command stops at
+the checked-program boundary; commands that need IR or native code continue
+through code generation.
+
 ### Errors are values
 
 Status: accepted

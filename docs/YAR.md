@@ -19,8 +19,10 @@ updated.
 Current implementation note: the shipped CLI is the Rust 2024 `yar` binary from
 `crates/yar-cli`. It supports `check`, `emit-ir`, `build`, host `run`, host
 `test`, `init`, and dependency manifest, lock, fetch, and update commands. The
-Rust compiler path enforces package export visibility for imported declarations
-and exported API types, and its LLVM emitter has clang-accepted coverage for
+Rust compiler path produces a checked program after semantic analysis; `check`
+stops there, while code-producing commands explicitly invoke LLVM emission.
+It enforces package export visibility for imported declarations and exported
+API types, and its LLVM emitter has clang-accepted coverage for
 every current `testdata/**/main.yar` entry program, including host-backed `fs`,
 `process`, `env`, `stdio`, and `net` runtime calls. Native paths link a Rust
 runtime archive resolved from `YAR_RUNTIME_ARCHIVE`, a

@@ -2,8 +2,9 @@
 
 - The repository is organized around a Rust 2024 `yar` CLI and Rust compiler
   crates.
-- Compilation is staged as package loading, package-graph lowering, semantic
-  checking, LLVM IR generation, and optional native linking.
+- Package loading, graph lowering, monomorphization, and semantic checking
+  produce a checked program. LLVM generation is an explicit downstream stage
+  used only by commands that need IR or native code.
 - Parse and semantic failures are returned as diagnostics; infrastructure
   failures such as file I/O or `clang` execution are returned as host-language
   errors.

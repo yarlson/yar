@@ -36,11 +36,12 @@ impl fmt::Display for CodegenError {
 
 impl Error for CodegenError {}
 
-pub fn emit_llvm(program: &Program, info: &Info) -> Result<String, CodegenError> {
+#[cfg(test)]
+fn emit_llvm(program: &Program, info: &Info) -> Result<String, CodegenError> {
     emit_llvm_with_options(program, info, None)
 }
 
-pub fn emit_llvm_with_options(
+pub(crate) fn emit_llvm_with_options(
     program: &Program,
     info: &Info,
     target_triple: Option<&str>,

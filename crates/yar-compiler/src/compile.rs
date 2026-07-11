@@ -23,10 +23,22 @@ pub struct CompileOptions {
     pub project_root: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckedProgram {
+    program: Program,
+    info: Info,
+}
+
+impl CheckedProgram {
+    pub fn emit_llvm(&self, target_triple: Option<&str>) -> Result<Unit, CodegenError> {
+        let ir = emit_llvm_with_options(&self.program, &self.info, target_triple)?;
+        Ok(Unit { ir })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unit {
     pub ir: String,
-    pub info: Info,
 }
 
 #[derive(Debug)]
@@ -72,13 +84,25 @@ pub fn compile_path(
     path: impl AsRef<Path>,
     options: &CompileOptions,
 ) -> Result<(Option<Unit>, Vec<Diagnostic>), CompileError> {
-    let (graph, diagnostics) =
-        load_package_graph_with_root(path, options.project_root.as_deref(), false)?;
+    let (checked, diagnostics) = check_path(path, options.project_root.as_deref())?;
+    let Some(checked) = checked else {
+        return Ok((None, diagnostics));
+    };
+
+    let unit = checked.emit_llvm(options.target_triple.as_deref())?;
+    Ok((Some(unit), diagnostics))
+}
+
+pub fn check_path(
+    path: impl AsRef<Path>,
+    project_root: Option<&Path>,
+) -> Result<(Option<CheckedProgram>, Vec<Diagnostic>), LoadError> {
+    let (graph, diagnostics) = load_package_graph_with_root(path, project_root, false)?;
     if !diagnostics.is_empty() {
         return Ok((None, diagnostics));
     }
 
-    compile_graph(&graph, options)
+    Ok(check_graph(&graph))
 }
 
 pub fn compile_test_path(
@@ -99,23 +123,38 @@ fn compile_graph(
     graph: &PackageGraph,
     options: &CompileOptions,
 ) -> Result<(Option<Unit>, Vec<Diagnostic>), CompileError> {
+    let (checked, diagnostics) = check_graph(graph);
+    let Some(checked) = checked else {
+        return Ok((None, diagnostics));
+    };
+
+    let unit = checked.emit_llvm(options.target_triple.as_deref())?;
+    Ok((Some(unit), diagnostics))
+}
+
+fn check_graph(graph: &PackageGraph) -> (Option<CheckedProgram>, Vec<Diagnostic>) {
     let (lowered, diagnostics) = lower_package_graph(graph);
     if !diagnostics.is_empty() {
-        return Ok((None, diagnostics));
+        return (None, diagnostics);
     }
 
     let (mono, diagnostics) = monomorphize_program(&lowered);
     if !diagnostics.is_empty() {
-        return Ok((None, diagnostics));
+        return (None, diagnostics);
     }
 
     let (info, diagnostics) = check_program(&mono);
     if !diagnostics.is_empty() {
-        return Ok((None, diagnostics));
+        return (None, diagnostics);
     }
 
-    let ir = emit_llvm_with_options(&mono, &info, options.target_triple.as_deref())?;
-    Ok((Some(Unit { ir, info }), Vec::new()))
+    (
+        Some(CheckedProgram {
+            program: mono,
+            info,
+        }),
+        Vec::new(),
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -238,7 +238,7 @@ yar --manifest-path <path/to/yar.toml> <command> [arguments]
 
 | Command   | What it does                                      |
 | --------- | ------------------------------------------------- |
-| `check`   | Parse and type-check without generating a binary  |
+| `check`   | Parse and type-check without generating LLVM IR or a binary |
 | `emit-ir` | Print LLVM IR to stdout                           |
 | `build`   | Compile to a native executable                    |
 | `run`     | Compile and execute a temporary native executable |

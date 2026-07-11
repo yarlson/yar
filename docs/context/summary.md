@@ -2,7 +2,7 @@
 
 ## What
 
-`yar` is a Rust 2024 compiler CLI for a small source language. The shipped Rust CLI reads an entry `.yar` file or package directory, resolves a package graph rooted there, lowers that graph into one checked program, emits textual LLVM IR, and invokes `clang` with the Rust runtime static library to produce or run a native executable.
+`yar` is a Rust 2024 compiler CLI for a small source language. The shipped Rust CLI reads an entry `.yar` file or package directory and resolves, lowers, monomorphizes, and checks its package graph. `check` stops at that checked-program boundary; code-producing commands continue through textual LLVM IR generation and, when needed, invoke `clang` with the Rust runtime static library.
 
 ## Architecture
 
@@ -13,8 +13,8 @@
 
 ## Core Flow
 
-- `check` resolves an entry file or package directory, runs `compiler.CompilePath`, and prints formatted diagnostics to stderr.
-- `emit-ir` runs the same package loading, lowering, checking, and code-generation pipeline and writes LLVM IR to stdout.
+- `check` resolves an entry file or package directory, runs `yar_compiler::check_path`, and stops after semantic checking, printing formatted diagnostics to stderr on failure.
+- `emit-ir` runs the same frontend, explicitly continues through LLVM generation, and writes the IR to stdout.
 - `build` compiles the entry package graph, writes IR and a selected runtime input into a temporary directory, and invokes `clang` to produce a native binary.
 - `run` builds a temporary binary from the entry package graph and executes it with inherited stdin, stdout, and stderr.
 - `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles and executes the test binary, and reports pass/fail results.
