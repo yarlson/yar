@@ -6,7 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{YarDirEntry, YarSlice, YarStr};
+use crate::{YarDirEntry, YarSlice, YarStr, handle_registry};
 
 const FS_OK: i32 = 0;
 const FS_NOT_FOUND: i32 = 1;
@@ -22,10 +22,6 @@ const KIND_DIRECTORY: i32 = 1;
 const KIND_OTHER: i32 = 2;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-struct FileHandle {
-    file: Option<File>,
-}
 
 pub(crate) fn read_file(path: YarStr, out: *mut YarStr) -> i32 {
     write_out_str(out, empty_str());
@@ -214,14 +210,14 @@ pub(crate) fn open_write(path: YarStr, out: *mut i64) -> i32 {
 
 pub(crate) fn read_handle(raw_handle: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
     write_out_str(out, empty_str());
+    let Some(handle) = handle_registry::file(raw_handle) else {
+        return FS_CLOSED;
+    };
     if max_bytes <= 0 {
         return FS_INVALID_ARGUMENT;
     }
-
-    let Some(handle) = handle_from_i64(raw_handle) else {
-        return FS_CLOSED;
-    };
-    let Some(file) = handle.file.as_mut() else {
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(file) = state.as_mut() else {
         return FS_CLOSED;
     };
 
@@ -237,6 +233,9 @@ pub(crate) fn read_handle(raw_handle: i64, max_bytes: i32, out: *mut YarStr) -> 
 
 pub(crate) fn write_handle(raw_handle: i64, data: YarStr, out: *mut i32) -> i32 {
     write_out_i32(out, 0);
+    let Some(handle) = handle_registry::file(raw_handle) else {
+        return FS_CLOSED;
+    };
     let Some(data) = checked_str(data) else {
         return FS_INVALID_ARGUMENT;
     };
@@ -244,10 +243,8 @@ pub(crate) fn write_handle(raw_handle: i64, data: YarStr, out: *mut i32) -> i32 
         return FS_INVALID_ARGUMENT;
     }
 
-    let Some(handle) = handle_from_i64(raw_handle) else {
-        return FS_CLOSED;
-    };
-    let Some(file) = handle.file.as_mut() else {
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(file) = state.as_mut() else {
         return FS_CLOSED;
     };
 
@@ -265,10 +262,11 @@ pub(crate) fn write_handle(raw_handle: i64, data: YarStr, out: *mut i32) -> i32 
 }
 
 pub(crate) fn close_handle(raw_handle: i64) -> i32 {
-    let Some(handle) = handle_from_i64(raw_handle) else {
+    let Some(handle) = handle_registry::remove_file(raw_handle) else {
         return FS_CLOSED;
     };
-    let Some(file) = handle.file.take() else {
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(file) = state.take() else {
         return FS_CLOSED;
     };
 
@@ -300,27 +298,11 @@ fn open(path: YarStr, out: *mut i64, mode: OpenMode) -> i32 {
 
     match file {
         Ok(file) => {
-            let handle = Box::leak(Box::new(FileHandle { file: Some(file) }));
-            write_out_i64(out, handle as *mut FileHandle as i64);
+            write_out_i64(out, handle_registry::register_file(file));
             FS_OK
         }
         Err(err) => status_from_io(err),
     }
-}
-
-fn handle_from_i64(raw_handle: i64) -> Option<&'static mut FileHandle> {
-    if raw_handle == 0 {
-        return None;
-    }
-
-    let ptr = raw_handle as *mut FileHandle;
-    if ptr.is_null() {
-        return None;
-    }
-
-    // SAFETY: handles are created by open() using Box::leak and remain valid for
-    // the process lifetime, matching the runtime ABI's opaque handle.
-    Some(unsafe { &mut *ptr })
 }
 
 fn path_from_yar(value: YarStr) -> Result<PathBuf, ()> {

@@ -177,6 +177,29 @@ long long b_len)` allocates and returns a new string containing the
 - `yar_to_str_i64(int64_t value)` formats a signed 64-bit integer as a
   decimal string.
 
+### Runtime Handle Registry
+
+- String builders, streaming files, TCP listeners, and TCP connections use
+  positive process-local `i64` registry IDs rather than exposed native
+  addresses.
+- IDs increase monotonically and are never reused within a process. Registry
+  lookup validates the expected resource kind, so a listener ID cannot be used
+  as a connection, file, or string builder.
+- Registry lookup returns synchronized per-resource state and releases the
+  registry lock before filesystem or network I/O. Operations on one handle do
+  not hold the registry lock across blocking work.
+- Explicit file and network close removes the ID so later lookup fails, then
+  waits for any operation holding the per-resource lock before taking and
+  dropping the host resource. Close does not interrupt blocking I/O.
+- Unknown, stale, and wrong-kind file or network IDs map to `error.Closed`.
+  Invalid string-builder IDs terminate with
+  `runtime failure: invalid string builder`.
+- The string-builder ABI uses `i64` directly: `yar_sb_new()` returns an ID,
+  while `yar_sb_write` and `yar_sb_string` accept that ID without pointer/integer
+  conversion in generated IR.
+- Registry validation is a runtime safety boundary, not nominal typing. Source
+  `i64` values still carry no compiler-visible handle kind or provenance.
+
 ### Filesystem Runtime
 
 - `yar_fs_read_file(yar_str path, yar_str *out)` reads a whole file into one
@@ -194,9 +217,9 @@ long long b_len)` allocates and returns a new string containing the
 - `yar_fs_temp_dir(yar_str prefix, yar_str *out)` creates one temporary
   directory under `TMPDIR` or `/tmp`.
 - `yar_fs_open_read(yar_str path, int64_t *out)` opens a file for streaming
-  reads and returns an opaque file handle.
+  reads and returns an opaque registry ID.
 - `yar_fs_open_write(yar_str path, int64_t *out)` creates or truncates a file
-  for streaming writes and returns an opaque file handle.
+  for streaming writes and returns an opaque registry ID.
 - `yar_fs_read_handle(int64_t handle, int32_t max_bytes, yar_str *out)` reads
   up to `max_bytes` from an open file handle and returns empty string on EOF.
 - `yar_fs_write_handle(int64_t handle, yar_str data, int32_t *out)` writes data
@@ -236,14 +259,14 @@ long long b_len)` allocates and returns a new string containing the
 
 - `yar_net_listen(yar_str host, int32_t port, int64_t *out)` binds and listens
   on a TCP address. Empty host means all interfaces. Returns an opaque listener
-  handle via the out-pointer.
+  registry ID via the out-pointer.
 - `yar_net_accept(int64_t listener, int64_t *out)` blocks until a connection
-  arrives and returns an opaque connection handle.
+  arrives and returns an opaque connection registry ID.
 - `yar_net_listener_addr(int64_t listener, yar_net_addr *out)` returns the
   bound address of a listener socket.
 - `yar_net_close_listener(int64_t listener)` closes a listener socket.
 - `yar_net_connect(yar_str host, int32_t port, int64_t *out)` performs TCP
-  connect with DNS resolution and returns a connection handle.
+  connect with DNS resolution and returns a connection registry ID.
 - `yar_net_read(int64_t conn, int32_t max_bytes, yar_str *out)` reads up to
   `max_bytes` from a connection. Returns empty string on EOF.
 - `yar_net_write(int64_t conn, yar_str data, int32_t *out)` writes all data

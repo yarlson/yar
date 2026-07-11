@@ -50,6 +50,22 @@ function literals so the checker can validate the complete boundary. Bare
 host-intrinsic spawns additionally require a task wrapper; currently only
 `fs.read_file` provides one.
 
+### Runtime handles are validated registry IDs
+
+Status: accepted
+
+User-visible `i64` handles for string builders, streaming files, TCP listeners,
+and TCP connections are positive process-local registry IDs rather than native
+addresses. IDs are kind-checked, never reused within a process, and resolve to
+synchronized mutable state. Explicit file and network close removes the ID so
+new lookups fail, then waits for any operation holding the per-resource lock
+before releasing the host resource; close does not interrupt blocking I/O.
+
+Unknown, stale, and wrong-kind file or network IDs produce `error.Closed`.
+Invalid string-builder IDs terminate with the deterministic string-builder
+runtime failure. This registry is a runtime safety boundary only: raw `i64`
+values still have no compiler-visible nominal handle type or provenance.
+
 ### Sugar must lower to explicit semantics
 
 Status: accepted

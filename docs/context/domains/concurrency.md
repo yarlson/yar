@@ -56,6 +56,11 @@
 - Bare `i64` values are treated as scalars. The checker cannot distinguish an
   ordinary integer from a raw runtime or OS handle represented as `i64`, so
   such handles are not rejected by this boundary.
+- Runtime-backed `i64` handles are validated against a kind-tagged registry and
+  their mutable state is synchronized. This prevents handle-derived invalid
+  dereferences and serializes registered state, but does not provide
+  compile-time handle provenance or make raw handles part of the share-safe
+  source model.
 
 ## Error Model Integration
 
@@ -89,3 +94,6 @@
   "concurrency is not supported on windows yet" runtime error.
 - The current Rust runtime does not collect heap storage while workers run (or
   outside taskgroups); allocations remain live until process exit.
+- Explicit file and network close removes the handle from the runtime registry;
+  string-builder handles have no close operation and remain registered for the
+  process lifetime.

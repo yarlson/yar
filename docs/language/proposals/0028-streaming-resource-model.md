@@ -156,7 +156,14 @@ fn main() !i32 {
 - Allocation failure remains an unrecoverable runtime failure, not a Yar
   `error`.
 - File stream handles are opaque `i64` values backed by runtime-managed host
-  resources.
+  resources. They are kind-checked, non-reused process-local registry IDs, and
+  their mutable state is synchronized.
+- Explicit file and network close removes the registry ID so new lookups fail,
+  then waits for any operation holding the per-resource lock before releasing
+  the host resource; close does not interrupt blocking I/O. Unknown, stale, and
+  wrong-kind IDs produce `error.Closed`.
+- Registry validation is a runtime safety boundary. Raw `i64` handles still
+  have no compiler-visible nominal type or provenance.
 
 This proposal does not introduce automatic cleanup. Programs are responsible
 for calling `close`.
@@ -173,8 +180,10 @@ The `io` package is pure Yar.
 - `fs.write_handle(handle, data) !i32`
 - `fs.close_handle(handle) !void`
 
-The runtime stores file stream state behind opaque handles. A closed handle
-keeps enough state to report `error.Closed` on later operations.
+The runtime stores file stream state behind validated registry IDs. Closing
+removes the ID; later lookup of that stale ID reports `error.Closed`. IDs are
+never reused within the process, so a stale handle cannot resolve to a newer
+resource.
 
 The `net` additions are pure Yar wrappers around existing networking intrinsics.
 

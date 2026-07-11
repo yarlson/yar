@@ -199,9 +199,9 @@ impl Generator<'_> {
         out.push_str("declare %yar.str @yar_str_from_byte(i32)\n");
         out.push_str("declare %yar.str @yar_to_str_i32(i32)\n");
         out.push_str("declare %yar.str @yar_to_str_i64(i64)\n");
-        out.push_str("declare ptr @yar_sb_new()\n");
-        out.push_str("declare void @yar_sb_write(ptr, ptr, i64)\n");
-        out.push_str("declare %yar.str @yar_sb_string(ptr)\n");
+        out.push_str("declare i64 @yar_sb_new()\n");
+        out.push_str("declare void @yar_sb_write(i64, ptr, i64)\n");
+        out.push_str("declare %yar.str @yar_sb_string(i64)\n");
         out.push_str("declare i32 @yar_fs_read_file(%yar.str, ptr)\n");
         out.push_str("declare i32 @yar_fs_write_file(%yar.str, %yar.str)\n");
         out.push_str("declare i32 @yar_fs_read_dir(%yar.str, ptr)\n");
@@ -3364,12 +3364,9 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         if !call.args.is_empty() {
             return Err(CodegenError::unsupported("sb_new arity"));
         }
-        let ptr = self.temp("sb.ptr");
         let handle = self.temp("sb.handle");
         self.body
-            .push_str(&format!("  %{ptr} = call ptr @yar_sb_new()\n"));
-        self.body
-            .push_str(&format!("  %{handle} = ptrtoint ptr %{ptr} to i64\n"));
+            .push_str(&format!("  %{handle} = call i64 @yar_sb_new()\n"));
         Ok(Value {
             type_: "i64".to_string(),
             repr: format!("%{handle}"),
@@ -3382,11 +3379,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         };
         let handle = self.emit_expression_as(handle, "i64")?;
         let data = self.emit_expression_as(data, "str")?;
-        let ptr = self.temp("sb.ptr");
         let data_ptr = self.temp("sb.str.ptr");
         let data_len = self.temp("sb.str.len");
-        self.body
-            .push_str(&format!("  %{ptr} = inttoptr i64 {} to ptr\n", handle.repr));
         self.body.push_str(&format!(
             "  %{data_ptr} = extractvalue %yar.str {}, 0\n",
             data.repr
@@ -3396,7 +3390,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             data.repr
         ));
         self.body.push_str(&format!(
-            "  call void @yar_sb_write(ptr %{ptr}, ptr %{data_ptr}, i64 %{data_len})\n"
+            "  call void @yar_sb_write(i64 {}, ptr %{data_ptr}, i64 %{data_len})\n",
+            handle.repr
         ));
         Ok(Value {
             type_: "void".to_string(),
@@ -3409,12 +3404,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return Err(CodegenError::unsupported("sb_string arity"));
         };
         let handle = self.emit_expression_as(handle, "i64")?;
-        let ptr = self.temp("sb.ptr");
         let result = self.temp("sb.result");
-        self.body
-            .push_str(&format!("  %{ptr} = inttoptr i64 {} to ptr\n", handle.repr));
         self.body.push_str(&format!(
-            "  %{result} = call %yar.str @yar_sb_string(ptr %{ptr})\n"
+            "  %{result} = call %yar.str @yar_sb_string(i64 {})\n",
+            handle.repr
         ));
         Ok(Value {
             type_: "str".to_string(),
@@ -6187,6 +6180,7 @@ mod tests {
         "testdata/generics_imports/main.yar",
         "testdata/imports_ok/main.yar",
         "testdata/infinite_for/main.yar",
+        "testdata/invalid_string_builder_handle/main.yar",
         "testdata/integer_div_zero/main.yar",
         "testdata/integer_rem_overflow/main.yar",
         "testdata/integer_wrapping/main.yar",
@@ -6299,6 +6293,23 @@ mod tests {
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
         }
+    }
+
+    #[test]
+    fn lowers_string_builder_handles_as_i64_registry_ids() {
+        let ir = emit_fixture("testdata/string_builder/main.yar");
+        for expected in [
+            "declare i64 @yar_sb_new()",
+            "declare void @yar_sb_write(i64, ptr, i64)",
+            "declare %yar.str @yar_sb_string(i64)",
+            "call i64 @yar_sb_new()",
+            "call void @yar_sb_write(i64 %",
+            "call %yar.str @yar_sb_string(i64 %",
+        ] {
+            assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
+        }
+        assert!(!ir.contains("ptrtoint"), "unexpected ptrtoint in IR:\n{ir}");
+        assert!(!ir.contains("inttoptr"), "unexpected inttoptr in IR:\n{ir}");
     }
 
     #[test]

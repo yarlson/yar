@@ -94,6 +94,15 @@
   storage, and other heap-backed features. The current Rust runtime retains
   allocations until process exit. Allocation failure is still an unrecoverable
   runtime failure rather than a YAR `error`.
+- User-visible `i64` handles for string builders, streaming files, TCP
+  listeners, and TCP connections are process-local registry IDs, never native
+  addresses. The registry validates both ID and resource kind before access,
+  never reuses an issued ID, and synchronizes mutable per-handle state.
+- Explicit file and network close first removes the ID so new lookups fail,
+  then waits for any operation holding the per-resource lock before releasing
+  the host resource. Close does not interrupt blocking I/O. Unknown, stale, and
+  wrong-kind file or network IDs produce `error.Closed`; invalid string-builder
+  IDs terminate with the string-builder runtime failure.
 - Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
   and `run` commands. They are included only during `yar test`.
 - Test functions follow the convention `fn test_*(t *testing.T) void` and are

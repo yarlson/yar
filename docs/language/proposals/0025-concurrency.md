@@ -264,6 +264,11 @@ complete.
   results only after every spawned thread has joined.
 - Bare `i64` values remain scalar. The checker cannot distinguish ordinary
   integers from runtime or OS handles represented as raw `i64` values.
+- Runtime-backed raw handles are kind-checked, non-reused registry IDs whose
+  mutable state is synchronized. That makes invalid-handle failure deterministic
+  and serializes registered state access, but does not define concurrent
+  operation order, provide compiler-visible handle provenance, or make raw
+  handles valid share-safe inputs by design.
 
 ### Task scheduling
 
@@ -317,8 +322,9 @@ thread. A program with no taskgroups retains the single-threaded behavior.
   process lifetime.
 - **Pointers, slices, and maps**: these values cannot be passed or captured
   across a spawn boundary, including when nested inside aggregates.
-- **String builders**: `sb_new`/`sb_write`/`sb_string` are not safe for
-  concurrent use. Each builder should be used by one task.
+- **String builders**: `sb_new`/`sb_write`/`sb_string` resolve through the
+  runtime handle registry and serialize mutable state per builder. Raw builder
+  IDs remain indistinguishable from ordinary `i64` values to the checker.
 - **`print`**: `print` writes to stdout. Concurrent `print` calls from
   multiple tasks may interleave output; the runtime provides no per-call
   atomicity or ordering guarantee.
@@ -722,13 +728,13 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 | `append` | May reallocate slice backing via `yar_alloc` | GC mutex protects allocation. Concurrent append to the same slice is a data race (programmer responsibility). |
 | `keys`   | Allocates snapshot slice via `yar_alloc`     | GC mutex protects allocation. Concurrent `keys` with map mutation is a data race.                             |
 
-**Safe per-handle (each task uses its own handle):**
+**Safe with synchronized or task-local state:**
 
 | Builtin     | Shared handle risk                                                                              | Guidance                                                                                                           |
 | ----------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `sb_new`    | Returns a new handle. Safe — each call creates an independent builder.                          | No change.                                                                                                         |
-| `sb_write`  | Modifies builder buffer without synchronization. Two tasks writing the same builder corrupt it. | No runtime change. Document: builders must not be shared across tasks.                                             |
-| `sb_string` | Reads and resets builder length. TOCTOU race if shared.                                         | No runtime change. Document: builders must not be shared.                                                          |
+| `sb_new`    | Returns a new handle. Safe — each call creates an independent builder.                          | The registry allocates one typed process-local ID.                                                                 |
+| `sb_write`  | Modifies builder state behind the validated handle registry.                                    | Per-builder synchronization serializes writes.                                                                     |
+| `sb_string` | Reads and resets builder state behind the validated handle registry.                           | Per-builder synchronization serializes extraction and reset.                                                       |
 | `has`       | Reads map structure without locking.                                                            | No runtime change. Document: maps must not be shared across tasks, or access must be serialized through a channel. |
 | `delete`    | Modifies map, may trigger rehash.                                                               | Same as `has`.                                                                                                     |
 
@@ -870,7 +876,7 @@ implementation regardless of concurrency.
 **Documentation-only (no runtime changes, behavior documented):**
 
 8. Map handles shared across tasks are data races — document.
-9. String builder handles shared across tasks are data races — document.
+9. Raw string builder IDs bypass compile-time provenance checks — document.
 10. Socket handles should be owned by one task — document.
 11. Slice mutation across tasks is a data race — document.
 12. `sort.*` on shared slices is a data race — document.
@@ -998,8 +1004,8 @@ Deferred (not rejected) because:
 - **Codegen**: each spawn needs a typed task context and wrapper; taskgroups
   need ordered result assembly and a mandatory join.
 - **Runtime**: the native-thread baseline is simpler than the explored M:N
-  scheduler, but one thread per spawn and process-lifetime handles are material
-  operational limits.
+  scheduler, but one thread per spawn and process-lifetime taskgroup, channel,
+  and string-builder handles are material operational limits.
 - **Testing**: concurrency ordering, channel closure, nested captures, resource
   provenance, and task-boundary alias rejection need end-to-end coverage.
 
@@ -1198,7 +1204,9 @@ race detector. It is intentionally conservative: read-only pointer sharing and
 disjoint slice partitioning are not expressible across a spawn boundary. Task
 results are unaffected because taskgroup join establishes exclusive parent
 observation. Bare `i64` capabilities remain a limitation because their handle
-provenance is not represented in the type.
+provenance is not represented in the type. The runtime validates registered IDs
+and resource kinds and synchronizes their state, but that does not make the
+source type nominally safe.
 
 ### Nested spawn: disallowed in closures within taskgroup body
 
@@ -1391,7 +1399,8 @@ exploration in a few ways:
   types
 - task results are unrestricted because they are exposed after join
 - bare raw handles represented as `i64` are not distinguishable from ordinary
-  integers by this check
+  integers by this check; the runtime validates their registry ID and resource
+  kind and synchronizes registered state
 - it currently rejects `return` in a taskgroup body and rejects `break` /
   `continue` that would exit the taskgroup through an enclosing loop
 - it rejects same-function `?` propagation inside a taskgroup body so accepted
