@@ -296,8 +296,16 @@ http = { git = "https://github.com/user/yar-http.git", tag = "v0.3.1" }
 local_lib = { path = "../my-local-lib" }
 ```
 
-The alias becomes the import path: `import "http"`. Resolution order: local >
-dependency > stdlib.
+The alias becomes the first import-path segment: `import "http"`. Imports are
+resolved in the importing source's origin: same-origin packages first, then
+aliases declared directly by that origin, then embedded stdlib. Imports inside
+stdlib are sealed to the stdlib origin.
+
+Compiler package identity is `PackageId = (source origin, source-relative
+subpath)`, not the import text. Equal logical paths from different origins
+therefore remain distinct, and lowered symbols include origin-safe identity.
+Distinct imports in one package cannot use the same final path segment as their
+source qualifier.
 
 `yar.lock` is an explicit `version = 1` graph. It pins exact commit SHAs and
 content hashes and records each package's full alias/git/ref child edges.
@@ -313,8 +321,14 @@ source, then verifies the manifest against the recorded child edges. A missing,
 modified, or edge-divergent selected entry fails closed instead of falling back
 to a same-named standard-library package. Unused dependency caches remain lazy.
 
-Every reachable lock alias is globally importable, including transitive
-aliases. There is no root override for conflicting source/ref selections.
+Lock reachability does not grant import visibility: each importing origin must
+declare the external aliases it uses. Existing source that imported a merely
+reachable transitive alias must add a direct declaration to its own manifest.
+Lock v1 still requires each alias to identify one source/ref tuple across the
+complete graph, so owner-local reuse of the same alias for different targets
+requires a future lock v2. There is no root override for conflicting
+source/ref selections.
+
 Local path dependencies remain live and unhashed and may be declared only in
 the root manifest. Their manifests may contribute git dependencies, but may
 not declare another path dependency. A selected path alias must exist and does

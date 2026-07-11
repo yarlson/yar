@@ -12,4 +12,5 @@ pub mod manifest;
 pub mod mono;
 pub mod package;
 pub mod parser;
+mod symbol;
 pub mod token;

@@ -22,6 +22,7 @@ Current baseline already includes:
 
 - multi-file packages
 - entry `package main` plus imports
+- origin-scoped package identity and import resolution
 - top-level `struct` and `fn`
 - primitive types plus `error`
 - fixed-size arrays
@@ -81,12 +82,15 @@ Git-based dependency management is now implemented:
 - git-based fetching to a global cache with integrity verification
 - transitive dependency resolution with conflict detection
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
-- compiler integration: dependency index consulted between local and stdlib
-  resolution
+- compiler integration: same-origin lookup, owner-declared aliases, sealed
+  stdlib fallback, and origin-safe package identities
+- lock v1 retains global alias/source uniqueness even though visibility is
+  owner-scoped
 
 ### Remaining package ergonomics candidates
 
 - import aliases if they become necessary
+- lock v2 support for different owners reusing one alias for different targets
 - richer diagnostics around package loading
 
 ---

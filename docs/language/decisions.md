@@ -126,7 +126,13 @@ Status: accepted
 
 Packages may span multiple files, imports are explicit, cross-package references
 stay qualified, and top-level declarations are package-local unless marked
-`pub`.
+`pub`. A package's compiler identity is `PackageId = (source origin,
+source-relative subpath)`; import text is only a binding. Import resolution is
+scoped to the importer origin: same-origin packages, then aliases declared by
+that origin, then embedded stdlib. Stdlib imports are sealed to the stdlib
+origin. Package graphs, lowering, and cycle checks retain typed `PackageId`
+values, and lowering emits origin-safe canonical symbols. Distinct imports with
+the same final qualifier segment are rejected as ambiguous.
 
 ### Slices
 
@@ -238,14 +244,20 @@ match lock nodes exactly before dependency cache or network access. Duplicate
 aliases or edges, missing nodes, cycles, source/ref conflicts, and unreachable
 nodes are rejected. There is no root override.
 
-The dependency index is global: every alias reachable in the reconciled graph
-may be imported by any loaded package, including a transitive alias not
-declared directly by the importer. It is consulted between local and stdlib
-resolution. When a locked dependency is selected, its cache tree is verified
-before its manifest or source is read, then its declared git dependencies are
-checked against the recorded child edges. Missing, mismatched, or
-edge-divergent selected trees fail package loading; unused or locally shadowed
-entries do not require a cache.
+Dependency bindings are owner-scoped. The entry origin receives root-manifest
+aliases, each root path origin receives aliases from its own manifest, and each
+locked git origin receives aliases from its lock node's child edges. A reachable
+transitive alias is not visible unless the importing origin declares it. When a
+locked dependency is selected, its cache tree is verified before its manifest
+or source is read, then its declared git dependencies are checked against the
+recorded child edges. Missing, mismatched, or edge-divergent selected trees fail
+package loading; unused entries do not require a cache.
+
+Lock v1 and the cache layout remain unchanged and retain global alias/source
+uniqueness: the same alias cannot name different targets in different owner
+scopes. True owner-local alias reuse requires lock v2. Source that relied on
+global visibility of a reachable transitive alias must add a direct declaration
+to the importing origin's manifest.
 
 Fresh fetches are verified before publication, and lock generation never
 derives a trusted hash from cache content that differs from the fresh checkout.
@@ -302,11 +314,11 @@ slicing returning `str`. Out-of-range operations trap at runtime.
 
 Status: accepted
 
-The compiler embeds a standard library written in Yar. Stdlib packages are
-resolved as a fallback when an import path does not match a local directory.
-Local packages take priority over stdlib. Packages: `strings`, `utf8`, `conv`,
-`sort`, `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
-`testing`.
+The compiler embeds a standard library written in Yar. Non-stdlib importers use
+stdlib only after same-origin packages and directly declared aliases. Imports
+inside stdlib are sealed to the embedded stdlib origin and cannot be shadowed by
+project or dependency sources. Packages: `strings`, `utf8`, `conv`, `sort`,
+`path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and `testing`.
 
 ### Text and UTF-8 helpers
 

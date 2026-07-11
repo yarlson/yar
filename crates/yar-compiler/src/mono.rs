@@ -801,13 +801,13 @@ mod tests {
             program
                 .structs
                 .iter()
-                .any(|decl| decl.name == "lib.Box[str]")
+                .any(|decl| decl.name.ends_with(".lib.Box[str]"))
         );
         assert!(
             program
                 .functions
                 .iter()
-                .any(|decl| decl.name == "lib.wrap[str]")
+                .any(|decl| decl.name.ends_with(".lib.wrap[str]"))
         );
     }
 

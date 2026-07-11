@@ -2,7 +2,7 @@
 
 YAR is a small, compiled language with direct syntax, explicit types, errors as values, and LLVM-based native code generation via clang.
 
-Implementation note: the shipped compiler CLI is the Rust 2024 `yar` binary from `crates/yar-cli`; `crates/yar-compiler` owns Rust token, diagnostic, AST, lexer, parser, package-graph loading, package-lowering, monomorphization, semantic checking, and LLVM emission. It checks and emits clang-accepted LLVM for every checked-in `testdata/**/main.yar` entry program, including stdlib-backed host packages and the native main wrapper. `crates/yar-cli` provides `check`, `emit-ir`, `build`, host `run`, host `test`, `init`, dependency manifest, lock, fetch, and update commands, plus dependency-index package loading. Native build/run/test paths link the Rust runtime archive from `YAR_RUNTIME_ARCHIVE`, a sibling `libyar_runtime.a`/`yar_runtime.lib`, or the workspace `target/release` archive. `crates/yar-runtime` is the Rust runtime crate and exports the C ABI `yar_*` helpers used by generated code for allocation, strings, maps, string builders, taskgroups, channels, argv, environment, child processes, filesystem, and TCP networking.
+Implementation note: the shipped compiler CLI is the Rust 2024 `yar` binary from `crates/yar-cli`; `crates/yar-compiler` owns Rust token, diagnostic, AST, lexer, parser, package-graph loading, package-lowering, monomorphization, semantic checking, and LLVM emission. It checks and emits clang-accepted LLVM for every checked-in `testdata/**/main.yar` entry program, including stdlib-backed host packages and the native main wrapper. `crates/yar-cli` provides `check`, `emit-ir`, `build`, host `run`, host `test`, `init`, dependency manifest, lock, fetch, and update commands, plus origin-scoped package loading. Native build/run/test paths link the Rust runtime archive from `YAR_RUNTIME_ARCHIVE`, a sibling `libyar_runtime.a`/`yar_runtime.lib`, or the workspace `target/release` archive. `crates/yar-runtime` is the Rust runtime crate and exports the C ABI `yar_*` helpers used by generated code for allocation, strings, maps, string builders, taskgroups, channels, argv, environment, child processes, filesystem, and TCP networking.
 
 ## Project Structure
 
@@ -39,8 +39,12 @@ fn main() i32 {
 
 - Entry package: `package main` with `fn main() i32` or `fn main() !i32`
 - Imports: `import "path"` (slash-separated, qualified usage: `path.func()`)
-- Resolution order: local packages → dependencies (from `yar.toml`) → stdlib
-- Local packages shadow dependencies; dependencies shadow stdlib
+- Package identity: `PackageId = (source origin, source-relative subpath)`;
+  import text and dependency aliases are bindings, not identity
+- Resolution is scoped to the importer origin: same-origin packages → aliases
+  directly declared by that origin → embedded stdlib
+- Imports inside embedded stdlib are sealed to the stdlib origin
+- Distinct imports in one package cannot have the same final qualifier segment
 - Visibility: `pub` on struct/fn/enum/interface to export; private by default
 - Comments: `// line comments` only
 
@@ -462,7 +466,8 @@ taskgroup []void {
 
 ## Standard Library
 
-Import with `import "pkgname"`, use as `pkgname.func()`.
+Import with `import "pkgname"`, use as `pkgname.func()`. Stdlib packages resolve
+their own imports only from the embedded stdlib origin.
 
 ### strings
 
@@ -897,8 +902,14 @@ local_lib = { path = "../my-local-lib" }
 - Transitive dependencies supported (each dep may have its own `yar.toml`)
 - Conflicts (same alias, different git source, ref kind, or ref value) are
   errors; there is no root override
-- Every reachable alias is globally importable through one dependency index,
-  including transitive aliases not directly declared by the importer
+- Alias visibility is owner-scoped: the entry origin uses root-manifest aliases,
+  path origins use their own manifest aliases, and git origins use their lock
+  node's child edges
+- Lock reachability does not grant import visibility; every source origin must
+  directly declare each external alias it imports. Migrate source that imported
+  a merely reachable transitive alias by adding it to that source's manifest
+- Lock v1/cache formats are unchanged and retain global alias/source uniqueness;
+  reusing one alias for different targets in different owner scopes needs lock v2
 - A selected locked git dependency is hash-verified before cached source is
   read, then its manifest is checked against the recorded child edges; missing,
   mismatched, or edge-divergent selected entries fail before stdlib fallback,

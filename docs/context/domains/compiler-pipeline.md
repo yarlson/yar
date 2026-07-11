@@ -27,21 +27,21 @@
   constructors, pointer types, `nil`, index and slice postfix forms,
   generalized lvalue forms such as `(*ptr).field`, method-call selector
   syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
-- `crates/yar-compiler/src/package.rs` resolves the package graph. It loads local
-  `.yar` files from disk, consults the dependency index built from `yar.toml`
-  and the reconciled `yar.lock` graph for external packages, verifies a locked
-  cache and its recorded manifest edges when its alias is selected, falls back
-  to embedded stdlib packages when both local and dependency paths are missing,
-  validates package names, and checks import cycles.
+- `crates/yar-compiler/src/package.rs` resolves the package graph by explicit
+  `PackageId` values made from a source origin and source-relative subpath. It
+  scopes lookup to the importer origin, verifies selected locked sources, seals
+  stdlib imports, validates qualifiers and package names, and checks cycles.
 - `crates/yar-compiler/src/manifest.rs` provides `yar.toml` and versioned
-  `yar.lock` parsing, git-based fetching, commit-keyed cache verification, and
-  transitive resolution with conflict detection.
+  `yar.lock` parsing, fetching, cache verification, and transitive resolution.
 - `crates/yar-compiler/src/lock_graph.rs` reconciles manifest roots and full
   source/ref child edges before dependency cache access, rejects malformed or
   unreachable graphs, verifies selected cached manifests, and merges selective
   lock updates.
 - `crates/yar-compiler/src/lower.rs` lowers the package graph into one combined
-  `Program` by rewriting package-local and imported symbols to canonical names.
+  `Program` by following resolved package identities and rewriting declarations
+  to origin-safe canonical names.
+- `crates/yar-compiler/src/symbol.rs` owns those internal names and removes
+  their reserved origin prefix from diagnostics before they leave the compiler.
 - `crates/yar-compiler/src/mono.rs` monomorphizes explicit generic struct and
   function instantiations into ordinary declarations before checking.
 - `crates/yar-compiler/src/checker.rs` validates struct, interface, enum, function, method, and
@@ -85,12 +85,14 @@
 - The loader sorts file names inside each package directory, requires every
   file in a package directory to share the same package name, and rejects
   package directories without `.yar` files.
-- Import paths are logical package paths rooted at the entry directory.
+- Import paths are logical bindings interpreted within the importer origin.
   Absolute paths, dot-prefixed paths, empty segments, and invalid identifier
   segments are rejected.
 - Imported package names must match the final segment of the import path, and
   `package main` cannot be imported.
-- Local packages shadow embedded stdlib packages with the same import path.
+- Distinct imports with the same final segment are rejected because that segment is the source qualifier.
+- Resolution checks packages in the importer origin, aliases declared by that
+  origin, then embedded stdlib. Stdlib-origin imports stay inside stdlib.
 - Manifest roots and the versioned lock graph are reconciled before dependency
   cache access. Duplicate aliases or edges, missing nodes, source/ref
   mismatches, dependency cycles, and unreachable nodes stop package loading.
@@ -98,8 +100,9 @@
   is parsed. The manifest's git dependencies must then match the recorded lock
   edges. Unused and locally shadowed lock entries are not opened. Compilation
   never repairs a missing or corrupt cache.
-- A selected local path dependency must exist and does not fall through to a
-  same-named embedded stdlib package.
+- A selected dependency must exist and does not fall through to a same-named
+  embedded stdlib package. Lock v1 retains global alias/source uniqueness even
+  though alias visibility is owner-scoped.
 - Code generation depends on `checker.Info` for expression types, function
   signatures, struct metadata, local types, and the program-wide error-code
   table.
@@ -138,8 +141,8 @@
 
 - User code is emitted under `@yar.<function-name>`.
 - The entry package keeps the user-defined `main` name; non-entry functions and
-  imported declarations are rewritten to canonical package-qualified names
-  before checking and code generation.
+  imported declarations are rewritten to origin-safe canonical names before
+  checking and code generation.
 - Native process entry is a generated `@main` wrapper, not the user-defined
   function directly.
 - Non-errorable `main` returns its `i32` result directly.

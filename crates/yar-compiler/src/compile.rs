@@ -241,11 +241,16 @@ fn inject_test_runner(graph: &mut PackageGraph) -> Result<(), CompileError> {
     let new_imports = runner_imports
         .iter()
         .filter_map(|decl| {
-            graph.packages.get(&decl.path).map(|package| PackageImport {
-                name: package.name.clone(),
-                path: decl.path.clone(),
-                decl: decl.clone(),
-            })
+            entry_package
+                .imports
+                .iter()
+                .find(|import| import.path == decl.path)
+                .map(|import| PackageImport {
+                    name: import.name.clone(),
+                    path: decl.path.clone(),
+                    target: import.target.clone(),
+                    decl: decl.clone(),
+                })
         })
         .collect::<Vec<_>>();
 
@@ -524,7 +529,8 @@ pub fn read_file(value i32) i32 {
 
         let unit = unit.unwrap_or_else(|| panic!("unexpected diagnostics: {diagnostics:?}"));
         assert_eq!(diagnostics, Vec::new());
-        assert!(unit.ir.contains("call i32 @yar.fs.read_file(i32 %arg.0)"));
+        assert!(unit.ir.contains(".fs.read_file(i32 %arg.0)"));
+        assert!(!unit.ir.contains("call i32 @yar.fs.read_file(i32 %arg.0)"));
         assert!(!unit.ir.contains("call i32 @yar_fs_read_file"));
     }
 
@@ -717,6 +723,53 @@ fn main() i32 {
             &diagnostics,
             "generic function \"id\" expects 1 type arguments, got 2",
         );
+    }
+
+    #[test]
+    fn compile_path_hides_internal_package_identity_in_imported_diagnostics() {
+        let root = temp_dir("yar-rust-imported-package-diagnostics");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "users"
+
+fn main() i32 {
+    return users.value()
+}
+"#,
+        );
+        write_source(
+            &root.join("users/users.yar"),
+            r#"package users
+
+pub struct User {}
+
+pub fn value() i32 {
+    return User{}
+}
+
+pub fn incomplete() User {
+    if true {
+        return User{}
+    }
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "cannot return users.User from function returning i32",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "function \"users.incomplete\" must return a value on all paths",
+        );
+        assert_diag_not_contains(&diagnostics, "$yar$");
     }
 
     #[test]

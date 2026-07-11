@@ -12,6 +12,10 @@
 - Import paths are slash-separated logical package names. Absolute paths,
   dot-prefixed paths, empty segments, and invalid identifier segments are
   rejected.
+- A loaded package has `PackageId(origin, subpath)`, where the subpath is
+  relative to one entry, path-dependency, pinned-git, or stdlib origin.
+- Imports resolve in the importer origin: own packages, aliases declared by
+  that origin, then embedded stdlib. Stdlib imports are sealed to stdlib.
 - Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
   receiver-style method declarations, optionally prefixed with `pub`.
 - Top-level `struct` and `fn` declarations may declare explicit type
@@ -130,7 +134,10 @@
 - Interface-to-interface coercion is only supported for the same exact
   interface type in the current implementation.
 - Calling a zero-valued interface traps via `panic("nil interface method call")`.
-- Local packages shadow stdlib packages with the same import path.
+- The import path's final segment is its package qualifier. Distinct imports
+  with the same final segment are rejected as ambiguous.
+- Package lowering uses origin-safe canonical names, so equal logical package
+  paths from different origins do not collide.
 - Imported packages expose only `pub` top-level declarations.
 - Exported functions, structs, interfaces, enums, and methods cannot expose
   non-exported local struct, interface, or enum types in parameters, returns,

@@ -23,8 +23,7 @@ The implemented version provides:
   dependency cache or network access
 - local path dependencies for development workflows
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
-- compiler integration via a dependency index consulted between local and
-  stdlib resolution
+- compiler integration through origin-scoped source and alias bindings
 
 ## 2. Motivation
 
@@ -129,29 +128,37 @@ Invalid because `path` and `git` are mutually exclusive.
   against `yar.lock`. A fresh entry is moved to its final cache path only after
   its commit and content hash match. Each fetched manifest is also checked
   against its package node's child edges.
-- During compilation, the package loader builds a dependency index from
-  `yar.toml` and `yar.lock`. When a local import path is not found, the loader
-  checks the dependency index before falling back to stdlib.
-- The dependency index stores lock metadata. When resolution selects a locked
+- During compilation, the package loader builds origin-scoped source records
+  and alias bindings from `yar.toml` and `yar.lock`. It checks same-origin
+  packages, then aliases declared by the importing origin, then stdlib.
+- The source index stores lock metadata. When resolution selects a locked
   dependency, its cache tree is hash-verified before the path is returned or
   its manifest or source is parsed. The verified manifest's git dependencies
   must then exactly match the node's child edges. Missing, corrupt, or
   edge-divergent selected entries stop package loading; compilation performs no
   cache repair and does not substitute a same-named stdlib package. Unused and
-  locally shadowed entries do not require a cache or manifest read.
+  same-origin-shadowed entries do not require a cache or manifest read.
 - Cached git trees contain only real directories and regular files. Symlinks
   and special filesystem entries are rejected. Local path dependencies remain
   live, unhashed filesystem inputs.
-- Resolution order: local → dependency → stdlib.
-- Local packages shadow dependencies. Dependencies shadow stdlib.
+- A dependency alias is a binding owned by a source origin, not package
+  identity. Packages use `PackageId = (source origin, source-relative subpath)`.
+- For each non-stdlib importer, resolution checks same-origin packages, then
+  aliases declared directly by that origin, then embedded stdlib.
+- Entry aliases come from the root manifest, root path origins use aliases from
+  their own manifests, and locked git origins use their lock node's child edges.
+- Imports inside embedded stdlib are sealed to the stdlib origin.
 - A selected dependency alias is authoritative. A missing declared path fails
   loading instead of falling through to a same-named stdlib package.
-- All aliases in the validated reachable lock graph share one global
-  dependency index. Any loaded package may import a reachable transitive alias
-  even when that alias is not declared directly in its manifest.
+- Lock reachability does not grant import visibility. Each importing origin
+  must directly declare every external alias it uses. Source that relied on a
+  merely reachable transitive alias must add it to that source's manifest.
 - Transitive dependencies are discovered by reading `yar.toml` in each
   fetched dependency. Reusing an alias with a different git URL, ref kind, or
   ref value is an error. There is no root override.
+- Lock v1 and the cache layout are unchanged. Lock v1 still requires one global
+  source/ref tuple per alias, so different owners cannot yet reuse one alias for
+  different targets. That requires lock v2.
 - `path` dependencies are resolved directly from the filesystem and are not
   written to `yar.lock`. They may be declared only in the root manifest. A root
   path dependency's manifest may declare git dependencies, but may not declare
@@ -182,7 +189,8 @@ None. No syntax changes.
 
 ### AST / IR impact
 
-None. Dependency packages load into the same `ast.Package` structure.
+Dependency packages and import edges use typed `PackageId` values so equal
+logical paths from different origins remain distinct.
 
 ### Checker impact
 
@@ -190,19 +198,20 @@ None. Dependency packages are checked through the same pipeline.
 
 ### Codegen impact
 
-None. Dependency package declarations are lowered identically to local
-packages.
+Dependency declarations are lowered identically to local packages, using
+origin-safe canonical symbols derived from `PackageId`.
 
 ### Compiler package loader impact
 
 - `load_package_graph()` constructs a `DependencyIndex` from `yar.toml` and
   `yar.lock` and gives it to `PackageLoader`.
-- `DependencyIndex::load()` reconciles the complete lock graph, then stores all
-  reachable aliases without requiring every cache entry to exist.
-- `DependencyIndex::resolve()` verifies a selected locked cache tree, then its
-  manifest edges, before exposing the path.
-- `PackageLoader::load_package()` resolves through the dependency index when a
-  local directory is not found, before the stdlib fallback.
+- `DependencyIndex::load()` reconciles the complete lock graph, then builds
+  source records and direct alias bindings for each owner origin without
+  requiring every cache entry to exist.
+- `DependencyIndex::resolve()` applies the importing origin's lookup scope and
+  verifies a selected locked cache tree and manifest edges before exposing it.
+- `PackageLoader::load_package()` records typed import targets, rejects
+  duplicate final qualifiers, and keeps stdlib imports inside the stdlib origin.
 
 ### Runtime impact
 
@@ -217,8 +226,8 @@ None.
   conflict detection
 - `crates/yar-compiler/src/lock_graph.rs` — graph reconciliation, selected
   manifest-edge verification, and targeted-update merge/prune behavior
-- `crates/yar-compiler/src/package.rs` — alias-to-path lookup for the package
-  loader with selected locked-cache verification
+- `crates/yar-compiler/src/package.rs` — origin-scoped source and alias lookup
+  with selected locked-cache verification
 
 ### External dependency
 
@@ -237,14 +246,15 @@ existing cross-package reference system.
 
 ### Import cycles
 
-The existing `checkImportCycles()` works on the package graph regardless of
-package source. Cycles through dependencies are detected identically.
+Cycle checks operate on `PackageId`, so equal logical paths from different
+origins remain distinct and cycles through dependencies are detected normally.
 
 ### Stdlib
 
-Dependencies shadow stdlib packages with the same alias name. This is
-consistent with local packages already shadowing stdlib. A locked dependency
-whose cache is missing or corrupt fails before stdlib fallback.
+For non-stdlib importers, directly declared dependencies shadow stdlib packages
+with the same qualifier. A locked dependency whose cache is missing or corrupt
+fails before stdlib fallback. Stdlib's own imports never consult external
+aliases.
 
 ### Testing
 
@@ -253,9 +263,9 @@ excluded (only the root project's test files are included).
 
 ### Future modules/imports
 
-The alias-based system is forward-compatible with richer module conventions.
-Import aliases (if added later) would compose naturally with dependency
-aliases.
+The owner-scoped binding model is forward-compatible with richer module
+conventions. Source-level import aliases (if added later) would compose with
+dependency aliases.
 
 ## 9. Alternatives Considered
 
@@ -281,12 +291,18 @@ from an unreachable extra, prove missing children, or update one dependency
 without retaining stale descendants. Explicit child edges make the committed
 graph independently reconcilable without opening unused caches.
 
-### Per-package dependency visibility
+### Global reachable-alias visibility
 
-Restrict each package to aliases declared directly in its own manifest.
-Rejected for the current design because the loader intentionally exposes the
-validated reachable closure through one global alias index. Graph reachability
-controls lock membership; it does not create per-package import scopes.
+Expose every alias in the validated reachable lock graph to every package.
+Rejected because reachability proves lock membership, not ownership or source
+intent. Importers see only aliases declared by their source origin.
+
+### Owner-local alias reuse in lock v1
+
+Allow different owners to bind the same alias to different sources while still
+writing lock v1. Deferred because lock v1 identifies package nodes through one
+global alias namespace. The loader is owner-scoped, but representing distinct
+targets for one alias requires lock v2.
 
 ### Root dependency overrides
 
@@ -314,13 +330,13 @@ hosts.
 | Language surface            | None — no syntax changes                                              |
 | Parser complexity           | None                                                                  |
 | Checker complexity          | None                                                                  |
-| Lowering/codegen complexity | None                                                                  |
-| Compiler loader complexity  | Low — one new resolution step between local and stdlib                |
+| Lowering/codegen complexity | Low — typed package identity and origin-safe canonical symbols        |
+| Compiler loader complexity  | Medium — source origins, owner bindings, and sealed stdlib lookup     |
 | CLI complexity              | Medium — six new commands                                             |
 | Dependency implementation   | Medium — manifest, lockfile, fetch, resolve, and package-index logic  |
 | External dependency         | Low — one stable TOML parsing library                                 |
 | Runtime complexity          | None                                                                  |
-| Diagnostics complexity      | Low — error messages for missing lock files, conflicts                |
+| Diagnostics complexity      | Medium — lock errors, undeclared aliases, and ambiguous qualifiers    |
 | Test burden                 | Medium — unit tests for deps package, integration test for local deps |
 | Documentation burden        | Medium — new domain doc, updates to summary, practices, YAR.md        |
 
@@ -339,8 +355,10 @@ None remaining. All design decisions are resolved in the implementation.
 
 Accepted. The alias-based, git-backed, exact-pinning design fits Yar's
 preference for explicitness and simplicity. The versioned lock graph makes the
-entire resolved closure explicit while preserving lazy cache access and
-requiring no parser, type-system, or runtime changes.
+entire resolved closure explicit while preserving lazy cache access. Import
+visibility is owner-scoped and package identity is origin-aware; lock v1 keeps
+global alias/source uniqueness until a future lock v2 can encode true
+owner-local alias reuse.
 
 ## 14. Implementation Checklist
 
@@ -351,8 +369,10 @@ requiring no parser, type-system, or runtime changes.
       detection
 - [x] `crates/yar-compiler/src/lock_graph.rs` — exact graph reconciliation,
       selected-manifest verification, and targeted-update merging
-- [x] `crates/yar-compiler/src/package.rs` — alias-to-path index and compiler
-      integration
+- [x] `crates/yar-compiler/src/package.rs` — origin-scoped source/alias index
+      and compiler integration
+- [x] origin-scoped package identity, direct owner bindings, sealed stdlib
+      imports, and origin-safe lowering
 - [x] CLI commands in `crates/yar-cli/src/main.rs`
 - [x] unit tests in `crates/yar-compiler`
 - [x] integration test with local path dependency fixture

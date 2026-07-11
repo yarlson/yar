@@ -1,12 +1,25 @@
 # Source To Native
 
+## Shared Frontend
+
+- Path compilation loads a graph keyed by `PackageId(origin, subpath)` rather
+  than by raw import text.
+- Each import resolves within the importing origin: own packages, aliases
+  declared for that origin, then embedded stdlib. Stdlib-origin imports remain
+  inside the embedded stdlib origin.
+- The loader rejects invalid paths, package-name mismatches, cycles, undeclared
+  reachable aliases, and distinct imports with the same final-segment
+  qualifier.
+- Lowering follows each import's resolved `PackageId` and gives declarations
+  origin-safe canonical names before monomorphization, checking, and codegen.
+
 ## `check`
 
 - Implemented by the Rust CLI under `crates/yar-cli` through the Rust package
   load/lower/monomorphize/check pipeline.
 - Resolves the named entry file or package directory on disk.
-- If `yar.toml` exists in the root directory, builds a dependency index from
-  the manifest and lock file for import resolution.
+- If `yar.toml` exists, builds origin-scoped dependency bindings from the root
+  manifest, path-dependency manifests, and reconciled lock child edges.
 - Runs package loading, lowering, checking, and IR generation through
   `yar_compiler::compile_path`.
 - Prints formatted diagnostics to stderr and exits non-zero when parsing or

@@ -46,12 +46,20 @@ A valid entry package:
 
 Imported packages:
 
-- live in subdirectories under the entry package root, or are declared as
-  dependencies in `yar.toml`, or are embedded stdlib packages
 - use `import "path"` with slash-separated package paths
 - must declare a package name matching the final import path segment
 - may expose top-level `struct`, `interface`, `enum`, and `fn` declarations with `pub`
-- resolution order: local → dependency → stdlib
+- resolve within the importing source origin: same-origin packages → aliases
+  declared directly by that origin → embedded stdlib
+- cannot share a final path segment with another distinct import in the same
+  package, because that segment is the source qualifier
+
+The compiler identifies a loaded package as `PackageId = (source origin,
+source-relative subpath)`. The entry tree, each path dependency, each pinned git
+source, and embedded stdlib are distinct origins. Import strings and dependency
+aliases are bindings into that identity space; they are not package identity.
+Package graphs, lowering, and cycle checks retain `PackageId`, and lowered
+symbols use origin-safe canonical names.
 
 `main` must return either:
 
@@ -904,9 +912,11 @@ Out-of-range slice indexing and invalid slice ranges trap with a runtime failure
 
 ## Standard Library
 
-The compiler ships with an embedded standard library written in Yar. Stdlib
-packages are imported like regular packages. If a local package with the same
-name exists, it takes priority over the stdlib version.
+The compiler ships with an embedded standard library written in Yar. For a
+non-stdlib importer, stdlib is the fallback after same-origin packages and
+directly declared dependency aliases. Imports made by stdlib packages are
+sealed to the embedded stdlib origin; project-local and external packages
+cannot replace stdlib's internal dependencies.
 
 ### `strings`
 
@@ -1431,9 +1441,16 @@ dependency. A locked git package may not declare a path dependency. Selecting
 a declared path alias requires its directory to exist; it does not fall back
 to a same-named standard-library package.
 
-All aliases reachable in the validated lock graph share one global dependency
-index, so source may import a reachable transitive alias without declaring it
-directly in its own manifest.
+Alias visibility is scoped to the importing source origin. The entry origin
+uses aliases from the root manifest, a root path dependency uses aliases from
+its own manifest, and a locked git origin uses its recorded child edges. Lock
+reachability alone does not make an alias importable. Source that previously
+imported a reachable transitive alias must declare that alias directly in its
+own manifest.
+
+Lock v1 and the cache format are unchanged. Lock v1 still requires one global
+source/ref tuple per alias, even across different owner scopes; allowing two
+owners to reuse the same alias for different targets requires a future lock v2.
 
 ### Commands
 
@@ -1456,10 +1473,14 @@ locked revision, so `yar update <path-alias>` is rejected with guidance to run
 
 ### Resolution Order
 
-1. Local filesystem
-2. Dependency index (from `yar.toml` and `yar.lock`)
+For each non-stdlib importing origin:
+
+1. Same-origin package tree, including the origin's self alias
+2. An alias declared directly by that origin
 3. Embedded stdlib
 4. Error
+
+Imports originating in embedded stdlib resolve only within the stdlib origin.
 
 ### Cache
 

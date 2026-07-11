@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use crate::token::{Kind, Position};
 
@@ -17,12 +17,37 @@ pub struct Program {
 pub struct PackageImport {
     pub name: String,
     pub path: String,
+    pub target: PackageId,
     pub decl: ImportDecl,
+}
+
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SourceId {
+    #[default]
+    Entry,
+    Path {
+        manifest_path: String,
+    },
+    Git {
+        git: String,
+        commit: String,
+    },
+    Stdlib,
+}
+
+/// Stable package identity inside one compilation graph.
+///
+/// Import spellings and dependency aliases are bindings owned by a source;
+/// they are deliberately not part of the package identity.
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PackageId {
+    pub source: SourceId,
+    pub subpath: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Package {
-    pub path: String,
+    pub id: PackageId,
     pub name: String,
     pub stdlib: bool,
     pub files: Vec<Program>,
@@ -35,9 +60,8 @@ pub struct Package {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PackageGraph {
-    pub entry_path: String,
-    pub entry: String,
-    pub packages: std::collections::BTreeMap<String, Package>,
+    pub entry: PackageId,
+    pub packages: BTreeMap<PackageId, Package>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
