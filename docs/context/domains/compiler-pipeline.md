@@ -2,10 +2,11 @@
 
 ## Responsibility Split
 
-- `crates/yar-cli` is the shipped CLI wiring. It parses command names and basic
-  arguments, compiles an entry file or package directory through
-  `crates/yar-compiler`, formats diagnostics, resolves runtime archives, and
-  sets a timeout for `build`, `run`, and `test`.
+- `crates/yar-cli` is the shipped CLI wiring. It parses command names and global
+  project selection, resolves an entry file or package directory separately
+  from its project root, compiles through `crates/yar-compiler`, formats
+  diagnostics, resolves runtime archives, and sets a timeout for `build`, `run`,
+  and `test`.
 - `crates/yar-compiler/src/token.rs` defines the token type set, token values,
   and source positions used by the lexer, parser, and downstream stages.
 - `crates/yar-compiler/src/diag.rs` defines the diagnostic type and accumulator
@@ -29,6 +30,7 @@
   syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
 - `crates/yar-compiler/src/package.rs` resolves the package graph by explicit
   `PackageId` values made from a source origin and source-relative subpath. It
+  preserves the entry directory beneath a separately selected project root,
   scopes lookup to the importer origin, verifies selected locked sources, seals
   stdlib imports, validates qualifiers and package names, and checks cycles.
 - `crates/yar-compiler/src/manifest.rs` provides `yar.toml` and versioned
@@ -81,6 +83,10 @@
 - `Compile` works on one already-loaded source string. `CompilePath` is the
   path-based entrypoint that supports packages, imports, reserved stdlib
   routing, and export validation.
+- Path compilation uses an explicitly supplied project root or discovers the
+  nearest ancestor `yar.toml` from the entry directory. Without a manifest, the
+  entry directory is the root. The entry must be within the selected root and
+  receives a project-relative package subpath.
 - The loader sorts file names inside each package directory, requires every
   file in a package directory to share the same package name, and rejects
   package directories without `.yar` files.

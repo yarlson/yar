@@ -81,6 +81,8 @@ Git-based dependency management is now implemented:
 - `yar.lock` lock file with exact commit SHAs and content hashes
 - git-based fetching to a global cache with integrity verification
 - transitive dependency resolution with conflict detection
+- nearest-ancestor project discovery and explicit `--manifest-path` selection
+  across compilation and dependency commands
 - recoverable `yar.toml`/`yar.lock` publication with phase-aware interruption
   recovery and transactional lock deletion
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`

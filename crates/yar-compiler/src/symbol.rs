@@ -7,9 +7,9 @@ use crate::ast::{Package, PackageId, SourceId};
 const INTERNAL_PACKAGE_PREFIX: &str = "$yar$";
 const SHA256_HEX_LEN: usize = 64;
 
-pub(crate) fn canonical_decl_name(package: &Package, name: &str) -> String {
+pub(crate) fn canonical_decl_name(entry: &PackageId, package: &Package, name: &str) -> String {
     let prefix = match &package.id.source {
-        SourceId::Entry if package.id.subpath.is_empty() => package.name.clone(),
+        SourceId::Entry if &package.id == entry => package.name.clone(),
         SourceId::Stdlib => package.id.subpath.replace('/', "."),
         _ => format!(
             "{INTERNAL_PACKAGE_PREFIX}{}.{}",

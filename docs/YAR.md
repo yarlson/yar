@@ -1359,6 +1359,41 @@ Exit code is `0` when all tests pass, `1` when any test fails.
 Yar supports external dependencies through `yar.toml` and `yar.lock` files.
 Dependencies are git repositories, with no central registry.
 
+### Project Selection
+
+Use the optional global prefix before a command to select a project explicitly:
+
+```bash
+yar --manifest-path <path/to/yar.toml> <command> ...
+```
+
+The prefix may appear only once, must name `yar.toml`, and never falls back to
+automatic discovery. Relative manifest paths are resolved from the invocation
+directory. `init` and `add` may create an absent explicitly selected manifest
+in an existing target directory; every other explicitly selected command
+requires it to exist. A created manifest uses the selected directory's name
+when it is a valid package alias and otherwise uses `myproject`.
+
+Without the prefix, `check`, `emit-ir`, `build`, `run`, and `test` search from
+the named entry file's parent or entry directory toward the filesystem root and
+select the nearest `yar.toml`. If none exists, the entry directory is a
+manifestless project root. An explicitly selected project root must contain the
+entry package.
+
+`add`, `remove`, `fetch`, `lock`, and `update` instead search from the
+invocation directory. If no ancestor manifest exists, `add` creates one in that
+directory while the other dependency commands fail. `init` deliberately does
+not search ancestors; it creates a project in the invocation directory unless
+an explicit manifest path selects another target.
+
+A manifest candidate must be a valid regular file. An invalid nearest candidate
+is an error rather than a reason to continue to a parent project. The selected
+manifest's directory is the project root and owns its sibling `yar.lock`,
+dependency-metadata recovery state, and root package tree. Manifest-declared
+relative dependency paths use that directory. Relative manifest, source, and
+output arguments still use the invocation directory, and project selection does
+not change the working directory inherited by `yar run` or `yar test` programs.
+
 ### Manifest (`yar.toml`)
 
 ```toml
@@ -1443,11 +1478,12 @@ package. Unused dependencies and dependencies shadowed by local packages do
 not require a cache.
 
 Local `path` dependencies remain live, unhashed filesystem inputs and may be
-declared only in the root `yar.toml`. A root path dependency's manifest may
-contribute git roots to reconciliation, but may not declare another path
-dependency. A locked git package may not declare a path dependency. Selecting
-a declared path alias requires its directory to exist; it does not fall back
-to a same-named standard-library package.
+declared only in the root `yar.toml`. Relative values are resolved from the
+directory containing that manifest, not from the invocation directory. A root
+path dependency's manifest may contribute git roots to reconciliation, but may
+not declare another path dependency. A locked git package may not declare a
+path dependency. Selecting a declared path alias requires its directory to
+exist; it does not fall back to a same-named standard-library package.
 
 Alias visibility is scoped to the importing source origin. The entry origin
 uses aliases from the root manifest, a root path dependency uses aliases from
@@ -1461,6 +1497,10 @@ source/ref tuple per alias, even across different owner scopes; allowing two
 owners to reuse the same alias for different targets requires a future lock v2.
 
 ### Commands
+
+Every command accepts the optional prefix
+`yar --manifest-path <path/to/yar.toml> <command> ...`; it must appear before
+the command rather than among command arguments.
 
 | Command                            | Description                      |
 | ---------------------------------- | -------------------------------- |
@@ -1487,16 +1527,20 @@ target manifest and lock state before changing project metadata. They publish
 when no git roots remain. `yar lock` and `yar update` publish only the lock
 state and preserve the manifest byte-for-byte.
 
-A same-directory journal records the prior contents or absence of both files.
-A failure before commit restores that prior pair. On the next CLI invocation
-from the project directory, a prepared interrupted transaction is rolled back;
-a transaction that reached its commit phase keeps the target pair while cleanup
-finishes. Success messages are printed only after commit and cleanup. Resolution
-may warm verified content-addressed global dependency-cache entries before
-publication; those cache entries are outside the project-metadata transaction
-and are not rolled back. Existing metadata-file permissions are preserved. Do
-not run concurrent Yar CLI commands from the same current directory while
-dependency metadata publication or recovery is in progress.
+A journal beside the selected manifest records the prior contents or absence of
+both files. A failure before commit restores that prior pair. Explicit selection
+recovers only its fixed manifest directory and never falls back. Automatic
+discovery recognizes a prepared journal or completion marker even when the live
+manifest is absent, recovers that candidate, and restarts its ancestor search
+before reading metadata. A prepared interrupted transaction is rolled back; a
+transaction that reached its commit phase keeps the target pair while cleanup
+finishes. Success messages are printed only after commit and cleanup.
+Resolution may warm verified content-addressed global dependency-cache entries
+before publication; those cache entries are outside the project-metadata
+transaction and are not rolled back. Existing metadata-file permissions are
+preserved. Do not run another Yar CLI command against the same selected project
+while dependency metadata publication or recovery is in progress, even from
+another invocation directory.
 
 ### Resolution Order
 

@@ -810,6 +810,7 @@ Exit 0 if all pass, 1 if any fail.
 ## Commands
 
 ```
+yar --manifest-path <path/to/yar.toml> <command> ...  # optional global prefix
 yar build <path>           # compile to native executable
 yar run <path>             # build and execute
 yar test <path>            # discover and run tests
@@ -877,6 +878,31 @@ fn test_fizzbuzz_fizzbuzz(t *testing.T) void {
 
 Git-based, no central registry. Declared in `yar.toml`, pinned in `yar.lock`.
 
+Project selection:
+- `yar --manifest-path <path/to/yar.toml> <command> ...` is the only explicit
+  form. The prefix appears at most once before the command, must name
+  `yar.toml`, and never falls back. Relative manifest paths use the invocation
+  directory.
+- `check`, `emit-ir`, `build`, `run`, and `test` otherwise choose the nearest
+  ancestor manifest from the entry file's parent or entry directory. Without
+  one, the entry directory is a manifestless project root. An explicit root
+  must contain the entry.
+- `add`, `remove`, `fetch`, `lock`, and `update` otherwise choose the nearest
+  ancestor manifest from the invocation directory. Without one, `add` creates
+  there; the other dependency commands fail.
+- `init` never searches ancestors. It creates in the invocation directory or
+  at an explicit target. Explicit `init` and `add` may create an absent
+  `yar.toml` in an existing selected directory; other explicit commands require
+  the manifest. A created manifest derives its package name from the selected
+  directory when valid, otherwise `myproject`.
+- A nearest manifest candidate must be a valid regular file; failure does not
+  fall back to a parent project. The selected manifest directory owns sibling
+  lock and transaction state, the root package tree, and manifest-relative
+  dependency paths.
+- Relative source, output, and manifest option paths use the invocation
+  directory. Selection never changes process cwd; `run` and `test` programs
+  inherit it.
+
 **yar.toml:**
 ```toml
 [package]
@@ -898,8 +924,9 @@ local_lib = { path = "../my-local-lib" }
 - Duplicate aliases or child edges, missing nodes, cycles, and unreachable
   nodes are rejected; missing/unsupported lock versions require `yar lock`
 - `path` dependencies are live and not written to `yar.lock`; only the root
-  manifest may declare them. Their manifests may declare git dependencies, but
-  may not declare another path dependency
+  manifest may declare them. Relative values use that manifest's directory.
+  Their manifests may declare git dependencies, but may not declare another
+  path dependency
 - A selected path alias must exist and does not fall through to a same-named
   stdlib package
 - Transitive dependencies supported (each dep may have its own `yar.toml`)
@@ -929,13 +956,16 @@ local_lib = { path = "../my-local-lib" }
   targeted path updates require `yar lock`
 - `yar add`/`yar remove` resolve and serialize the complete target manifest and
   lock state before recoverable paired publication; no git roots means lock
-  deletion. Pre-commit failure or a later command dispatched from the same
-  current directory after prepared interruption restores the previous
-  bytes/presence, while committed cleanup keeps the target state. `yar lock`
-  and `yar update` preserve manifest bytes; metadata file permissions are also
-  preserved. Success output follows commit and cleanup. Verified cache warming
-  is outside rollback. Do not run another Yar CLI command concurrently from
-  that directory while metadata changes
+  deletion. Pre-commit failure restores the previous bytes/presence, while
+  committed cleanup keeps the target state. Explicit selection recovers only
+  its fixed manifest directory and never falls back. Automatic discovery
+  recognizes transaction state without a live manifest, recovers that
+  candidate, and restarts its ancestor search before reading metadata.
+  `yar lock` and `yar update` preserve manifest bytes; metadata file
+  permissions are also preserved. Success output follows commit and cleanup.
+  Verified cache warming is outside rollback. Do not run another Yar CLI
+  command against the same selected project while metadata changes, even from
+  another invocation directory
 
 **Commands:**
 ```bash

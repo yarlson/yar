@@ -30,6 +30,13 @@
   stdlib name gets a migration diagnostic naming its `std/...` path.
 - A selected dependency entry is authoritative; a missing declared path does
   not receive stdlib substitution.
+- An explicit `--manifest-path` selects the project root without fallback.
+  Otherwise compilation discovers from the entry directory and dependency
+  commands discover from the invocation directory; the nearest ancestor
+  `yar.toml` wins. The entry remains separate from its selected project root.
+- The root manifest's directory anchors its lock, transaction state, package
+  tree, and relative dependency paths. Project selection does not change the
+  process working directory or the base for source and output arguments.
 - A versioned `yar.lock` records the complete reachable git dependency graph.
   Git declarations in the root manifest and manifests of root path
   dependencies, plus lock child edges, must agree on alias, git URL, ref kind,

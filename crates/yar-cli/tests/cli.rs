@@ -487,6 +487,521 @@ fn init_creates_manifest() {
 }
 
 #[test]
+fn init_ignores_ancestor_discovery_and_supports_an_explicit_target() {
+    let dir = temp_dir("yar-cli-init-project-selection");
+    let parent = dir.join("parent");
+    let child = parent.join("child");
+    let explicit = dir.join("explicit_project");
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&explicit).unwrap();
+    fs::write(parent.join("yar.toml"), "[package]\nname = \"parent\"\n").unwrap();
+
+    let nested = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("init")
+        .current_dir(&child)
+        .output()
+        .unwrap();
+    assert!(
+        nested.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&nested.stderr)
+    );
+    assert!(child.join("yar.toml").is_file());
+
+    let explicit_manifest = explicit.join("yar.toml");
+    let selected = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "--manifest-path",
+            explicit_manifest.to_str().unwrap(),
+            "init",
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        selected.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let manifest = parse_manifest(&fs::read_to_string(&explicit_manifest).unwrap()).unwrap();
+    assert_eq!(manifest.package.name, "explicit_project");
+}
+
+#[test]
+fn nested_dependency_commands_mutate_the_nearest_ancestor_project() {
+    let root = temp_dir("yar-cli-nested-metadata-command");
+    let child = root.join("work/nested");
+    let local = root.join("local-lib");
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&local).unwrap();
+    fs::write(root.join("yar.toml"), "[package]\nname = \"app\"\n").unwrap();
+    fs::write(local.join("lib.yar"), "package local_lib\n").unwrap();
+
+    let add = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "local_lib", "--path=local-lib"])
+        .current_dir(&child)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert!(!child.join("yar.toml").exists());
+    let manifest = parse_manifest(&fs::read_to_string(root.join("yar.toml")).unwrap()).unwrap();
+    assert_eq!(manifest.dependencies["local_lib"].path, "local-lib");
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["remove", "local_lib"])
+        .current_dir(&child)
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    let manifest = parse_manifest(&fs::read_to_string(root.join("yar.toml")).unwrap()).unwrap();
+    assert!(manifest.dependencies.is_empty());
+}
+
+#[test]
+fn explicit_add_bootstraps_only_the_selected_project() {
+    let dir = temp_dir("yar-cli-explicit-add-bootstrap");
+    let project = dir.join("selected_project");
+    let invocation = dir.join("invocation");
+    let dependency = project.join("dep");
+    fs::create_dir_all(&invocation).unwrap();
+    fs::create_dir_all(&dependency).unwrap();
+    fs::write(dependency.join("dep.yar"), "package dep\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "--manifest-path",
+            project.join("yar.toml").to_str().unwrap(),
+            "add",
+            "dep",
+            "--path=dep",
+        ])
+        .current_dir(&invocation)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!invocation.join("yar.toml").exists());
+    let manifest = parse_manifest(&fs::read_to_string(project.join("yar.toml")).unwrap()).unwrap();
+    assert_eq!(manifest.package.name, "selected_project");
+    assert_eq!(manifest.dependencies["dep"].path, "dep");
+}
+
+#[test]
+fn check_discovers_an_ancestor_manifest_for_a_nested_entry() {
+    let root = temp_dir("yar-cli-nested-entry-project");
+    let entry = root.join("cmd/app");
+    let dependency = root.join("dep");
+    let shared = root.join("shared");
+    fs::create_dir_all(&entry).unwrap();
+    fs::create_dir_all(&dependency).unwrap();
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(
+        root.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+dep = { path = "dep" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("dep.yar"),
+        "package dep\n\npub fn value() i32 { return 20 }\n",
+    )
+    .unwrap();
+    fs::write(
+        shared.join("shared.yar"),
+        "package shared\n\npub fn value() i32 { return 22 }\n",
+    )
+    .unwrap();
+    fs::write(
+        entry.join("main.yar"),
+        r#"package main
+
+import "dep"
+import "shared"
+
+fn main() i32 {
+    return dep.value() + shared.value()
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", entry.to_str().unwrap()])
+        .current_dir(root.parent().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn explicit_manifest_overrides_a_nearer_manifest() {
+    let workspace = temp_dir("yar-cli-explicit-manifest");
+    let outer = workspace.join("outer");
+    let inner = outer.join("inner");
+    let entry = inner.join("app");
+    let dependency = outer.join("dep");
+    let invocation = workspace.join("invocation");
+    fs::create_dir_all(&entry).unwrap();
+    fs::create_dir_all(&dependency).unwrap();
+    fs::create_dir_all(&invocation).unwrap();
+    fs::write(
+        outer.join("yar.toml"),
+        r#"[package]
+name = "outer"
+
+[dependencies]
+dep = { path = "dep" }
+"#,
+    )
+    .unwrap();
+    fs::write(inner.join("yar.toml"), "[package]\nname = \"inner\"\n").unwrap();
+    fs::write(
+        dependency.join("dep.yar"),
+        "package dep\n\npub fn value() i32 { return 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        entry.join("main.yar"),
+        "package main\n\nimport \"dep\"\n\nfn main() i32 { return dep.value() }\n",
+    )
+    .unwrap();
+
+    let automatic = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", "../outer/inner/app"])
+        .current_dir(&invocation)
+        .output()
+        .unwrap();
+    assert!(!automatic.status.success(), "nearer manifest was skipped");
+
+    let explicit = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "--manifest-path",
+            "../outer/yar.toml",
+            "check",
+            "../outer/inner/app",
+        ])
+        .current_dir(&invocation)
+        .output()
+        .unwrap();
+    assert!(
+        explicit.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+}
+
+#[test]
+fn explicit_selection_does_not_recover_the_invocation_directory() {
+    let dir = temp_dir("yar-cli-explicit-selection-recovery-scope");
+    let project = dir.join("project");
+    let invocation = dir.join("invocation");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&invocation).unwrap();
+    fs::write(project.join("yar.toml"), "[package]\nname = \"project\"\n").unwrap();
+    fs::write(
+        project.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+    let unrelated_journal = invocation.join(".yar-metadata-transaction");
+    fs::create_dir(&unrelated_journal).unwrap();
+    fs::write(unrelated_journal.join("version"), "malformed\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "--manifest-path",
+            project.join("yar.toml").to_str().unwrap(),
+            "check",
+            project.join("main.yar").to_str().unwrap(),
+        ])
+        .current_dir(&invocation)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(unrelated_journal.join("version")).unwrap(),
+        b"malformed\n"
+    );
+    assert!(unrelated_journal.exists());
+}
+
+#[test]
+fn nested_check_recovers_an_ancestor_transaction_without_a_manifest() {
+    let root = temp_dir("yar-cli-nested-first-add-recovery");
+    let entry = root.join("nested/app");
+    fs::create_dir_all(&entry).unwrap();
+    fs::write(
+        entry.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+    let journal = root.join(".yar-metadata-transaction");
+    fs::create_dir(&journal).unwrap();
+    fs::write(journal.join("version"), "1\n").unwrap();
+    fs::write(journal.join("yar.toml.before-absent"), "").unwrap();
+    fs::write(journal.join("yar.lock.before-absent"), "").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", "main.yar"])
+        .current_dir(&entry)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!journal.exists());
+    assert!(!root.join(".yar-metadata-transaction.complete").exists());
+    assert!(!root.join("yar.toml").exists());
+}
+
+#[test]
+fn manifest_path_is_a_single_prefix_and_usage_errors_do_not_recover() {
+    let dir = temp_dir("yar-cli-manifest-path-usage");
+    let journal = dir.join(".yar-metadata-transaction");
+    fs::create_dir(&journal).unwrap();
+    fs::write(journal.join("version"), "1\n").unwrap();
+
+    let cases: &[&[&str]] = &[
+        &["--manifest-path"],
+        &["--manifest-path", ""],
+        &["--manifest-path", "other.toml", "check", "main.yar"],
+        &[
+            "--manifest-path",
+            "yar.toml",
+            "--manifest-path",
+            "yar.toml",
+            "check",
+            "main.yar",
+        ],
+        &["check", "--manifest-path", "yar.toml", "main.yar"],
+    ];
+
+    for args in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .args(*args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "args {args:?}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            journal.exists(),
+            "usage error recovered journal for {args:?}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn explicit_manifest_rejects_an_entry_outside_its_project() {
+    let dir = temp_dir("yar-cli-entry-outside-project");
+    let project = dir.join("project");
+    let outside = dir.join("outside");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(project.join("yar.toml"), "[package]\nname = \"project\"\n").unwrap();
+    fs::write(
+        outside.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "--manifest-path",
+            project.join("yar.toml").to_str().unwrap(),
+            "check",
+            outside.to_str().unwrap(),
+        ])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside the selected project root"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn explicit_missing_manifest_is_not_an_implicit_manifestless_project() {
+    let project = temp_dir("yar-cli-explicit-missing-manifest");
+    let entry = project.join("main.yar");
+    fs::write(&entry, "package main\n\nfn main() i32 { return 0 }\n").unwrap();
+    let manifest = project.join("yar.toml");
+
+    for command in [vec!["check", entry.to_str().unwrap()], vec!["fetch"]] {
+        let mut args = vec!["--manifest-path", manifest.to_str().unwrap()];
+        args.extend(command);
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .args(&args)
+            .current_dir(&project)
+            .output()
+            .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "command {args:?} accepted no manifest"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("does not exist"),
+            "command {args:?}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!manifest.exists());
+    }
+}
+
+#[test]
+fn malformed_nearest_manifest_fails_instead_of_falling_back() {
+    let root = temp_dir("yar-cli-malformed-nearest-manifest");
+    let inner = root.join("inner");
+    let entry = inner.join("app");
+    fs::create_dir_all(&entry).unwrap();
+    fs::write(root.join("yar.toml"), "[package]\nname = \"outer\"\n").unwrap();
+    fs::create_dir(inner.join("yar.toml")).unwrap();
+    fs::write(
+        entry.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", entry.to_str().unwrap()])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "non-file manifest was skipped");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not a regular file"));
+
+    fs::remove_dir(inner.join("yar.toml")).unwrap();
+    fs::write(inner.join("yar.toml"), "not valid TOML = [\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", entry.to_str().unwrap()])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "malformed manifest was skipped");
+    assert!(stderr.contains("TOML"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(inner.join("yar.toml").to_str().unwrap()),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn every_project_command_honors_the_explicit_manifest() {
+    let dir = temp_dir("yar-cli-explicit-manifest-command-matrix");
+    let project = dir.join("project");
+    let inner = project.join("inner");
+    let invocation = dir.join("invocation");
+    let entry = inner.join("main.yar");
+    fs::create_dir_all(&inner).unwrap();
+    fs::create_dir_all(&invocation).unwrap();
+    fs::write(project.join("yar.toml"), "not valid TOML = [\n").unwrap();
+    fs::create_dir(inner.join("yar.toml")).unwrap();
+    fs::write(&entry, "package main\n\nfn main() i32 { return 0 }\n").unwrap();
+    let manifest = project.join("yar.toml");
+
+    let compile_commands: &[&[&str]] = &[
+        &["check", entry.to_str().unwrap()],
+        &["emit-ir", entry.to_str().unwrap()],
+        &["build", entry.to_str().unwrap()],
+        &["run", entry.to_str().unwrap()],
+        &["test", entry.to_str().unwrap()],
+    ];
+    for command in compile_commands {
+        let mut args = vec!["--manifest-path", manifest.to_str().unwrap()];
+        args.extend_from_slice(command);
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .args(&args)
+            .current_dir(&invocation)
+            .env_remove("YAR_OS")
+            .env_remove("YAR_ARCH")
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "command {command:?} ignored selected malformed manifest"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("TOML"),
+            "command {command:?}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(manifest.to_str().unwrap()),
+            "command {command:?}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let metadata_commands: &[&[&str]] = &[
+        &["add", "dep", "--path=dep"],
+        &["remove", "dep"],
+        &["fetch"],
+        &["lock"],
+        &["update"],
+        &["update", "dep"],
+    ];
+    for command in metadata_commands {
+        let mut args = vec!["--manifest-path", manifest.to_str().unwrap()];
+        args.extend_from_slice(command);
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .args(&args)
+            .current_dir(&invocation)
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "command {command:?} ignored selected malformed manifest"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("TOML"),
+            "command {command:?}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+    }
+    assert!(!invocation.join("yar.toml").exists());
+}
+
+#[test]
 fn add_and_remove_local_dependency_updates_manifest() {
     let dir = temp_dir("yar-cli-local-dep");
 

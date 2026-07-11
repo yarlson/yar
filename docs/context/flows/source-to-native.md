@@ -4,6 +4,13 @@
 
 - Path compilation loads a graph keyed by `PackageId(origin, subpath)` rather
   than by raw import text.
+- The CLI resolves relative entry paths from its invocation directory. An
+  explicit global manifest prefix selects the project root; otherwise path
+  commands choose the nearest ancestor `yar.toml` from the entry directory. A
+  manifestless entry uses its own directory as the root.
+- The entry directory remains distinct from the project root and receives a
+  project-relative package subpath. Explicit selection rejects an entry outside
+  that root. Project selection does not change the process working directory.
 - `std/<package>` imports resolve only to the embedded stdlib origin before any
   user-controlled lookup. Other imports resolve within the importing origin:
   own packages, aliases declared for that origin, then error.
@@ -18,8 +25,8 @@
 - Implemented by the Rust CLI under `crates/yar-cli` through the Rust package
   load/lower/monomorphize/check pipeline.
 - Resolves the named entry file or package directory on disk.
-- If `yar.toml` exists, builds origin-scoped dependency bindings from the root
-  manifest, path-dependency manifests, and reconciled lock child edges.
+- When a root manifest is selected, builds origin-scoped dependency bindings
+  from it, path-dependency manifests, and reconciled lock child edges.
 - Runs package loading, lowering, checking, and IR generation through
   `yar_compiler::compile_path`.
 - Prints formatted diagnostics to stderr and exits non-zero when parsing or
@@ -52,7 +59,8 @@
   directly.
 - Accepts one entry file or package directory and an optional `-o` output path.
   The default output path is `a.out` on Unix and `a.exe` on Windows or when
-  `YAR_OS=windows` is set.
+  `YAR_OS=windows` is set. Relative output paths remain relative to the
+  invocation directory.
 - Resolves the build target from `YAR_OS` and `YAR_ARCH` environment variables.
   If neither is set, the host platform is used. If both are set, the compiler
   maps the pair to an LLVM target triple and passes `--target=<triple>` to
@@ -87,6 +95,7 @@
 - Rejects cross-compilation targets; `YAR_OS`/`YAR_ARCH` must match the host
   platform or be unset.
 - Executes the produced binary as a subprocess.
+- Keeps the invocation directory as the program's working directory.
 - Does not forward user program arguments; the spawned program sees only the
   temporary executable path in its argv.
 - Inherits stdin, stdout, and stderr from the calling process.
@@ -106,5 +115,6 @@
 - Compiles and executes the test binary through the same `clang` pipeline as
   `run`; the Rust CLI links the Rust runtime static library through the same
   archive lookup used by `build`.
+- Keeps the invocation directory as the test program's working directory.
 - Exit code is `0` when all tests pass, `1` when any test fails.
 - Test files are excluded from `check`, `build`, `emit-ir`, and `run` commands.
