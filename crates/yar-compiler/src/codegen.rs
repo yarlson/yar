@@ -677,7 +677,7 @@ main.err:
             args.push(format!("{llvm_type} %arg.{idx}"));
         }
 
-        if signature.full_name == "fs.read_file" {
+        if signature.host_intrinsic && signature.full_name == "fs.read_file" {
             self.emit_task_fs_read_file_wrapper_result(&mut out)?;
             out.push_str("}\n");
             return Ok(out);
@@ -3954,7 +3954,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             args.push(value);
         }
 
-        if is_host_intrinsic(&signature.full_name) {
+        if signature.host_intrinsic {
             return self.emit_host_intrinsic_call(&signature, args);
         }
         self.emit_direct_call(&signature, args)
@@ -6002,13 +6002,6 @@ fn function_symbol(name: &str) -> String {
     format!("yar.{}", sanitize_label(name))
 }
 
-fn is_host_intrinsic(name: &str) -> bool {
-    is_fs_host_intrinsic(name)
-        || is_process_env_host_intrinsic(name)
-        || is_net_host_intrinsic(name)
-        || name == "stdio.eprint"
-}
-
 fn is_fs_host_intrinsic(name: &str) -> bool {
     matches!(
         name,
@@ -6184,6 +6177,7 @@ mod tests {
         "testdata/concurrency_channels/main.yar",
         "testdata/concurrency_errors/main.yar",
         "testdata/concurrency_fs/main.yar",
+        "testdata/concurrency_share_safe/main.yar",
         "testdata/deps_local/main.yar",
         "testdata/divide/main.yar",
         "testdata/enum_positional/main.yar",

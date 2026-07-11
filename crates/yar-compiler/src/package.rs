@@ -387,7 +387,8 @@ fn read_stdlib_package(import_path: &str) -> Option<(Package, Vec<Diagnostic>)> 
     let mut package_name = String::new();
     for (name, src) in entries {
         let synthetic_path = format!("<stdlib>/{import_path}/{name}");
-        let (program, diags) = parse_file(&synthetic_path, src);
+        let (mut program, diags) = parse_file(&synthetic_path, src);
+        mark_stdlib_metadata(import_path, &mut program);
         diagnostics.extend(diags);
         if package_name.is_empty() {
             package_name = program.package_name.clone();
@@ -406,6 +407,54 @@ fn read_stdlib_package(import_path: &str) -> Option<(Package, Vec<Diagnostic>)> 
         package_from_files(import_path.to_owned(), package_name, true, files),
         diagnostics,
     ))
+}
+
+fn mark_stdlib_metadata(import_path: &str, program: &mut Program) {
+    for decl in &mut program.structs {
+        decl.resource = matches!(
+            (import_path, decl.name.as_str()),
+            ("fs", "File") | ("net", "Conn" | "Listener")
+        );
+    }
+    for function in &mut program.functions {
+        function.host_intrinsic = match import_path {
+            "fs" => matches!(
+                function.name.as_str(),
+                "read_file"
+                    | "write_file"
+                    | "read_dir"
+                    | "stat"
+                    | "mkdir_all"
+                    | "remove_all"
+                    | "temp_dir"
+                    | "open_read_handle"
+                    | "open_write_handle"
+                    | "read_handle"
+                    | "write_handle"
+                    | "close_handle"
+            ),
+            "process" => matches!(function.name.as_str(), "args" | "run" | "run_inherit"),
+            "env" => function.name == "lookup",
+            "stdio" => function.name == "eprint",
+            "net" => matches!(
+                function.name.as_str(),
+                "listen"
+                    | "accept"
+                    | "listener_addr"
+                    | "close_listener"
+                    | "connect"
+                    | "read"
+                    | "write"
+                    | "close"
+                    | "local_addr"
+                    | "remote_addr"
+                    | "set_read_deadline"
+                    | "set_write_deadline"
+                    | "resolve"
+            ),
+            _ => false,
+        };
+    }
 }
 
 fn stdlib_entries(import_path: &str) -> Option<&'static [(&'static str, &'static str)]> {
@@ -583,6 +632,96 @@ mod tests {
         assert!(graph.packages["http"].stdlib);
         assert!(graph.packages["net"].stdlib);
         assert!(graph.packages["strings"].stdlib);
+    }
+
+    #[test]
+    fn marks_only_embedded_stdlib_resources_and_host_intrinsics() {
+        let (fs_package, diagnostics) = read_stdlib_package("fs").unwrap();
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(
+            fs_package
+                .structs
+                .iter()
+                .filter(|decl| decl.resource)
+                .map(|decl| decl.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["File"],
+        );
+        assert!(
+            fs_package
+                .functions
+                .iter()
+                .find(|decl| decl.name == "read_file")
+                .is_some_and(|decl| decl.host_intrinsic)
+        );
+        assert!(
+            fs_package
+                .functions
+                .iter()
+                .find(|decl| decl.name == "open_read")
+                .is_some_and(|decl| !decl.host_intrinsic)
+        );
+
+        let (net_package, diagnostics) = read_stdlib_package("net").unwrap();
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(
+            net_package
+                .structs
+                .iter()
+                .filter(|decl| decl.resource)
+                .map(|decl| decl.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Conn", "Listener"],
+        );
+    }
+
+    #[test]
+    fn local_package_shadowing_stdlib_does_not_mark_resources() {
+        let dir = temp_dir("yar-rust-stdlib-shadow");
+        fs::create_dir_all(dir.join("fs")).unwrap();
+        fs::write(
+            dir.join("main.yar"),
+            r#"package main
+
+import "fs"
+
+fn main() i32 {
+    return 0
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("fs").join("fs.yar"),
+            r#"package fs
+
+pub struct File {
+    handle i64
+}
+
+pub fn read_file(path str) str {
+    return path
+}
+"#,
+        )
+        .unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(!graph.packages["fs"].stdlib);
+        assert!(
+            graph.packages["fs"]
+                .structs
+                .iter()
+                .all(|decl| !decl.resource)
+        );
+        assert!(
+            graph.packages["fs"]
+                .functions
+                .iter()
+                .all(|decl| !decl.host_intrinsic)
+        );
     }
 
     #[test]

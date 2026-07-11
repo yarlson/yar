@@ -440,6 +440,123 @@ fn hidden() i32 {
     }
 
     #[test]
+    fn compile_path_rejects_spawning_embedded_resource_values() {
+        let root = temp_dir("yar-rust-spawn-resource");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "fs"
+
+fn consume(file fs.File) void {
+    return
+}
+
+fn main() i32 {
+    file := fs.open_read("missing") or |_| {
+        return 0
+    }
+    taskgroup []void {
+        spawn consume(file)
+    }
+    return 0
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "spawn argument 1 cannot cross a task boundary: resource type \"fs.File\" is not share-safe",
+        );
+    }
+
+    #[test]
+    fn compile_path_allows_share_safe_local_stdlib_shadows() {
+        let root = temp_dir("yar-rust-spawn-local-stdlib-shadow");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "fs"
+
+fn inspect(file fs.File) i64 {
+    return file.handle
+}
+
+fn main() i32 {
+    results := taskgroup []i64 {
+        spawn inspect(fs.make_file(7))
+    }
+    numbers := taskgroup []i32 {
+        spawn fs.read_file(8)
+    }
+    if results[0] != 7 || numbers[0] != 9 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+        write_source(
+            &root.join("fs/fs.yar"),
+            r#"package fs
+
+pub struct File {
+    handle i64
+}
+
+pub fn make_file(handle i64) File {
+    return File{handle: handle}
+}
+
+pub fn read_file(value i32) i32 {
+    return value + 1
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        let unit = unit.unwrap_or_else(|| panic!("unexpected diagnostics: {diagnostics:?}"));
+        assert_eq!(diagnostics, Vec::new());
+        assert!(unit.ir.contains("call i32 @yar.fs.read_file(i32 %arg.0)"));
+        assert!(!unit.ir.contains("call i32 @yar_fs_read_file"));
+    }
+
+    #[test]
+    fn compile_path_rejects_spawning_host_intrinsic_without_task_wrapper() {
+        let root = temp_dir("yar-rust-spawn-host-intrinsic");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "fs"
+
+fn main() i32 {
+    taskgroup []!void {
+        spawn fs.write_file("output.txt", "data")
+    }
+    return 0
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "spawn does not currently support host intrinsic \"fs.write_file\" directly; wrap it in an inline function literal",
+        );
+    }
+
+    #[test]
     fn compile_path_rejects_unexported_imported_method() {
         let root = temp_dir("yar-rust-unexported-method");
         write_source(

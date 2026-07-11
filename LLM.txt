@@ -324,7 +324,8 @@ results := taskgroup []i32 {
 ```
 
 - `taskgroup []R { ... }` is an expression returning `[]R`
-- `spawn call(...)` is valid only inside a taskgroup body
+- `spawn call(...)` is valid only inside a taskgroup body and accepts a named
+  function or an immediately called inline function literal
 - `taskgroup []void` and `taskgroup []!T` are valid
 
 ## Operators
@@ -427,8 +428,18 @@ taskgroup []void {
 }
 ```
 
-- `spawn` requires a call expression
+- `spawn` requires a named function call or an immediately called inline
+  function literal; arbitrary function values, builtins, and methods cannot be
+  spawned; direct host-intrinsic spawns require task-wrapper support, which is
+  currently available only for `fs.read_file`
 - spawned call return type must match the taskgroup element type exactly
+- spawn arguments and inline-literal captures must be recursively share-safe
+- share-safe inputs are scalars, `str`, `error`, arrays, enums, non-resource
+  structs, `!T`, and `chan[T]` when every contained type is share-safe;
+  `!void` is also share-safe
+- pointers, slices, maps, interfaces, functions, resource structs, and values
+  containing them cannot cross a spawn boundary
+- result types are unrestricted because results become visible only after join
 - `spawn` is rejected inside a function literal nested under the same taskgroup
 - `return` is rejected inside a taskgroup body
 - `?` is rejected inside a taskgroup body because it could bypass the join;
@@ -437,7 +448,10 @@ taskgroup []void {
 - channels are bounded FIFO values
 - `chan_send` / `chan_recv` report `error.Closed` on closed-channel failure
 - channels support `==` and `!=` identity comparison
-- current implementation uses POSIX threads; Windows concurrency calls fail at runtime
+- each successful `spawn` starts one POSIX thread immediately; Windows
+  concurrency calls fail at runtime
+- arguments and captures are shallow copies, not deep copies; bare `i64`
+  handles remain indistinguishable from ordinary scalar integers to the checker
 
 ## Standard Library
 
@@ -528,6 +542,8 @@ write(data str) !i32
 close() !void
 ```
 
+`fs.File` is a resource struct and cannot cross a spawn boundary.
+
 Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.InvalidArgument`, `error.Closed`, `error.IO`
 
 ### io
@@ -584,6 +600,10 @@ net.Addr { host str, port i32 }
 net.Conn { handle i64 }
 net.Listener { handle i64 }
 ```
+
+`net.Conn` and `net.Listener` are resource structs and cannot cross a spawn
+boundary. Raw network handles represented as `i64` are not distinguished from
+ordinary integers by the spawn checker.
 
 Listeners and connections are opaque `i64` handles. All calls are blocking.
 
@@ -643,12 +663,13 @@ http.text(status i32, body str) http.Response
 http.serve(addr net.Addr, handler fn(http.Request) !http.Response) !void
 ```
 
-`http.serve` listens on a TCP address, accepts connections, reads one HTTP/1.1
-request per connection, calls the handler, writes one response, and closes the
-connection. Handler errors become `500 Internal Server Error` responses and the
-server keeps accepting. Malformed requests receive `400 Bad Request`. Header
-names in `Request.headers` are lowercase. There is no keep-alive, router, query
-parser, middleware, auth, TLS, or stdlib session/JWT support.
+`http.serve` listens on a TCP address and processes connections sequentially.
+It reads one HTTP/1.1 request per connection, calls the handler, writes one
+response, and closes the connection before accepting the next one. Handler
+errors become `500 Internal Server Error` responses and the server keeps
+accepting. Malformed requests receive `400 Bad Request`. Header names in
+`Request.headers` are lowercase. There is no keep-alive, router, query parser,
+middleware, auth, TLS, or stdlib session/JWT support.
 
 Example:
 

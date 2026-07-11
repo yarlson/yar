@@ -19,8 +19,8 @@
   every current `testdata/**/main.yar` entry program, including
   scalar/control-flow, strings, fixed arrays, structs, slice operations, map
   operations, function literals, closure calls, concrete method calls,
-  interface calls, taskgroups/spawn wrappers for user-function and
-  function-value calls, channel builtin runtime calls, direct `fs`, `process`,
+  interface calls, taskgroups/spawn wrappers for named functions and immediate
+  inline literals, channel builtin runtime calls, direct `fs`, `process`,
   `env`, `stdio`, and `net` host-intrinsic runtime calls, pointer operations,
   enum match lowering, and stdlib-internal builtins.
 - Resolves the build target from `YAR_OS` and `YAR_ARCH` environment variables

@@ -594,7 +594,8 @@ Structured concurrency is available through taskgroups and bounded channels.
 ### Taskgroups
 
 `taskgroup []R { ... }` is an expression that spawns concurrent calls and
-returns a result slice in spawn order.
+returns a result slice in spawn order. Each successful `spawn` starts one
+native thread immediately; the taskgroup joins every task before it yields.
 
 ```yar
 fn square(v i32) i32 {
@@ -615,8 +616,21 @@ fn main() i32 {
 Taskgroup rules:
 
 - the annotation must be a slice type
-- each `spawn` target must be a call expression
+- each `spawn` target must be a named function call or an immediately called
+  inline function literal; arbitrary function values, builtins, and methods
+  cannot be spawned
+- direct host-intrinsic spawns require a dedicated task wrapper; currently
+  only `fs.read_file` has one, and other host calls must be wrapped in an
+  inline function literal
 - the spawned call must return the taskgroup element type exactly
+- spawn arguments and inline-literal captures must be share-safe: scalars,
+  `str`, `error`, fixed arrays, enums, non-resource structs, `!T`, and
+  `chan[T]` compose only from other share-safe types; `!void` is also
+  share-safe
+- pointers, slices, maps, interfaces, function values, resource structs, and
+  values that contain them cannot cross the spawn boundary
+- the share-safety restriction does not apply to results because the parent
+  observes them only after the taskgroup joins
 - `spawn` is only valid inside the taskgroup body
 - `spawn` is rejected inside a function literal nested under that taskgroup body
 - `return` is not currently allowed inside a taskgroup body
@@ -626,6 +640,12 @@ Taskgroup rules:
 - tasks start when `spawn` executes, but the taskgroup expression waits for all tasks before yielding its result
 - `taskgroup []void` is valid for side-effecting tasks
 - `taskgroup []!T` is valid and yields first-class errorable values
+
+Arguments and captures cross the task boundary through shallow value copies,
+not deep copies. The transitive share-safety rule prevents those copies from
+carrying mutable aliases into another thread. Channels are the synchronized
+exception. Bare `i64` values are scalars, so the checker cannot distinguish an
+ordinary integer from a raw runtime or OS handle represented as `i64`.
 
 ### Channels
 
@@ -979,6 +999,9 @@ Types:
 - `fs.EntryKind { File, Directory, Other }`
 - `fs.File { handle i64 }`
 
+`fs.File` is a resource struct and cannot be passed to or captured by a
+spawned task.
+
 Available functions:
 
 - `fs.read_file(path str) !str`
@@ -1095,6 +1118,11 @@ Types:
 - `net.Conn { handle i64 }`
 - `net.Listener { handle i64 }`
 
+`net.Conn` and `net.Listener` are resource structs and cannot be passed to or
+captured by spawned tasks. The lower-level raw `i64` handle functions remain
+available; those handles are indistinguishable from ordinary integers to the
+spawn checker.
+
 Available functions:
 
 - `net.listen(host str, port i32) !i64` — bind and listen on a TCP address;
@@ -1168,8 +1196,8 @@ Available functions:
 - `http.text(status i32, body str) http.Response` — create a text/plain
   response
 - `http.serve(addr net.Addr, handler fn(http.Request) !http.Response) !void` —
-  listen, accept connections, parse one request per connection, call the
-  handler, write one response, and close the connection
+  listen, process connections sequentially, parse one request per connection,
+  call the handler, write one response, and close the connection
 
 Example:
 

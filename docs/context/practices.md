@@ -61,6 +61,11 @@
   taskgroup body, and `spawn` is rejected inside function literals nested under
   a taskgroup body. `return` and same-function `?` propagation are rejected in
   taskgroup bodies so every accepted path reaches the join.
+- Spawn targets are named functions or immediately called inline literals.
+  Their arguments and captures must be recursively share-safe; task results
+  are observed only after the group joins and have no such restriction. Direct
+  host intrinsics additionally need task-wrapper support; currently only
+  `fs.read_file` has it.
 - `chan[T]` is a builtin type. Channel element types cannot be `void`,
   `noreturn`, or another channel type.
 - Methods are allowed only on named local struct types, with either value

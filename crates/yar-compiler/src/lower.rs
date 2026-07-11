@@ -408,6 +408,7 @@ impl<'a> PackageLowerer<'a> {
                 StructDecl {
                     struct_pos: decl.struct_pos.clone(),
                     exported: decl.exported,
+                    resource: decl.resource,
                     name: canonical_decl_name(package, &decl.name),
                     name_pos: decl.name_pos.clone(),
                     type_params: decl.type_params.clone(),
@@ -481,6 +482,7 @@ impl<'a> PackageLowerer<'a> {
                 };
                 FunctionDecl {
                     exported: decl.exported,
+                    host_intrinsic: decl.host_intrinsic,
                     name,
                     name_pos: decl.name_pos.clone(),
                     type_params: decl.type_params.clone(),
@@ -736,6 +738,7 @@ impl<'a> PackageLowerer<'a> {
             Expression::FunctionLiteral(expr) => {
                 Expression::FunctionLiteral(Box::new(FunctionLiteralExpr {
                     fn_pos: expr.fn_pos.clone(),
+                    enclosing_function: expr.enclosing_function.clone(),
                     params: self.lower_params(package, &expr.params, type_params),
                     return_type: self.rewrite_type_ref(package, &expr.return_type, type_params),
                     return_is_bang: expr.return_is_bang,
@@ -1173,6 +1176,29 @@ mod tests {
                 .functions
                 .iter()
                 .any(|function| function.name == "net.listen")
+        );
+        assert_eq!(
+            program
+                .structs
+                .iter()
+                .filter(|decl| decl.resource)
+                .map(|decl| decl.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["net.Conn", "net.Listener"],
+        );
+        assert!(
+            program
+                .functions
+                .iter()
+                .find(|decl| decl.name == "net.listen")
+                .is_some_and(|decl| decl.host_intrinsic)
+        );
+        assert!(
+            program
+                .functions
+                .iter()
+                .find(|decl| decl.name == "net.listen_stream")
+                .is_some_and(|decl| !decl.host_intrinsic)
         );
     }
 

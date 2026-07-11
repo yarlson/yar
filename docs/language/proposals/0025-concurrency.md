@@ -9,17 +9,17 @@ that spawn and join concurrent tasks with guaranteed lifetime, and typed bounded
 channels for inter-task communication. The current implementation starts each
 spawn on a native POSIX thread and joins through the taskgroup runtime API.
 This preserves the surface semantics proposed here while deferring the
-exploratory M:N scheduler work. The design leverages Yar's existing value-
-capture closures for natural task isolation, composes with `!T` error returns
-for explicit error handling across task boundaries, and introduces no function
-coloring. All
-blocking operations (I/O, channel, sleep) block the calling task, not the
-program.
+exploratory M:N scheduler work. Arguments and closure captures use shallow
+value copies, so the checker admits only transitively share-safe values at the
+task boundary. This composes with `!T` error returns for explicit error
+handling across task boundaries and introduces no function coloring. Blocking
+operations (I/O, channels, and other host calls) block the spawned task's
+native thread, not other task threads.
 
 ## 2. Motivation
 
-Yar is currently single-threaded. All blocking calls (networking, sleep, file
-I/O) halt the entire program. This prevents:
+Before this proposal, Yar was single-threaded. All blocking calls (networking,
+sleep, file I/O) halted the entire program. This prevented:
 
 - **Concurrent servers**: a TCP server cannot handle more than one connection
   at a time because `net.accept` and `net.read` block the program.
@@ -52,12 +52,12 @@ across the entire ecosystem. Zig attempted language-level async and removed it i
 requires `Pin`, executor choice, and splits the ecosystem between sync and async
 libraries. Yar's "small surface area" principle rejects this complexity.
 
-### Why not OS threads only?
+### Why not expose manual OS threads?
 
-Zig's current approach (manual OS threads + synchronization) is explicit but
-verbose and low-level. OS threads are expensive (~8MB stack each), limiting
-concurrent connection counts. Yar's GC already requires a runtime — adding M:N
-scheduling to that runtime is a natural extension, not a new dependency.
+Zig's manual OS threads and synchronization are explicit but verbose and
+low-level. Yar keeps task lifetime and join behavior in the `taskgroup`
+surface. The current runtime uses native threads behind that structured API;
+programs do not manage thread handles directly.
 
 ## 3. User-Facing Examples
 
@@ -76,28 +76,6 @@ fn main() i32 {
 ```
 
 ```
-// Concurrent server: accept connections and handle each in a task
-import "net"
-
-fn main() !i32 {
-    ln := net.listen("0.0.0.0", 8080)?
-    taskgroup []!void {
-        // acceptor task
-        spawn fn() !void {
-            for {
-                conn := net.accept(ln)?
-                // each connection handled concurrently
-                spawn fn() !void {
-                    handle_connection(conn)
-                }
-            }
-        }
-    }
-    return 0
-}
-```
-
-```
 // Producer-consumer with a channel
 fn main() i32 {
     ch := chan_new[i32](16)
@@ -107,13 +85,13 @@ fn main() i32 {
                 chan_send(ch, i) or |_| { break }
             }
             chan_close(ch)
-        }
+        }()
         spawn fn() void {
             for {
                 val := chan_recv(ch) or |_| { break }
                 print(to_str(val) + "\n")
             }
-        }
+        }()
     }
     return 0
 }
@@ -144,7 +122,7 @@ fn main() i32 {
                 chan_send(jobs, i) or |_| { break }
             }
             chan_close(jobs)
-        }
+        }()
 
         // 4 workers
         spawn fn() void {
@@ -155,7 +133,7 @@ fn main() i32 {
                 spawn worker(jobs, results)
             }
             chan_close(results)
-        }
+        }()
 
         // consumer
         spawn fn() void {
@@ -165,7 +143,7 @@ fn main() i32 {
                 total += r
             }
             print("total: " + to_str(total) + "\n")
-        }
+        }()
     }
     return 0
 }
@@ -247,18 +225,15 @@ complete.
   expressions and ordinary statements including loops. The result type
   annotation `[]R` is required and specifies the element type of the returned
   slice.
-- `spawn expr` queues a function call for concurrent execution. The expression
-  must be a function call whose return type matches `R`. Each `spawn` appends
-  one element to the result slice when its task completes.
+- `spawn expr` starts one native thread immediately. The expression must be a
+  named function call or an immediately called inline function literal whose
+  return type matches `R`. Each `spawn` reserves one result slot in spawn order.
 - `spawn` inside a `for` loop within a taskgroup is valid. Each iteration
   spawns an additional task.
 - `spawn` inside nested `if` or `match` within a taskgroup is valid.
-- Ordinary statements (variable declarations, assignments, function calls) in
-  the taskgroup body execute sequentially before any spawned tasks begin.
-  `spawn` statements are collected during the body's sequential execution and
-  all spawned tasks begin executing concurrently after the body completes. This
-  is the "bulk spawn" model: the body is a sequential setup phase that
-  registers tasks, followed by concurrent execution and join.
+- The parent executes ordinary statements and `spawn` statements in source
+  order. A spawned thread may overlap with later statements in the taskgroup
+  body. The taskgroup joins all started threads after the body completes.
 - The taskgroup expression evaluates to `[]R` containing one element per
   spawned task, in spawn order.
 - If zero tasks are spawned (e.g., the loop body never executes), the result is
@@ -272,38 +247,31 @@ complete.
 
 ### Task isolation
 
-- A spawned expression is a function call. Arguments are evaluated in the
-  parent scope and passed by value to the task, following Yar's existing
-  calling convention.
-- When the spawned expression is an anonymous function literal (closure), outer
-  variables are captured by value and are read-only in the closure body. This
-  is Yar's existing closure semantics — no new rules.
-- There is no shared mutable state between tasks through the language's value
-  passing or closure capture mechanisms. Two tasks that both capture `x` each
-  get independent copies.
-- Channels are the intended mechanism for inter-task communication. Channel
-  values are opaque handles (like map and string builder handles) and can be
-  captured by closures or passed as arguments. Multiple tasks holding the same
-  channel handle can send and receive concurrently.
-- Pointers: if a task receives a pointer (through an argument or capture), and
-  another task holds a pointer to the same object, both tasks can read and
-  write the shared object concurrently. **This is a data race and the behavior
-  is undefined.** The language does not prevent pointer sharing across tasks in
-  v1. The runtime race detector (section 7) catches this at runtime. A future
-  proposal may add compile-time restrictions on pointer sharing across task
-  boundaries.
+- Arguments are evaluated in the parent and copied into the task context using
+  Yar's ordinary shallow value representation. Inline function literals also
+  copy their captured environment; these copies are not deep copies.
+- The checker therefore requires every argument and capture to be transitively
+  share-safe. Scalars, `str`, and `error` are share-safe. Fixed arrays, enums,
+  and non-resource structs are share-safe only when every contained value is
+  share-safe. `!T` and `chan[T]` are share-safe only when `T` is share-safe;
+  `!void` is also share-safe.
+- Pointers, slices, maps, interfaces, function values, resource structs, and
+  aggregates containing any of them cannot cross the task boundary.
+- Channels are the synchronized mechanism for inter-task communication.
+  Multiple tasks may hold the same share-safe channel and use its operations
+  concurrently.
+- The restriction applies to task inputs, not results. A taskgroup exposes
+  results only after every spawned thread has joined.
+- Bare `i64` values remain scalar. The checker cannot distinguish ordinary
+  integers from runtime or OS handles represented as raw `i64` values.
 
 ### Task scheduling
 
-- The runtime maintains a pool of OS threads, defaulting to the number of CPU
-  cores.
-- Tasks are multiplexed onto OS threads by a work-stealing scheduler.
-- When a task blocks (channel operation, network I/O, sleep, file I/O), the
-  runtime parks the task and runs another task on the same OS thread.
-- When a blocked task's I/O or channel operation completes, the runtime
-  re-queues it for execution.
-- Task stacks start small (configurable, default 8KB) and grow as needed,
-  managed by the runtime.
+- Every successful `spawn` creates one native POSIX thread immediately.
+- There is no task pool, work-stealing scheduler, parking, or M:N multiplexing
+  in the current runtime.
+- A blocking operation blocks that task's native thread. Other spawned threads
+  continue independently.
 
 ### Task errors
 
@@ -332,47 +300,32 @@ complete.
 - Channels are safe for concurrent use by multiple tasks. Multiple senders and
   multiple receivers are supported (MPMC).
 - Channel ordering: values are received in FIFO order relative to sends.
-- Channels are garbage-collected like other heap-backed values. A channel with
-  no remaining references is collected even if it has buffered values.
+- Channel handles and buffers currently remain allocated for the process
+  lifetime. The runtime has no collector or explicit channel-destroy API.
 
 ### Blocking behavior change
 
 With concurrency, blocking calls (`net.accept`, `net.read`, `net.write`,
-`fs.read_file`, `time.sleep`, etc.) block the calling **task**, not the
-program. Other tasks continue executing on other OS threads or on the same OS
-thread after the blocked task is parked. This is a behavioral change from the
-single-threaded model but is backwards compatible: a program with no taskgroups
-has exactly one task (the main task) and behaves identically to the
-single-threaded model.
+`fs.read_file`, and similar host calls) block the calling task's native thread,
+not other spawned threads. The runtime does not park a task and reuse its
+thread. A program with no taskgroups retains the single-threaded behavior.
 
 ### Thread safety of existing operations
 
-- **GC**: the garbage collector must support multiple task stacks as root sets
-  and coordinate stop-the-world pauses across all OS threads. This is an
-  implementation change to the runtime, not a language change.
-- **Slices**: concurrent reads of the same slice from multiple tasks are safe.
-  Concurrent writes to the same slice, or a write concurrent with a read, are
-  data races (undefined behavior). The runtime race detector catches this.
-- **Maps**: concurrent access to the same map from multiple tasks is a data
-  race (undefined behavior). Maps should be accessed from a single task or
-  protected by a channel-based serialization pattern.
+- **Allocation lifetime**: the current runtime has no garbage collector. Yar
+  allocations, taskgroup handles, and channel handles remain valid for the
+  process lifetime.
+- **Pointers, slices, and maps**: these values cannot be passed or captured
+  across a spawn boundary, including when nested inside aggregates.
 - **String builders**: `sb_new`/`sb_write`/`sb_string` are not safe for
   concurrent use. Each builder should be used by one task.
-- **`time.date_in` / `time.from_date_in`**: these functions manipulate the
-  process-global `TZ` environment variable. With concurrency, this is no
-  longer safe. These functions must be changed to use thread-local timezone
-  conversion or a mutex. This is an implementation fix in the runtime, not a
-  language change.
 - **`print`**: `print` writes to stdout. Concurrent `print` calls from
-  multiple tasks may interleave output. Each individual `print` call is atomic
-  (the full string is written in one `write` syscall), but ordering between
-  tasks is not guaranteed.
+  multiple tasks may interleave output; the runtime provides no per-call
+  atomicity or ordering guarantee.
 - **`process.run`**: safe to call concurrently (each call creates a separate
   child process). `process.args()` returns a snapshot and is safe.
-- **`env.lookup`**: reads from the process environment. Safe for concurrent
-  reads but unsafe if any task modifies the environment via
-  `time.from_date_in` or similar. The runtime mutex for timezone operations
-  must also protect environment reads.
+- **`env.lookup`**: reads from the process environment through the Rust host
+  runtime. Yar currently exposes no environment-mutation or timezone API.
 
 ## 5. Type Rules
 
@@ -396,10 +349,20 @@ single-threaded model.
   loops, `if`, and `match` within the body). `spawn` is not valid inside a
   nested function literal within the taskgroup body — it must be at the
   taskgroup's own block level or inside control flow at that level.
-- The spawned expression must be a function call (named function, qualified
-  function, method call, or function-value call) whose return type is `R`.
+- The spawned expression must be a named function call or an immediately
+  called inline function literal whose return type is `R`. Arbitrary function
+  values, builtins, and methods are rejected as spawn targets.
+- Direct host intrinsics require a task wrapper. The current implementation has
+  one for `fs.read_file`; other host calls must be wrapped in an inline literal.
 - The spawned expression's arguments are evaluated in the enclosing scope at
   spawn time (sequentially, during the taskgroup body's execution).
+- Spawn arguments and inline-literal captures must be transitively share-safe.
+  Scalars, `str`, `error`, arrays, enums, non-resource structs, errorable
+  values, and channels compose only when their contained types are share-safe;
+  `!void` is also share-safe. Pointers, slices, maps, interfaces, functions,
+  and resource structs are not share-safe.
+- Spawn result types are not subject to this restriction because results are
+  observed only after the taskgroup join.
 
 ### Channel builtins
 
@@ -416,6 +379,10 @@ single-threaded model.
 - `taskgroup` in a non-function context (top level) is a compile-time error.
 - Spawned expression must be a call — `spawn 42` or `spawn some_var` are
   compile-time errors.
+- Spawning an arbitrary function value, builtin, or method is a compile-time
+  error.
+- Passing or capturing a non-share-safe value at a spawn boundary is a
+  compile-time error.
 - `chan_new` with capacity `<= 0` is a runtime error (trap).
 
 ## 6. Grammar / Parsing Shape
@@ -483,6 +450,9 @@ No ambiguity with existing syntax:
   literal within the body).
 - Validate spawned expression is a call whose return type matches the taskgroup
   result element type.
+- Validate that the target is a named function or immediately called inline
+  function literal and that all arguments and captures are transitively
+  share-safe.
 - Register `chan[T]` as a parameterized built-in type.
 - Register `chan_send`, `chan_recv`, `chan_close` with appropriate type
   inference from the channel argument.
@@ -492,18 +462,15 @@ No ambiguity with existing syntax:
 
 ### Codegen impact
 
-- **Taskgroup lowering**: the taskgroup body is emitted as sequential code that
-  collects spawn descriptors (function pointer + argument struct) into a
-  runtime array. After the body, a runtime call `yar_taskgroup_run(spawns,
-count, result_ptr)` executes all tasks concurrently, blocks until all
-  complete, and writes results into the result slice.
+- **Taskgroup lowering**: the taskgroup body is emitted in source order. Each
+  `spawn` creates its native thread immediately, and the end of the taskgroup
+  joins all started threads before constructing the result slice.
 - **Spawn lowering**: each `spawn call(args...)` is lowered to: (1) evaluate
-  arguments, (2) allocate a task descriptor struct containing the function
-  pointer and argument values, (3) append the descriptor to the taskgroup's
-  spawn array.
-- **Closure spawns**: when the spawned expression is a closure call, the
-  closure's environment struct is captured into the task descriptor, following
-  the existing closure lowering pattern.
+  arguments, (2) copy the argument values into a task context, and (3) start a
+  runtime task with a generated wrapper for the named function.
+- **Closure spawns**: an immediately called function literal copies its closure
+  value and arguments into the task context. Arbitrary closure values are not
+  valid spawn targets.
 - **Channel lowering**: `chan[T]` lowers to an opaque `i64` handle (same
   pattern as maps and string builders). `chan_new` calls
   `yar_chan_new(elem_size, capacity)`. `chan_send` calls
@@ -511,7 +478,11 @@ count, result_ptr)` executes all tasks concurrently, blocks until all
   `yar_chan_recv(handle, out_ptr)`. `chan_close` calls
   `yar_chan_close(handle)`.
 
-### Runtime impact
+### Original M:N runtime exploration
+
+The runtime design below records the scheduler explored before implementation.
+It is not the shipped runtime model; the current implementation creates one
+native POSIX thread per spawn as described above and in section 14.
 
 This is the largest implementation area — estimated ~2500-3500 lines of new C
 and assembly code in the runtime.
@@ -650,43 +621,37 @@ returns `!T`, using the existing `error.Closed` name from the `net` package.
 
 ### Structs
 
-Struct values passed to tasks are copied (value semantics). Struct pointers
-passed to tasks share the pointed-to object — this is a potential data race and
-the programmer's responsibility to avoid (or serialize access through a
-channel).
+Non-resource struct values may cross a spawn boundary only when every field is
+transitively share-safe. Resource structs and structs containing aliased values
+are rejected.
 
 ### Enums
 
-Enum values are copied into tasks. Payload data is copied. No interaction
-issues.
+Enum values may cross a spawn boundary only when every case payload is
+transitively share-safe.
 
 ### Slices
 
-Slice values passed to tasks share the underlying backing storage. Concurrent
-reads are safe. Concurrent mutation (including `append` which may reallocate)
-is a data race. The intended pattern is: partition work by index range (each
-task works on a disjoint slice range) or copy the relevant portion before
-spawning.
+Slice descriptors are shallow aliases of backing storage, so slices cannot be
+passed to or captured by spawned tasks.
 
 ### Maps
 
-Map handles passed to tasks share the underlying map. Concurrent access is a
-data race. The intended pattern is: use a "manager task" that owns the map and
-accepts channel messages for lookups and mutations (actor pattern).
+Map values are shared handles, so maps cannot be passed to or captured by
+spawned tasks.
 
 ### Closures
 
-Closures capture by value and are read-only. A closure spawned as a task gets
-independent copies of all captured variables. This is the primary isolation
-mechanism — no new rules needed.
+Only an immediately called inline function literal may be a closure spawn
+target. Its captures are shallow copies and must each be transitively
+share-safe. Arbitrary closure values cannot be spawned.
 
 ### Control flow
 
 `taskgroup` is an expression, not a statement. `break` and `continue` inside a
-taskgroup body affect loops within the body, not enclosing loops. `return`
-inside a taskgroup body returns from the enclosing function (the taskgroup is
-abandoned; all already-spawned tasks are cancelled — their results are
-discarded). `return` inside a spawned function returns from that task.
+taskgroup body may affect loops within the body but cannot jump through an
+enclosing loop outside it. `return` and same-function `?` propagation are
+rejected in the taskgroup body so every accepted path reaches the join.
 
 ### New builtins
 
@@ -703,25 +668,24 @@ producer/consumer patterns. If `select` becomes necessary, it can be added as
 a new expression form without modifying the existing taskgroup or channel
 semantics.
 
-### Future: compile-time pointer sharing restriction
+### Compile-time share-safety boundary
 
-A future proposal may add a checker pass that rejects passing pointer-typed
-values across task boundaries (through spawn arguments or closure capture).
-This would make data races on pointer-shared objects a compile-time error
-rather than a runtime race detector finding. This is deliberately excluded
-from v1 to keep the checker changes manageable and to gather real-world usage
-data on which patterns are common.
+The checker rejects pointers and every other non-share-safe type in spawn
+arguments and inline-literal captures. The rule is structural so an aggregate
+cannot hide a mutable alias. Channels are allowed only when their element type
+is share-safe, and task results remain unrestricted because they are observed
+after join.
 
 ## 8a. Impact on Existing Builtins and Standard Library
 
-This section documents every existing builtin and stdlib function, whether it
-is safe under concurrent execution, and what runtime changes are required. The
-audit covers `crates/yar-runtime`, all host intrinsics, and all stdlib
-packages.
+This section records the original M:N runtime audit, not the shipped runtime
+contract. Its proposed parking, netpoller, GC, and race-detector changes remain
+unimplemented. The compile-time share-safety boundary above supersedes its
+assumption that aliased values may freely cross spawn boundaries.
 
-### Runtime global state: mandatory changes
+### Original runtime global-state assumptions
 
-The runtime has six global variables that control the garbage collector:
+The original audit assumed a collector with six unsynchronized globals:
 
 - `yar_gc_blocks` — linked list of all GC-managed allocations
 - `yar_gc_bytes` — total allocated bytes
@@ -730,11 +694,9 @@ The runtime has six global variables that control the garbage collector:
 - `yar_gc_collecting` — reentrancy guard
 - `yar_gc_stack_top` — stack marker for root scanning
 
-**All six are accessed without synchronization.** Every builtin and stdlib
-function that allocates (via `yar_alloc` or `yar_alloc_zeroed`) races on
-these globals. This is the single most critical change: add a GC mutex that
-protects all allocation and collection operations. The stop-the-world barrier
-(section 7) subsumes this mutex during collection.
+That design would have required synchronized allocation and a stop-the-world
+barrier. These globals and that collector are not part of the shipped Rust
+runtime.
 
 Additionally, `yar_env_lookup` and `yar_fs_temp_dir` call `getenv()`, which
 is not thread-safe on POSIX (returns a pointer to shared global storage that
@@ -1029,36 +991,22 @@ Deferred (not rejected) because:
 
 ## 10. Complexity Cost
 
-- **Language surface**: moderate — 3 new keywords (`taskgroup`, `spawn`,
-  `chan`), 1 new type (`chan[T]`), 4 new builtins (`chan_new`, `chan_send`,
-  `chan_recv`, `chan_close`), 1 new expression form (`taskgroup`)
-- **Parser complexity**: moderate — new expression, statement, and type forms
-- **Checker complexity**: moderate — taskgroup type checking, spawn validation,
-  channel type inference, `chan[T]` as a built-in parameterized type
-- **Codegen complexity**: high — taskgroup lowering to runtime calls, task
-  descriptor construction, channel handle lowering
-- **Runtime complexity**: high — task scheduler, work-stealing queues, context
-  switching, blocking I/O integration, channel implementation, GC
-  modifications for multi-stack scanning
-- **Diagnostics complexity**: moderate — errors for misplaced spawn, type
-  mismatches in spawn and channel operations
-- **Test burden**: high — concurrency correctness testing, race condition
-  tests, channel edge cases, GC under concurrent load, blocking I/O
-  integration tests
-- **Documentation burden**: high — new language concepts, taskgroup semantics,
-  channel usage patterns, data race rules, migration guide for existing
-  blocking programs
+- **Language and parser**: `taskgroup`, `spawn`, `chan[T]`, and four channel
+  builtins add a bounded but cross-cutting surface.
+- **Checker**: placement, join-safe control flow, target support, and
+  transitive input share-safety all require explicit validation.
+- **Codegen**: each spawn needs a typed task context and wrapper; taskgroups
+  need ordered result assembly and a mandatory join.
+- **Runtime**: the native-thread baseline is simpler than the explored M:N
+  scheduler, but one thread per spawn and process-lifetime handles are material
+  operational limits.
+- **Testing**: concurrency ordering, channel closure, nested captures, resource
+  provenance, and task-boundary alias rejection need end-to-end coverage.
 
-This is the single highest-complexity proposal in Yar's history. The runtime
-changes alone exceed all previous runtime additions combined. This is expected
-— concurrency touches every layer of the system.
+## 11. Why This Direction?
 
-## 11. Why Now?
-
-Concurrency is **not** proposed for immediate implementation. The status is
-`exploring`, not `proposed` or `accepted`.
-
-This proposal exists to:
+The structured-concurrency surface is implemented. The original exploration
+served to:
 
 1. **Establish the design direction** before implementation begins, so that
    decisions about the `time` package (0024), future stdlib additions, and
@@ -1068,9 +1016,9 @@ This proposal exists to:
 3. **Commit to structured concurrency** as the model, ruling out
    fire-and-forget goroutines and async/await early, so library design and
    user expectations align.
-4. **Defer what can be deferred** — select, mutex, race detector, and
-   compile-time pointer restrictions are explicitly future work, keeping v1
-   of concurrency achievable.
+4. **Keep the first surface bounded** — select, mutexes, and a race detector
+   remain outside it, while a conservative compile-time share-safety rule
+   closes the task-input aliasing boundary.
 
 The design should be finalized before the `time` package ships, because
 `time.date_in`'s current `setenv`/`tzset` approach is incompatible with
@@ -1211,14 +1159,9 @@ reason: streaming spawn is more flexible (supports dynamic task counts from
 loops, conditional spawning, accept-loop patterns like TCP servers) and the
 scoping guarantees already ensure all tasks complete before the scope exits.
 
-**Implication for `return` in taskgroup body**: `return` in the body sets a
-cancellation flag on all already-spawned tasks. Cancelled tasks are not
-forcibly terminated — cancellation is cooperative (tasks must check a
-cancellation mechanism to respond). The taskgroup still waits for all tasks to
-complete before the scope exits. This matches every production implementation:
-no system can forcibly cancel a task doing blocking I/O. Tasks that have
-already produced side effects (file writes, network sends) are not rolled
-back.
+**Implication for control flow**: `return` and same-function `?` propagation
+are rejected inside a taskgroup body. Accepted paths therefore reach the join;
+the current runtime has no task cancellation semantics.
 
 ### Channel capacity: minimum 1, no rendezvous, no maximum
 
@@ -1242,34 +1185,20 @@ No enforced maximum capacity — the programmer chooses the size.
   64K-element work queues). An OOM from a large channel is the same class of
   error as an OOM from a large slice allocation.
 
-### Pointer sharing: no compile-time restriction in v1, race detector in v1
+### Task input sharing: compile-time restriction
 
-**Decision**: allow pointers across task boundaries in v1. Include a runtime
-race detector (`-race` flag) as a v1 feature.
+**Decision**: reject task inputs that can carry aliased mutable state. The
+checker evaluates spawn argument and inline-literal capture types transitively.
+Pointers, slices, maps, interfaces, functions, resource structs, and aggregates
+containing them are rejected. Channels remain the explicit synchronized
+sharing mechanism, and `chan[T]` is accepted only when `T` is share-safe.
 
-**Research findings**:
-
-- Compile-time pointer restriction (rejecting pointers in `spawn` arguments
-  and closure captures) would prevent data races but also prevent legitimate
-  patterns: read-only shared data structures, disjoint-slice partitioning, and
-  shared channel handles (channels are already safe for concurrent use).
-  Distinguishing safe from unsafe pointer sharing requires Rust-level type
-  system complexity (Send/Sync traits, borrow checker), which contradicts
-  Yar's "small surface area" principle.
-- The race detector is based on LLVM's ThreadSanitizer (TSan). TSan is an
-  LLVM IR transformation pass that is language-agnostic — any LLVM frontend
-  can use it. Yar already emits LLVM IR. Adding TSan instrumentation requires:
-  (a) emitting `__tsan_read`/`__tsan_write` calls around memory accesses in
-  codegen, (b) informing TSan about task creation and synchronization points
-  (channel send/recv, taskgroup join) via `__tsan_acquire`/`__tsan_release`.
-- TSan has zero false positives in happens-before mode. Overhead is 5-10x
-  memory and 2-20x CPU — suitable for testing and CI, not production.
-- Go ships its race detector as a core language feature (not a library) and
-  this is cited as essential infrastructure. Uber found 2000+ races across
-  46M lines of Go using it.
-- Yar's conservative GC scanning must be annotated to TSan (the GC stop-the-
-  world synchronization establishes happens-before edges that TSan must know
-  about) to avoid false positives from GC scanning application memory.
+This boundary favors a small static rule over a borrow checker or a runtime
+race detector. It is intentionally conservative: read-only pointer sharing and
+disjoint slice partitioning are not expressible across a spawn boundary. Task
+results are unaffected because taskgroup join establishes exclusive parent
+observation. Bare `i64` capabilities remain a limitation because their handle
+provenance is not represented in the type.
 
 ### Nested spawn: disallowed in closures within taskgroup body
 
@@ -1449,11 +1378,20 @@ The shipped implementation includes:
 - `chan[T]` plus `chan_new`, `chan_send`, `chan_recv`, and `chan_close`
 - `taskgroup []!T` and `taskgroup []void`
 - immediate task start at each `spawn`
+- named-function and immediate-inline-literal spawn targets
+- transitive share-safety checking for task arguments and captures
 
 The current runtime implementation deliberately differs from the original
 exploration in a few ways:
 
 - it uses native POSIX threads rather than an M:N scheduler
+- each spawn receives shallow value copies, so pointers, slices, maps,
+  interfaces, functions, resource structs, and aggregates containing them are
+  rejected at the task boundary; channels compose only with share-safe element
+  types
+- task results are unrestricted because they are exposed after join
+- bare raw handles represented as `i64` are not distinguishable from ordinary
+  integers by this check
 - it currently rejects `return` in a taskgroup body and rejects `break` /
   `continue` that would exit the taskgroup through an enclosing loop
 - it rejects same-function `?` propagation inside a taskgroup body so accepted
@@ -1466,7 +1404,10 @@ exploration in a few ways:
 
 This section tracks the implementation status against the original plan.
 
-### Phase 1: Runtime foundation (no language changes)
+### Phase 1: Deferred M:N runtime exploration
+
+These items belong to the unshipped M:N design, not the accepted native-thread
+baseline:
 
 - [ ] `crates/yar-runtime/src/` — amd64 context switch assembly
 - [ ] `crates/yar-runtime/src/` — arm64 context switch assembly
@@ -1477,7 +1418,6 @@ This section tracks the implementation status against the original plan.
 - [ ] `crates/yar-runtime/src/` — macOS/BSD network poller
 - [ ] `crates/yar-runtime/src/` — Windows network poller
 - [ ] `crates/yar-runtime/src/` — blocking I/O thread pool
-- [ ] `crates/yar-runtime/src/concurrency.rs` — channel implementation
 - [ ] `crates/yar-runtime/src/` — TZif parser, thread-safe timezone
       conversion (replaces setenv/tzset in time.date_in)
 - [ ] `crates/yar-runtime/src/memory.rs` — GC multi-stack scanning,
@@ -1488,6 +1428,11 @@ This section tracks the implementation status against the original plan.
       `crates/yar-runtime/src/host.rs` — modify yar*fs*_, yar*process*_ for
       I/O thread pool submission
 
+The shipped baseline instead has:
+
+- [x] `crates/yar-runtime/src/concurrency.rs` — native-thread taskgroups and
+      bounded channels
+
 ### Phase 2: Language surface
 
 - [x] `crates/yar-compiler/src/token.rs` — new keywords: `taskgroup`, `spawn`,
@@ -1497,10 +1442,10 @@ This section tracks the implementation status against the original plan.
 - [x] `crates/yar-compiler/src/parser.rs` — parse taskgroup, spawn, chan type
 - [x] `crates/yar-compiler/src/checker.rs` — taskgroup type rules, spawn validation,
       channel builtin registration, `chan[T]` type
-- [x] `crates/yar-compiler/src/codegen.rs` — taskgroup lowering, channel handle codegen,
-      spawn descriptor construction, task function wrapper generation
+- [x] `crates/yar-compiler/src/codegen.rs` — taskgroup lowering, channel handle
+      codegen, task-context construction, and task wrapper generation
 
-### Phase 3: Race detector
+### Phase 3: Deferred race detector
 
 - [ ] `crates/yar-compiler/src/codegen.rs` — conditional TSan instrumentation when
       `-race` flag is active
@@ -1514,16 +1459,18 @@ This section tracks the implementation status against the original plan.
 - [x] `testdata/concurrency_basic/main.yar` — basic taskgroup test
 - [x] `testdata/concurrency_channels/main.yar` — channel test
 - [x] `testdata/concurrency_errors/main.yar` — error propagation test
+- [x] `testdata/concurrency_share_safe/main.yar` — transitive share-safety and
+      unrestricted result test
 - [ ] `testdata/concurrency_net/main.yar` — concurrent TCP server test
 - [ ] `testdata/concurrency_race/main.yar` — race detector validation
 - [x] Rust compiler and CLI tests — concurrency test functions
 - [x] `docs/context/domains/concurrency.md` — concurrency documentation
 - [x] `docs/context/domains/language-slice.md` — updated with taskgroup, spawn,
       chan
-- [ ] `docs/context/domains/stdlib.md` — channel builtins
-- [x] `docs/context/platform/toolchain-runtime.md` — scheduler, poller, channel
-      runtime, TZif parser, race detector
+- [x] `docs/context/domains/stdlib.md` — channel builtins
+- [x] `docs/context/platform/toolchain-runtime.md` — current native-thread and
+      channel runtime boundaries
 - [x] `docs/context/summary.md` — updated capabilities
 - [x] `docs/YAR.md` — concurrency reference
 - [x] `LLM.txt` — concurrency reference
-- [ ] `README.md` — updated feature list
+- [x] `README.md` — updated feature list

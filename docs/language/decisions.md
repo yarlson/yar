@@ -32,6 +32,24 @@ Status: accepted
 Local handling is supported as front-end sugar over explicit error checks and
 control flow.
 
+### Spawn boundaries require share-safe values
+
+Status: accepted
+
+Each `spawn` starts a native thread with shallow copies of its arguments and
+inline-literal captures. The checker therefore permits only transitively
+share-safe inputs: scalars, strings, errors, errorable values and channels with
+share-safe payloads, and aggregates composed entirely from share-safe values.
+Pointers, slices, maps, interfaces, functions, and resource structs cannot
+cross the boundary. Results are exempt because the parent observes them only
+after join.
+
+Spawn targets are limited to named functions and immediately called inline
+function literals so the checker can validate the complete boundary. Bare
+`i64` handles remain indistinguishable from ordinary integer values. Direct
+host-intrinsic spawns additionally require a task wrapper; currently only
+`fs.read_file` provides one.
+
 ### Sugar must lower to explicit semantics
 
 Status: accepted

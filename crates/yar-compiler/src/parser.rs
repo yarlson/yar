@@ -91,6 +91,7 @@ impl Parser {
         let mut decl = StructDecl {
             struct_pos: struct_tok.pos,
             exported,
+            resource: false,
             name: name_tok.text,
             name_pos: name_tok.pos,
             type_params,
@@ -200,6 +201,7 @@ impl Parser {
 
         FunctionDecl {
             exported,
+            host_intrinsic: false,
             name: name_tok.text,
             name_pos: name_tok.pos,
             type_params,
@@ -985,6 +987,7 @@ impl Parser {
         let body = self.parse_block();
         Expression::FunctionLiteral(Box::new(FunctionLiteralExpr {
             fn_pos: fn_tok.pos,
+            enclosing_function: String::new(),
             params,
             return_type,
             return_is_bang,
