@@ -330,6 +330,8 @@ results := taskgroup []i32 {
 ## Operators
 
 Arithmetic: `+`, `-`, `*`, `/`, `%`
+`i32`/`i64` addition, subtraction, multiplication, and negation wrap to the
+operand width. Division and remainder trap on zero divisors and `MIN / -1`.
 Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
 Boolean: `&&` (short-circuit AND), `||` (short-circuit OR)
 Unary: `-` (negate), `!` (not), `&` (address-of), `*` (dereference)

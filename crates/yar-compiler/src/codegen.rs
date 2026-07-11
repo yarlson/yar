@@ -9,7 +9,8 @@ use crate::{
     ast::*,
     checker::{
         CaptureInfo, EnumCaseInfo, EnumInfo, FunctionLiteralInfo, Info, InterfaceMethodInfo,
-        Signature, function_literal_key,
+        Signature, const_integer_expression, function_literal_key, infer_untyped_integer_type,
+        is_untyped_integer_expression,
     },
     token::Kind,
 };
@@ -180,6 +181,8 @@ impl Generator<'_> {
         out.push_str("declare ptr @yar_alloc(i64)\n");
         out.push_str("declare ptr @yar_alloc_zeroed(i64)\n");
         out.push_str("declare void @yar_pointer_check(ptr)\n");
+        out.push_str("declare void @yar_i32_divrem_check(i32, i32)\n");
+        out.push_str("declare void @yar_i64_divrem_check(i64, i64)\n");
         out.push_str("declare ptr @yar_map_new(i32, i32, i32)\n");
         out.push_str("declare void @yar_map_set(ptr, ptr, ptr)\n");
         out.push_str("declare i32 @yar_map_get(ptr, ptr, ptr)\n");
@@ -1217,7 +1220,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
     fn emit_statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match statement {
             Statement::Let(stmt) => {
-                let value = self.emit_expression(&stmt.value)?;
+                let value = match infer_untyped_integer_type(&stmt.value) {
+                    Some(type_) => self.emit_expression_as(&stmt.value, type_)?,
+                    None => self.emit_expression(&stmt.value)?,
+                };
                 self.bind_local(&stmt.name, value)?;
                 Ok(())
             }
@@ -2462,14 +2468,25 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return self.emit_logical(expression);
         }
 
+        let left_start = self.body.len();
         let mut left = self.emit_expression(&expression.left)?;
-        let mut right = self.emit_expression(&expression.right)?;
+        let right_start = self.body.len();
+        let mut right = if is_untyped_integer_expression(&expression.right)
+            && matches!(left.type_.as_str(), "i32" | "i64")
+        {
+            self.emit_expression_as(&expression.right, &left.type_)?
+        } else {
+            self.emit_expression(&expression.right)?
+        };
 
         if left.type_ != right.type_ {
-            if right.type_ == "i64" && is_integer_literal(&expression.left) {
+            if right.type_ == "i64" && is_untyped_integer_expression(&expression.left) {
+                // Retype the already-emitted pure left operand without moving the
+                // right operand ahead of it in runtime evaluation order.
+                let right_body = self.body.split_off(right_start);
+                self.body.truncate(left_start);
                 left = self.emit_expression_as(&expression.left, "i64")?;
-            } else if left.type_ == "i64" && is_integer_literal(&expression.right) {
-                right = self.emit_expression_as(&expression.right, "i64")?;
+                self.body.push_str(&right_body);
             } else if matches!(expression.operator, Kind::EqualEqual | Kind::BangEqual) {
                 if left.type_ == "nil" && parse_pointer_type(&right.type_).is_some() {
                     left.type_ = right.type_.clone();
@@ -2517,6 +2534,9 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 "non-integer arithmetic expression",
             ));
         }
+        if matches!(operator, Kind::Slash | Kind::Percent) {
+            self.emit_divrem_check(&left, &right)?;
+        }
         let op = arithmetic_op(operator)?;
         let result = self.temp("bin");
         self.body.push_str(&format!(
@@ -2529,6 +2549,20 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             type_: left.type_,
             repr: format!("%{result}"),
         })
+    }
+
+    fn emit_divrem_check(&mut self, left: &Value, right: &Value) -> Result<(), CodegenError> {
+        let helper = match left.type_.as_str() {
+            "i32" => "yar_i32_divrem_check",
+            "i64" => "yar_i64_divrem_check",
+            _ => return Err(CodegenError::unsupported("division operand type")),
+        };
+        let llvm_type = self.llvm_type(&left.type_)?;
+        self.body.push_str(&format!(
+            "  call void @{helper}({llvm_type} {}, {llvm_type} {})\n",
+            left.repr, right.repr
+        ));
+        Ok(())
     }
 
     fn emit_string_concat(&mut self, left: Value, right: Value) -> Result<Value, CodegenError> {
@@ -4876,25 +4910,64 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 repr: "null".to_string(),
             });
         }
-        if matches!(expected_type, "i32" | "i64")
-            && let Some(value) = const_integer_expression(expression)
-        {
-            return Ok(Value {
-                type_: expected_type.to_string(),
-                repr: value.to_string(),
-            });
+        if matches!(expected_type, "i32" | "i64") && is_untyped_integer_expression(expression) {
+            return self.emit_untyped_integer_expression_as(expression, expected_type);
         }
         let value = self.emit_expression(expression)?;
-        if value.type_ == "i32" && expected_type == "i64" && is_integer_literal(expression) {
-            return Ok(Value {
-                type_: "i64".to_string(),
-                repr: value.repr,
-            });
-        }
         if self.generator.info.interfaces.contains_key(expected_type) {
             return self.coerce_to_interface(value, expected_type);
         }
         Ok(value)
+    }
+
+    fn emit_untyped_integer_expression_as(
+        &mut self,
+        expression: &Expression,
+        expected_type: &str,
+    ) -> Result<Value, CodegenError> {
+        if let Some(value) = const_integer_expression(expression) {
+            let repr = match expected_type {
+                "i32" => i32::try_from(value)
+                    .map_err(|_| CodegenError::unsupported("i32 constant expression"))?
+                    .to_string(),
+                "i64" => value.to_string(),
+                _ => {
+                    return Err(CodegenError::unsupported("integer expression target type"));
+                }
+            };
+            return Ok(Value {
+                type_: expected_type.to_string(),
+                repr,
+            });
+        }
+
+        match expression {
+            Expression::Group(expr) => {
+                self.emit_untyped_integer_expression_as(&expr.inner, expected_type)
+            }
+            Expression::Unary(expr) if expr.operator == Kind::Minus => {
+                let value = self.emit_untyped_integer_expression_as(&expr.inner, expected_type)?;
+                self.emit_arithmetic_value(
+                    Kind::Minus,
+                    Value {
+                        type_: expected_type.to_string(),
+                        repr: "0".to_string(),
+                    },
+                    value,
+                )
+            }
+            Expression::Binary(expr)
+                if matches!(
+                    expr.operator,
+                    Kind::Plus | Kind::Minus | Kind::Star | Kind::Slash | Kind::Percent
+                ) =>
+            {
+                let left = self.emit_untyped_integer_expression_as(&expr.left, expected_type)?;
+                let right = self.emit_untyped_integer_expression_as(&expr.right, expected_type)?;
+                self.emit_arithmetic_value(expr.operator, left, right)
+            }
+            _ => Err(CodegenError::unsupported("untyped integer expression")),
+        }
     }
 
     fn coerce_to_interface(
@@ -5925,37 +5998,6 @@ fn arithmetic_op(operator: Kind) -> Result<&'static str, CodegenError> {
     }
 }
 
-fn is_integer_literal(expression: &Expression) -> bool {
-    match expression {
-        Expression::Int(_) => true,
-        Expression::Group(expr) => is_integer_literal(&expr.inner),
-        _ => false,
-    }
-}
-
-fn const_integer_expression(expression: &Expression) -> Option<i64> {
-    match expression {
-        Expression::Int(expr) => Some(expr.value),
-        Expression::Group(expr) => const_integer_expression(&expr.inner),
-        Expression::Unary(expr) if expr.operator == Kind::Minus => {
-            const_integer_expression(&expr.inner)?.checked_neg()
-        }
-        Expression::Binary(expr) => {
-            let left = const_integer_expression(&expr.left)?;
-            let right = const_integer_expression(&expr.right)?;
-            match expr.operator {
-                Kind::Plus => left.checked_add(right),
-                Kind::Minus => left.checked_sub(right),
-                Kind::Star => left.checked_mul(right),
-                Kind::Slash => left.checked_div(right),
-                Kind::Percent => left.checked_rem(right),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
 fn function_symbol(name: &str) -> String {
     format!("yar.{}", sanitize_label(name))
 }
@@ -6151,6 +6193,9 @@ mod tests {
         "testdata/generics_imports/main.yar",
         "testdata/imports_ok/main.yar",
         "testdata/infinite_for/main.yar",
+        "testdata/integer_div_zero/main.yar",
+        "testdata/integer_rem_overflow/main.yar",
+        "testdata/integer_wrapping/main.yar",
         "testdata/interfaces/main.yar",
         "testdata/maps/main.yar",
         "testdata/maps_keys/main.yar",
@@ -6213,6 +6258,7 @@ mod tests {
                     | "testdata/imports_ok/main.yar"
                     | "testdata/i64_untyped_binary/main.yar"
                     | "testdata/infinite_for/main.yar"
+                    | "testdata/integer_wrapping/main.yar"
                     | "testdata/interfaces/main.yar"
                     | "testdata/maps/main.yar"
                     | "testdata/maps_keys/main.yar"
@@ -6559,6 +6605,119 @@ fn main() i32 {
 
         assert_eq!(ir.matches("call i32 @yar.next_index(").count(), 3, "{ir}");
         assert_eq!(ir.matches("call i32 @yar.amount(").count(), 3, "{ir}");
+    }
+
+    #[test]
+    fn checks_integer_division_and_remainder_operands() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn arithmetic_i32(left i32, right i32) i32 {
+    return left / right + left % right
+}
+
+fn arithmetic_i64(left i64, right i64) i64 {
+    return left / right + left % right
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+
+        assert_eq!(
+            ir.matches("call void @yar_i32_divrem_check(").count(),
+            2,
+            "{ir}"
+        );
+        assert_eq!(
+            ir.matches("call void @yar_i64_divrem_check(").count(),
+            2,
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn preserves_invalid_constant_integer_operations_for_runtime_traps() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn divide_by_zero() i32 {
+    return 1 / 0
+}
+
+fn remainder_overflow() i64 {
+    return (0 - 9223372036854775807 - 1) % (0 - 1)
+}
+
+fn typed_value() i64 {
+    return 0
+}
+
+fn invalid_constant_on_right() i64 {
+    return typed_value() + (1 / 0)
+}
+
+fn invalid_constant_on_left() i64 {
+    return (1 / 0) + typed_value()
+}
+
+fn inferred_i64_failure() i64 {
+    value := (0 - 9223372036854775807 - 1) % (0 - 1)
+    return value
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+
+        assert_eq!(
+            ir.matches("call void @yar_i32_divrem_check(").count(),
+            1,
+            "{ir}"
+        );
+        assert_eq!(
+            ir.matches("call void @yar_i64_divrem_check(").count(),
+            4,
+            "{ir}"
+        );
+        assert!(ir.contains(" = sdiv i32 1, 0"), "{ir}");
+        assert!(ir.contains(" = srem i64 "), "{ir}");
+
+        let function_body = |name: &str| {
+            let symbol = format!("@{}(", function_symbol(name));
+            let symbol_offset = ir
+                .find(&symbol)
+                .unwrap_or_else(|| panic!("missing {symbol}"));
+            let start = ir[..symbol_offset]
+                .rfind("define ")
+                .unwrap_or_else(|| panic!("missing definition for {symbol}"));
+            let end = ir[symbol_offset..]
+                .find("\n}\n")
+                .map(|offset| symbol_offset + offset + 3)
+                .unwrap_or_else(|| panic!("unterminated definition for {symbol}"));
+            &ir[start..end]
+        };
+        let invalid_left = function_body("invalid_constant_on_left");
+        assert!(
+            invalid_left.find("@yar_i64_divrem_check").unwrap()
+                < invalid_left.find("@yar.typed_value").unwrap(),
+            "{invalid_left}"
+        );
+        let invalid_right = function_body("invalid_constant_on_right");
+        assert!(
+            invalid_right.find("@yar.typed_value").unwrap()
+                < invalid_right.find("@yar_i64_divrem_check").unwrap(),
+            "{invalid_right}"
+        );
+        let inferred = function_body("inferred_i64_failure");
+        assert!(inferred.contains(" = srem i64 "), "{inferred}");
+        assert_clang_accepts_ir(&ir, "integer-constant-runtime-traps");
     }
 
     #[test]

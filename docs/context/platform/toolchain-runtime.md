@@ -120,6 +120,15 @@
 - The current Rust runtime does not reclaim individual heap allocations;
   process teardown releases them.
 
+### Integer Arithmetic Runtime
+
+- `yar_i32_divrem_check(int32_t dividend, int32_t divisor)` guards generated
+  `i32` division and remainder operations.
+- `yar_i64_divrem_check(int64_t dividend, int64_t divisor)` provides the same
+  guard for `i64`.
+- Both helpers terminate on a zero divisor or the signed overflow pair `MIN`
+  and `-1`, before generated code executes LLVM `sdiv` or `srem`.
+
 ### Pointer Runtime
 
 - `yar_pointer_check(const void *pointer)` terminates with

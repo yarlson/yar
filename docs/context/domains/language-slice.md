@@ -157,6 +157,9 @@
 - `if` and `for` conditions must be non-errorable `bool` expressions.
 - Arithmetic and relational operators require matching integer operands after
   literal coercion.
+- `i32` and `i64` addition, subtraction, multiplication, and unary negation
+  wrap to the operand width. Division and remainder trap on a zero divisor or
+  the signed overflow pair `MIN` and `-1`.
 - String `==` and `!=` compare by exact byte equality.
 - String `+` concatenates two strings into a new heap-allocated string.
 - String indexing `s[i]` returns the byte value at offset `i` as `i32`, with

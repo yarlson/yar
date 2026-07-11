@@ -41,9 +41,22 @@ find testdata -name main.yar | sort >"$fixtures"
 
 count=0
 while IFS= read -r fixture; do
+  expected_stderr=""
   case "$fixture" in
     testdata/panic/main.yar | testdata/testing_fail/main.yar | testdata/unhandled_error/main.yar)
       continue
+      ;;
+    testdata/array_bounds/main.yar)
+      expected_stderr="runtime failure: array index out of range"
+      ;;
+    testdata/integer_div_zero/main.yar)
+      expected_stderr="runtime failure: integer division or remainder by zero"
+      ;;
+    testdata/integer_rem_overflow/main.yar)
+      expected_stderr="runtime failure: integer division or remainder overflow"
+      ;;
+    testdata/nil_pointer/main.yar)
+      expected_stderr="runtime failure: nil pointer dereference"
       ;;
   esac
 
@@ -52,23 +65,12 @@ while IFS= read -r fixture; do
 
   stdout="$tmp_dir/stdout"
   stderr="$tmp_dir/stderr"
-  if [ "$fixture" = "testdata/array_bounds/main.yar" ]; then
+  if [ -n "$expected_stderr" ]; then
     if "$output" >"$stdout" 2>"$stderr"; then
       echo "fixture unexpectedly succeeded: $fixture" >&2
       exit 1
     fi
-    if [ "$(cat "$stderr")" != "runtime failure: array index out of range" ]; then
-      echo "fixture produced unexpected stderr: $fixture" >&2
-      cat "$stderr" >&2
-      exit 1
-    fi
-    continue
-  elif [ "$fixture" = "testdata/nil_pointer/main.yar" ]; then
-    if "$output" >"$stdout" 2>"$stderr"; then
-      echo "fixture unexpectedly succeeded: $fixture" >&2
-      exit 1
-    fi
-    if [ "$(cat "$stderr")" != "runtime failure: nil pointer dereference" ]; then
+    if [ "$(cat "$stderr")" != "$expected_stderr" ]; then
       echo "fixture produced unexpected stderr: $fixture" >&2
       cat "$stderr" >&2
       exit 1
