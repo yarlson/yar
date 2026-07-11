@@ -86,6 +86,18 @@ impl Dependency {
     }
 }
 
+impl LockEntry {
+    pub fn dependency(&self) -> Dependency {
+        Dependency {
+            git: self.git.clone(),
+            tag: self.tag.clone(),
+            rev: self.rev.clone(),
+            branch: self.branch.clone(),
+            path: String::new(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ManifestError {
     Io(std::io::Error),
@@ -190,9 +202,13 @@ pub fn write_lock_file(entries: &[LockEntry]) -> String {
 }
 
 pub fn cache_path(cache_dir: impl AsRef<Path>, git_url: &str, commit: &str) -> std::path::PathBuf {
+    cache_bucket_path(cache_dir.as_ref(), git_url).join(commit)
+}
+
+fn cache_bucket_path(cache_dir: &Path, git_url: &str) -> PathBuf {
     let digest = Sha256::digest(git_url.as_bytes());
     let url_hash = hex_lower(&digest);
-    cache_dir.as_ref().join(&url_hash[..16]).join(commit)
+    cache_dir.join(&url_hash[..16])
 }
 
 pub fn cache_dir_from_env() -> Result<std::path::PathBuf, ManifestError> {
@@ -212,18 +228,40 @@ pub fn cache_dir_from_env() -> Result<std::path::PathBuf, ManifestError> {
 }
 
 pub fn is_cached(cache_dir: impl AsRef<Path>, git_url: &str, commit: &str) -> bool {
+    if !is_lower_hex(commit, 40) {
+        return false;
+    }
     cache_path(cache_dir, git_url, commit).is_dir()
 }
 
-pub fn fetch(
+pub fn fetch_locked_dependency(
     cache_dir: impl AsRef<Path>,
     dependency: &Dependency,
     commit: &str,
+    expected_hash: &str,
 ) -> Result<PathBuf, ManifestError> {
+    validate_cache_key(commit, expected_hash)?;
     let cache_dir = cache_dir.as_ref();
-    let dest_dir = cache_path(cache_dir, &dependency.git, commit);
-    if dest_dir.is_dir() {
-        return Ok(dest_dir);
+    let cache_bucket = prepare_cache_bucket(cache_dir, &dependency.git)?;
+    let dest_dir = cache_bucket.join(commit);
+    match fs::symlink_metadata(&dest_dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            verify_hash(&dest_dir, expected_hash)?;
+            return Ok(dest_dir);
+        }
+        Ok(_) => {
+            return Err(invalid(format!(
+                "dependency cache path {} is not a directory",
+                dest_dir.display()
+            )));
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(with_context(
+                format!("inspecting dependency cache {}", dest_dir.display()),
+                err,
+            ));
+        }
     }
 
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
@@ -240,7 +278,7 @@ pub fn fetch(
 
     fs::remove_dir_all(clone_dir.join(".git"))
         .map_err(|err| with_context(format!("removing .git from {}", clone_dir.display()), err))?;
-    fs::create_dir_all(dest_dir.parent().unwrap_or(cache_dir))?;
+    verify_hash(&clone_dir, expected_hash)?;
     fs::rename(&clone_dir, &dest_dir)
         .map_err(|err| with_context("moving dependency to cache", err))?;
     Ok(dest_dir)
@@ -251,27 +289,61 @@ pub fn fetch_and_resolve_commit(
     dependency: &Dependency,
 ) -> Result<(String, String), ManifestError> {
     let cache_dir = cache_dir.as_ref();
+    let cache_bucket = prepare_cache_bucket(cache_dir, &dependency.git)?;
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
     let clone_dir = tmp_dir.path().join("repo");
     git_clone(dependency, &clone_dir)?;
 
     let commit = git_rev_parse(&clone_dir)?;
+    if !is_lower_hex(&commit, 40) {
+        return Err(invalid(format!(
+            "git returned invalid commit {commit:?}: expected 40 lowercase hex characters"
+        )));
+    }
     fs::remove_dir_all(clone_dir.join(".git"))
         .map_err(|err| with_context(format!("removing .git from {}", clone_dir.display()), err))?;
+    let hash = hash_dir(&clone_dir)?;
 
-    let dest_dir = cache_path(cache_dir, &dependency.git, &commit);
-    if !dest_dir.is_dir() {
-        fs::create_dir_all(dest_dir.parent().unwrap_or(cache_dir))?;
-        fs::rename(&clone_dir, &dest_dir)
-            .map_err(|err| with_context("moving dependency to cache", err))?;
+    let dest_dir = cache_bucket.join(&commit);
+    match fs::symlink_metadata(&dest_dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            verify_hash(&dest_dir, &hash).map_err(|err| {
+                invalid(format!(
+                    "cached dependency {} differs from freshly resolved content: {err}",
+                    dest_dir.display()
+                ))
+            })?;
+        }
+        Ok(_) => {
+            return Err(invalid(format!(
+                "dependency cache path {} is not a directory",
+                dest_dir.display()
+            )));
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            fs::rename(&clone_dir, &dest_dir)
+                .map_err(|err| with_context("moving dependency to cache", err))?;
+        }
+        Err(err) => {
+            return Err(with_context(
+                format!("inspecting dependency cache {}", dest_dir.display()),
+                err,
+            ));
+        }
     }
-
-    let hash = hash_dir(&dest_dir)?;
     Ok((commit, hash))
 }
 
 pub fn hash_dir(dir: impl AsRef<Path>) -> Result<String, ManifestError> {
     let dir = dir.as_ref();
+    let metadata = fs::symlink_metadata(dir)
+        .map_err(|err| with_context(format!("hashing directory {}", dir.display()), err))?;
+    if !metadata.file_type().is_dir() {
+        return Err(invalid(format!(
+            "hashing directory {}: root is not a directory",
+            dir.display()
+        )));
+    }
     let mut entries = Vec::new();
     collect_hash_entries(dir, dir, &mut entries)
         .map_err(|err| with_context(format!("hashing directory {}", dir.display()), err))?;
@@ -286,9 +358,9 @@ pub fn hash_dir(dir: impl AsRef<Path>) -> Result<String, ManifestError> {
 }
 
 pub fn verify_hash(dir: impl AsRef<Path>, expected: &str) -> Result<(), ManifestError> {
-    if !expected.starts_with("sha256:") {
+    if !valid_sha256_hash(expected) {
         return Err(invalid(format!(
-            "invalid hash format for {}: expected sha256: prefix, got {expected:?}",
+            "invalid hash format for {}: expected sha256: followed by 64 lowercase hex characters, got {expected:?}",
             dir.as_ref().display()
         )));
     }
@@ -300,6 +372,23 @@ pub fn verify_hash(dir: impl AsRef<Path>, expected: &str) -> Result<(), Manifest
         )));
     }
     Ok(())
+}
+
+pub fn verify_cached_dependency(
+    cache_dir: impl AsRef<Path>,
+    git_url: &str,
+    commit: &str,
+    expected_hash: &str,
+) -> Result<PathBuf, ManifestError> {
+    validate_cache_key(commit, expected_hash)?;
+    let cache_dir = cache_dir.as_ref();
+    require_cache_directory(cache_dir, "dependency cache root")?;
+    let cache_bucket = cache_bucket_path(cache_dir, git_url);
+    require_cache_directory(&cache_bucket, "dependency cache bucket")?;
+    let dependency_dir = cache_bucket.join(commit);
+    require_cache_directory(&dependency_dir, "dependency cache entry")?;
+    verify_hash(&dependency_dir, expected_hash)?;
+    Ok(dependency_dir)
 }
 
 pub fn resolve_dependencies(
@@ -376,19 +465,80 @@ fn validate_lock_entry(index: usize, entry: &LockEntry) -> Result<(), ManifestEr
             entry.name
         )));
     }
-    if entry.commit.is_empty() {
+    if !is_lower_hex(&entry.commit, 40) {
         return Err(invalid(format!(
-            "yar.lock: package {:?} missing commit",
+            "yar.lock: package {:?} commit must be 40 lowercase hex characters",
             entry.name
         )));
     }
-    if entry.hash.is_empty() {
+    if !valid_sha256_hash(&entry.hash) {
         return Err(invalid(format!(
-            "yar.lock: package {:?} missing hash",
+            "yar.lock: package {:?} hash must be sha256: followed by 64 lowercase hex characters",
             entry.name
         )));
     }
     Ok(())
+}
+
+fn valid_sha256_hash(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|digest| is_lower_hex(digest, 64))
+}
+
+fn is_lower_hex(value: &str, len: usize) -> bool {
+    value.len() == len
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_cache_key(commit: &str, expected_hash: &str) -> Result<(), ManifestError> {
+    if !is_lower_hex(commit, 40) {
+        return Err(invalid(format!(
+            "invalid dependency commit {commit:?}: expected 40 lowercase hex characters"
+        )));
+    }
+    if !valid_sha256_hash(expected_hash) {
+        return Err(invalid(format!(
+            "invalid dependency hash {expected_hash:?}: expected sha256: followed by 64 lowercase hex characters"
+        )));
+    }
+    Ok(())
+}
+
+fn prepare_cache_bucket(cache_dir: &Path, git_url: &str) -> Result<PathBuf, ManifestError> {
+    prepare_cache_directory(cache_dir, "dependency cache root")?;
+    let cache_bucket = cache_bucket_path(cache_dir, git_url);
+    prepare_cache_directory(&cache_bucket, "dependency cache bucket")?;
+    Ok(cache_bucket)
+}
+
+fn prepare_cache_directory(path: &Path, label: &str) -> Result<(), ManifestError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => require_cache_directory(path, label),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(path)
+                .map_err(|err| with_context(format!("creating {label} {}", path.display()), err))?;
+            require_cache_directory(path, label)
+        }
+        Err(err) => Err(with_context(
+            format!("inspecting {label} {}", path.display()),
+            err,
+        )),
+    }
+}
+
+fn require_cache_directory(path: &Path, label: &str) -> Result<(), ManifestError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| with_context(format!("inspecting {label} {}", path.display()), err))?;
+    if metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "{label} {} is not a real directory",
+        path.display()
+    )))
 }
 
 fn validate_dependency(alias: &str, dependency: &Dependency) -> Result<(), ManifestError> {
@@ -523,9 +673,19 @@ fn collect_hash_entries(root: &Path, dir: &Path, entries: &mut Vec<HashEntry>) -
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
             collect_hash_entries(root, &path, entries)?;
             continue;
+        }
+        if !file_type.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dependency tree entry {} is not a regular file or directory",
+                    path.display()
+                ),
+            ));
         }
         let relative_path = path
             .strip_prefix(root)
@@ -926,7 +1086,7 @@ hash = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                 git: "https://github.com/user/yar-json.git".to_string(),
                 rev: "def789".to_string(),
                 commit: "def789abc123456012345678901234567890abcd".to_string(),
-                hash: "sha256:1234".to_string(),
+                hash: format!("sha256:{}", "1".repeat(64)),
                 ..LockEntry::default()
             },
             LockEntry {
@@ -934,7 +1094,7 @@ hash = "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                 git: "https://github.com/user/yar-http.git".to_string(),
                 tag: "v0.3.1".to_string(),
                 commit: "abc123def456789012345678901234567890abcd".to_string(),
-                hash: "sha256:5678".to_string(),
+                hash: format!("sha256:{}", "2".repeat(64)),
                 ..LockEntry::default()
             },
         ];
@@ -971,10 +1131,48 @@ hash = "sha256:abc"
             r#"[[package]]
 name = "lib"
 git = "https://example.com/repo.git"
-commit = "abc123"
+commit = "1111111111111111111111111111111111111111"
 "#,
         ] {
             assert!(parse_lock_file(input).is_err(), "accepted {input}");
+        }
+    }
+
+    #[test]
+    fn rejects_lock_values_that_cannot_be_cache_keys() {
+        let valid_hash = format!("sha256:{}", "a".repeat(64));
+        for input in [
+            format!(
+                r#"[[package]]
+name = "http"
+git = "https://example.com/http.git"
+tag = "v1"
+commit = "abc123"
+hash = "{valid_hash}"
+"#,
+            ),
+            format!(
+                r#"[[package]]
+name = "http"
+git = "https://example.com/http.git"
+tag = "v1"
+commit = "{}"
+hash = "{valid_hash}"
+"#,
+                "A".repeat(40),
+            ),
+            format!(
+                r#"[[package]]
+name = "http"
+git = "https://example.com/http.git"
+tag = "v1"
+commit = "{}"
+hash = "sha256:abc123"
+"#,
+                "1".repeat(40),
+            ),
+        ] {
+            assert!(parse_lock_file(&input).is_err(), "accepted {input}");
         }
     }
 
@@ -1002,13 +1200,85 @@ commit = "abc123"
         let hash = hash_dir(&dir).unwrap();
         let same_hash = hash_dir(&dir).unwrap();
 
-        assert!(hash.starts_with("sha256:"));
+        assert_eq!(
+            hash,
+            "sha256:e68a20c412df9857f6ce49e03cf0754d7080cd60545e03da83d418bae9f6ad1c"
+        );
         assert_eq!(hash, same_hash);
         verify_hash(&dir, &hash).unwrap();
+        assert!(verify_hash(&dir, "sha256:abc123").is_err());
 
         fs::write(dir.join("a.txt"), "changed").unwrap();
         assert_ne!(hash, hash_dir(&dir).unwrap());
         assert!(verify_hash(&dir, &hash).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_in_hashed_dependency_trees() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("yar-hash-symlink");
+        fs::write(dir.join("target.yar"), "package target\n").unwrap();
+        symlink("target.yar", dir.join("alias.yar")).unwrap();
+
+        let err = hash_dir(&dir).unwrap_err().to_string();
+        assert!(
+            err.contains("not a regular file or directory"),
+            "unexpected error: {err}"
+        );
+
+        let root_link = dir.with_extension("link");
+        symlink(&dir, &root_link).unwrap();
+        let err = hash_dir(&root_link).unwrap_err().to_string();
+        assert!(
+            err.contains("root is not a directory"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_cache_roots_and_buckets() {
+        use std::os::unix::fs::symlink;
+
+        let git = "https://example.com/dependency.git";
+        let commit = "1".repeat(40);
+        let real_cache = temp_dir("yar-real-cache");
+        let dependency_dir = cache_path(&real_cache, git, &commit);
+        fs::create_dir_all(&dependency_dir).unwrap();
+        fs::write(dependency_dir.join("dep.yar"), "package dep\n").unwrap();
+        let hash = hash_dir(&dependency_dir).unwrap();
+
+        let linked_cache = real_cache.with_extension("link");
+        symlink(&real_cache, &linked_cache).unwrap();
+        let err = verify_cached_dependency(&linked_cache, git, &commit, &hash)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("dependency cache root") && err.contains("not a real directory"),
+            "unexpected error: {err}"
+        );
+
+        let cache = temp_dir("yar-cache-bucket-link");
+        let real_bucket = temp_dir("yar-real-cache-bucket");
+        let dependency_dir = real_bucket.join(&commit);
+        fs::create_dir_all(&dependency_dir).unwrap();
+        fs::write(dependency_dir.join("dep.yar"), "package dep\n").unwrap();
+        let hash = hash_dir(&dependency_dir).unwrap();
+        let linked_bucket = cache_path(&cache, git, &commit)
+            .parent()
+            .expect("cache entry has a bucket")
+            .to_path_buf();
+        symlink(&real_bucket, &linked_bucket).unwrap();
+
+        let err = verify_cached_dependency(&cache, git, &commit, &hash)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("dependency cache bucket") && err.contains("not a real directory"),
+            "unexpected error: {err}"
+        );
     }
 
     fn temp_dir(prefix: &str) -> PathBuf {

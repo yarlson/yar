@@ -300,7 +300,10 @@ The alias becomes the import path: `import "http"`. Resolution order: local >
 dependency > stdlib.
 
 `yar.lock` pins exact commit SHAs and content hashes. Commit it to version
-control for reproducible builds.
+control. The compiler verifies locked cache contents before loading dependency
+source, and `yar fetch` verifies both existing and newly downloaded entries.
+When selected, a missing or modified locked cache entry fails closed instead
+of falling back to a same-named standard-library package.
 
 ## Cross-compilation
 

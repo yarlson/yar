@@ -15,6 +15,9 @@
 - Imports resolve from local packages under the entry root first, then check
   the dependency index built from `yar.toml` and `yar.lock`, and fall back to
   the embedded stdlib only when both local and dependency paths are absent.
+- When resolution selects a locked git dependency, its cache tree is verified
+  against `yar.lock` before cached source is read. Unused or locally shadowed
+  entries do not require a cache; local path dependencies remain unhashed.
 - Imported names stay package-qualified; imports do not inject unqualified
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary

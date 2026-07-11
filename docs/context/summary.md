@@ -2,11 +2,8 @@
 
 ## What
 
-`yar` is a Rust 2024 compiler CLI for a small source language. The shipped
-Rust CLI reads an entry `.yar` file or package
-directory, resolves a package graph rooted there, lowers that graph into one
-checked program, emits textual LLVM IR, and invokes `clang` with the Rust
-runtime static library to produce or run a native executable.
+`yar` is a Rust 2024 compiler CLI for a small source language. The shipped Rust
+CLI reads an entry `.yar` file or package directory, resolves a package graph rooted there, lowers that graph into one checked program, emits textual LLVM IR, and invokes `clang` with the Rust runtime static library to produce or run a native executable.
 
 ## Architecture
 
@@ -49,8 +46,7 @@ runtime static library to produce or run a native executable.
 - Build and run native executables backed by the Rust runtime static library.
 - Propagate errors with direct `return` or postfix `?`.
 - Handle errors locally with `or |err| { ... }`.
-- Run share-safe structured concurrent tasks with `taskgroup` and communicate
-  through bounded typed channels.
+- Run share-safe structured concurrent tasks with `taskgroup` and communicate through bounded typed channels.
 - Model closed variants with enums, payload-carrying enum cases, and exhaustive `match`.
 - Support aggregate values and return types with structs, fixed arrays, slices, maps, and pointers.
 - Reuse code through explicit generic structs and generic functions.
@@ -60,10 +56,8 @@ runtime static library to produce or run a native executable.
 - Enumerate map keys through snapshot slices with `keys(map[K]V) []K`.
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
-- Expose one runtime-managed allocation boundary for slices, maps, pointers,
-  and other heap-backed features.
-- Retain heap allocations until process exit in the current Rust runtime; no
-  user-visible lifetime or deallocation syntax exists.
+- Expose one runtime-managed allocation boundary for slices, maps, pointers, and other heap-backed features.
+- Retain heap allocations until process exit in the current Rust runtime; no user-visible lifetime or deallocation syntax exists.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Stream file and TCP connection data through shared `io.Reader`, `io.Writer`, and `io.Closer` interfaces.
 - Read the host argument vector, look up environment variables, run child processes with captured or inherited stdio, and write diagnostics to stderr from Yar programs.
@@ -72,7 +66,7 @@ runtime static library to produce or run a native executable.
 - Discover and run test functions from `_test.yar` files using `yar test`, with generic assertion helpers from the `testing` stdlib package.
 - Convert primitive values to their string representation with `to_str`.
 - Compare error values with `==` and `!=`, and use `error.Name` as a general expression.
-- Manage external dependencies through `yar.toml` manifests and `yar.lock` lock files, with git-based fetching, content-addressed caching, and transitive dependency resolution.
+- Manage external dependencies through `yar.toml` manifests and `yar.lock` lock files, with git-based fetching, commit-keyed caches verified against lock hashes, and transitive dependency resolution.
 
 ## Tech Stack
 
@@ -82,6 +76,5 @@ runtime static library to produce or run a native executable.
 - Rust runtime static library for native linking
 - Embedded Yar standard library compiled through the same frontend as user code
 - Rust tests that validate compiler slices and the runtime crate's exported ABI helpers, plus Rust CLI verifier scripts that native-build and run checked-in `testdata/**/main.yar` fixtures
-- GitHub Actions CI for formatting, linting, Linux/macOS tests, and release packaging
-  dry runs
+- GitHub Actions CI for formatting, linting, Linux/macOS tests, and release packaging dry runs
 - GoReleaser-based GitHub Release CD for version tags

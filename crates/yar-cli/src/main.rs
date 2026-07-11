@@ -14,8 +14,8 @@ use yar_compiler::{
     diag,
     manifest::{
         Dependency, LOCK_FILE, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
-        cache_dir_from_env, fetch, is_cached, read_lock_file, read_manifest, resolve_dependencies,
-        to_lock_entries, valid_alias, verify_hash, write_lock_file, write_manifest,
+        cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file, read_manifest,
+        resolve_dependencies, to_lock_entries, valid_alias, write_lock_file, write_manifest,
     },
 };
 
@@ -220,21 +220,12 @@ fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
     let entries = read_lock_file(LOCK_FILE)?;
     let cache_dir = cache_dir_from_env()?;
     for entry in entries {
-        if is_cached(&cache_dir, &entry.git, &entry.commit) {
-            continue;
+        if !is_cached(&cache_dir, &entry.git, &entry.commit) {
+            println!("fetching {}...", entry.name);
         }
-        println!("fetching {}...", entry.name);
-        let dependency = Dependency {
-            git: entry.git.clone(),
-            tag: entry.tag.clone(),
-            rev: entry.rev.clone(),
-            branch: entry.branch.clone(),
-            path: String::new(),
-        };
-        let dir = fetch(&cache_dir, &dependency, &entry.commit)
+        let dependency = entry.dependency();
+        fetch_locked_dependency(&cache_dir, &dependency, &entry.commit, &entry.hash)
             .map_err(|err| CliError::other(format!("fetching {}: {err}", entry.name)))?;
-        verify_hash(&dir, &entry.hash)
-            .map_err(|err| CliError::other(format!("verifying {}: {err}", entry.name)))?;
     }
     println!("all dependencies fetched");
     Ok(())

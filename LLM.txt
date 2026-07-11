@@ -885,6 +885,15 @@ local_lib = { path = "../my-local-lib" }
 - `path` dependencies are local-only (not written to `yar.lock`)
 - Transitive dependencies supported (each dep may have its own `yar.toml`)
 - Conflicts (same alias, different version) are errors unless root overrides
+- A selected locked git dependency is hash-verified before cached source is
+  read; missing or mismatched selected entries fail before stdlib fallback,
+  while unused or locally shadowed entries do not require a cache
+- `yar fetch` verifies existing entries and verifies fresh clones before
+  publishing them; cached git trees reject symlinks and special files
+- Local `path` dependencies remain unhashed filesystem inputs
+- The flat lock is still indexed as written; duplicate package names, missing
+  entries for declared git dependencies, manifest reachability, and exact
+  source/ref agreement are not validated
 
 **Commands:**
 ```bash
@@ -897,7 +906,8 @@ yar fetch                                         # download to cache
 yar update                                        # re-resolve all deps
 ```
 
-Cache: `~/.cache/yar/deps/` (override with `YAR_CACHE`).
+Cache: `$HOME/Library/Caches/yar/deps/` on macOS, otherwise
+`$HOME/.cache/yar/deps/` (override with `YAR_CACHE`).
 
 ## Memory Management
 
