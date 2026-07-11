@@ -1027,6 +1027,154 @@ fn fetch_validates_an_existing_locked_dependency_cache() {
 
 #[cfg(unix)]
 #[test]
+fn fetch_uses_the_locked_commit_instead_of_the_declared_ref() {
+    let dir = temp_dir("yar-cli-fetch-locked-commit");
+    let cache_dir = dir.join("cache");
+    let expected_tree = dir.join("expected-child");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = "https://example.com/child.git";
+    let commit = "2222222222222222222222222222222222222222";
+    fs::create_dir_all(&expected_tree).unwrap();
+    fs::write(expected_tree.join("child.yar"), "package child\n").unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "moved-tag" }
+"#,
+    )
+    .unwrap();
+    let mut entry = locked_entry("child", git, commit, hash_dir(&expected_tree).unwrap());
+    entry.tag = "moved-tag".to_owned();
+    fs::write(dir.join("yar.lock"), write_lock_file(&[entry])).unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let git_log = fs::read_to_string(fake_git.join("git-args")).unwrap();
+    assert!(
+        git_log.contains(&format!("fetch --depth=1 --no-tags {git} {commit}")),
+        "fetch did not request the locked commit:\n{git_log}"
+    );
+    assert!(
+        !git_log.contains("moved-tag") && !git_log.contains("--branch"),
+        "fetch followed mutable ref data from the lock:\n{git_log}"
+    );
+    assert!(cache_path(&cache_dir, git, commit).is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_does_not_publish_an_unavailable_locked_commit() {
+    let dir = temp_dir("yar-cli-fetch-unavailable-commit");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = "https://example.com/child.git";
+    let commit = "9999999999999999999999999999999999999999";
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry(
+            "child",
+            git,
+            commit,
+            format!("sha256:{}", "0".repeat(64)),
+        )]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("git fetch locked commit {commit}"))
+            && stderr.contains("is not available"),
+        "stderr did not report the unavailable locked object: {stderr}"
+    );
+    assert!(
+        !cache_path(&cache_dir, git, commit).exists(),
+        "fetch published an unavailable locked commit"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_does_not_publish_when_checkout_head_differs_from_the_lock() {
+    let dir = temp_dir("yar-cli-fetch-wrong-head");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = "https://example.com/wrong-head.git";
+    let commit = "2222222222222222222222222222222222222222";
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/wrong-head.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry(
+            "child",
+            git,
+            commit,
+            format!("sha256:{}", "0".repeat(64)),
+        )]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("commit mismatch")
+            && stderr.contains(commit)
+            && stderr.contains("3333333333333333333333333333333333333333"),
+        "stderr did not report the checkout mismatch: {stderr}"
+    );
+    assert!(
+        !cache_path(&cache_dir, git, commit).exists(),
+        "fetch published a checkout whose HEAD differed from the lock"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn fetch_does_not_publish_a_fresh_dependency_with_the_wrong_hash() {
     let dir = temp_dir("yar-cli-fetch-wrong-hash");
     let cache_dir = dir.join("cache");
@@ -1946,15 +2094,12 @@ fn fake_git_dir() -> PathBuf {
         r#"#!/bin/sh
 set -eu
 
-if [ "$1" = "clone" ]; then
-  url=""
-  dest=""
-  for arg in "$@"; do
-    case "$arg" in
-      https://*) url="$arg" ;;
-    esac
-    dest="$arg"
-  done
+log="$(dirname "$0")/git-args"
+printf '%s\n' "$*" >> "$log"
+
+materialize() {
+  dest="$1"
+  url="$2"
   mkdir -p "$dest/.git"
   if echo "$url" | grep -q parent; then
     cat > "$dest/yar.toml" <<'EOF'
@@ -1965,22 +2110,93 @@ name = "parent"
 child = { git = "https://example.com/child.git", tag = "v1" }
 EOF
     printf 'package parent\n' > "$dest/parent.yar"
+    head="1111111111111111111111111111111111111111"
   else
     printf 'package child\n' > "$dest/child.yar"
+    if echo "$url" | grep -q wrong-head; then
+      head="3333333333333333333333333333333333333333"
+    else
+      head="2222222222222222222222222222222222222222"
+    fi
   fi
+  printf '%s\n' "$head" > "$dest/.git/fake-head"
+}
+
+if [ "$1" = "clone" ]; then
+  url=""
+  dest=""
+  for arg in "$@"; do
+    case "$arg" in
+      https://*) url="$arg" ;;
+    esac
+    dest="$arg"
+  done
+  materialize "$dest" "$url"
+  exit 0
+fi
+
+if [ "$1" = "init" ]; then
+  if [ "$#" -ne 2 ]; then
+    echo "unexpected git init invocation: $*" >&2
+    exit 1
+  fi
+  dest=""
+  for arg in "$@"; do
+    dest="$arg"
+  done
+  mkdir -p "$dest/.git"
+  : > "$dest/.git/fake-initialized"
+  exit 0
+fi
+
+if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
+  if [ "$#" -ne 7 ] || [ "$4" != "--depth=1" ] || [ "$5" != "--no-tags" ]; then
+    echo "unexpected locked fetch invocation: $*" >&2
+    exit 1
+  fi
+  if [ ! -f "$2/.git/fake-initialized" ]; then
+    echo "fetch destination was not initialized" >&2
+    exit 1
+  fi
+  url="$6"
+  requested="$7"
+  expected="2222222222222222222222222222222222222222"
+  if echo "$url" | grep -q parent; then
+    expected="1111111111111111111111111111111111111111"
+  fi
+  if [ "$requested" != "$expected" ]; then
+    echo "locked commit $requested is not available" >&2
+    exit 1
+  fi
+  printf '%s\n' "$url" > "$2/.git/fake-fetched-url"
+  printf '%s\n' "$requested" > "$2/.git/fake-fetched-commit"
   exit 0
 fi
 
 if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then
-  if [ -f "$2/parent.yar" ]; then
-    printf '1111111111111111111111111111111111111111\n'
-  else
-    printf '2222222222222222222222222222222222222222\n'
+  if [ "$#" -ne 4 ] || [ "$4" != "HEAD" ] || [ ! -f "$2/.git/fake-head" ]; then
+    echo "HEAD is not checked out: $*" >&2
+    exit 1
   fi
+  cat "$2/.git/fake-head"
   exit 0
 fi
 
 if [ "$1" = "-C" ] && [ "$3" = "checkout" ]; then
+  if [ -f "$2/.git/fake-fetched-commit" ]; then
+    fetched="$(cat "$2/.git/fake-fetched-commit")"
+    if [ "$#" -ne 5 ] || [ "$4" != "--detach" ] || [ "$5" != "$fetched" ]; then
+      echo "checkout did not detach the fetched commit: $*" >&2
+      exit 1
+    fi
+    url="$(cat "$2/.git/fake-fetched-url")"
+    materialize "$2" "$url"
+  elif [ "$#" -eq 4 ]; then
+    printf '%s\n' "$4" > "$2/.git/fake-head"
+  else
+    echo "unexpected git checkout invocation: $*" >&2
+    exit 1
+  fi
   exit 0
 fi
 

@@ -262,8 +262,11 @@ scopes. True owner-local alias reuse requires lock v2. Source that relied on
 global visibility of a reachable transitive alias must add a direct declaration
 to the importing origin's manifest.
 
-Fresh fetches are verified before publication, and lock generation never
-derives a trusted hash from cache content that differs from the fresh checkout.
+Fetching an existing lock verifies valid cached entries offline. Each missing
+entry requests the locked commit object directly rather than re-resolving its
+recorded ref; an unavailable object fails without ref fallback. Fresh checkouts
+are verified before publication, and lock generation never derives a trusted
+hash from cache content that differs from the fresh checkout.
 Local path dependencies remain live and unhashed and may be declared only in
 the root manifest. Their manifests may contribute git roots but may not declare
 another path dependency; locked git packages may not declare path dependencies

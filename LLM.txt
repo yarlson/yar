@@ -917,9 +917,12 @@ local_lib = { path = "../my-local-lib" }
   read, then its manifest is checked against the recorded child edges; missing,
   mismatched, or edge-divergent selected entries fail without stdlib substitution,
   while unused or locally shadowed entries do not require a cache
-- `yar fetch` verifies existing entries and verifies fresh clones before
-  publishing them; cached git trees reject symlinks and special files. A graph
-  with no git roots needs no lock file or dependency cache
+- `yar fetch` verifies valid cached entries offline. For each missing entry it
+  requests the locked commit SHA directly, then verifies HEAD, content hash,
+  and manifest edges before publication; it never falls back to the recorded
+  tag/branch/rev. An unavailable locked object fails until an explicit
+  lock/update changes the resolution. Cached trees reject symlinks and special
+  files. A graph with no git roots needs no lock file or dependency cache
 - Local `path` dependencies remain unhashed filesystem inputs
 - `yar update <git-alias>` merges the replacement graph, preserves unrelated
   reachable nodes, refreshes compatible shared nodes, and prunes orphans;

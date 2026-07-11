@@ -1422,6 +1422,9 @@ hexadecimal characters and identify cache entries. Package nodes and child
 edges are emitted in alias order. A missing or unsupported lock version is
 rejected; run `yar lock` to regenerate it. Regeneration performs normal full
 resolution, so review the lock diff when a tag or branch may have moved.
+`yar fetch` does not perform that resolution: it verifies valid cached entries
+offline and requests the locked commit object directly from the recorded Git
+URL only when an entry is missing.
 
 Before compilation opens a dependency cache, and before `yar fetch` accesses
 the cache or network, Yar reconciles the manifest-derived roots and the lock
@@ -1496,13 +1499,16 @@ Dependencies are cached globally under `$HOME/Library/Caches/yar/deps/` on
 macOS and `$HOME/.cache/yar/deps/` on other supported hosts. Override the root
 with `YAR_CACHE`.
 
-`yar fetch` verifies existing entries before reporting success. It verifies a
-fresh checkout's commit and lock hash in temporary storage before publishing
-the cache entry. Cached git trees may contain only real directories and regular
-files; symlinks and special filesystem entries are rejected. A corrupt cache
-fails closed and is not deleted automatically. A graph with no effective git
-roots needs no `yar.lock`; `yar fetch` succeeds without creating a dependency
-cache.
+`yar fetch` verifies existing entries before reporting success. For a missing
+entry it fetches the locked commit directly, checks the checkout's HEAD, lock
+hash, and manifest edges in temporary storage, and only then publishes the
+cache entry. If the remote cannot provide that object, fetch fails without
+falling back to the recorded tag, branch, or revision; `yar lock` or
+`yar update` is required to select a different commit. Cached git trees may
+contain only real directories and regular files; symlinks and special
+filesystem entries are rejected. A corrupt cache fails closed and is not
+deleted automatically. A graph with no effective git roots needs no
+`yar.lock`; `yar fetch` succeeds without creating a dependency cache.
 
 ## Not Implemented
 

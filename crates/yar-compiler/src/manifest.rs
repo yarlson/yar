@@ -292,7 +292,7 @@ pub fn is_cached(cache_dir: impl AsRef<Path>, git_url: &str, commit: &str) -> bo
 
 pub fn fetch_locked_dependency<F>(
     cache_dir: impl AsRef<Path>,
-    dependency: &Dependency,
+    git_url: &str,
     commit: &str,
     expected_hash: &str,
     validate: F,
@@ -302,7 +302,7 @@ where
 {
     validate_cache_key(commit, expected_hash)?;
     let cache_dir = cache_dir.as_ref();
-    let cache_bucket = prepare_cache_bucket(cache_dir, &dependency.git)?;
+    let cache_bucket = prepare_cache_bucket(cache_dir, git_url)?;
     let dest_dir = cache_bucket.join(commit);
     match fs::symlink_metadata(&dest_dir) {
         Ok(metadata) if metadata.file_type().is_dir() => {
@@ -326,22 +326,26 @@ where
     }
 
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
-    let clone_dir = tmp_dir.path().join("repo");
-    git_clone(dependency, &clone_dir)?;
+    let checkout_dir = tmp_dir.path().join("repo");
+    git_fetch_commit(git_url, commit, &checkout_dir)?;
 
-    let actual_commit = git_rev_parse(&clone_dir)?;
-    if !commit.is_empty() && actual_commit != commit {
+    let actual_commit = git_rev_parse(&checkout_dir)?;
+    if actual_commit != commit {
         return Err(invalid(format!(
             "commit mismatch for {}: expected {}, got {}",
-            dependency.git, commit, actual_commit
+            git_url, commit, actual_commit
         )));
     }
 
-    fs::remove_dir_all(clone_dir.join(".git"))
-        .map_err(|err| with_context(format!("removing .git from {}", clone_dir.display()), err))?;
-    verify_hash(&clone_dir, expected_hash)?;
-    validate(&clone_dir)?;
-    fs::rename(&clone_dir, &dest_dir)
+    fs::remove_dir_all(checkout_dir.join(".git")).map_err(|err| {
+        with_context(
+            format!("removing .git from {}", checkout_dir.display()),
+            err,
+        )
+    })?;
+    verify_hash(&checkout_dir, expected_hash)?;
+    validate(&checkout_dir)?;
+    fs::rename(&checkout_dir, &dest_dir)
         .map_err(|err| with_context("moving dependency to cache", err))?;
     Ok(dest_dir)
 }
@@ -354,7 +358,7 @@ pub fn fetch_and_resolve_commit(
     let cache_bucket = prepare_cache_bucket(cache_dir, &dependency.git)?;
     let tmp_dir = TempDir::new(cache_dir, "fetch")?;
     let clone_dir = tmp_dir.path().join("repo");
-    git_clone(dependency, &clone_dir)?;
+    git_clone_ref(dependency, &clone_dir)?;
 
     let commit = git_rev_parse(&clone_dir)?;
     if !is_lower_hex(&commit, 40) {
@@ -749,7 +753,7 @@ fn with_context(context: impl Into<String>, err: io::Error) -> ManifestError {
     invalid(format!("{}: {err}", context.into()))
 }
 
-fn git_clone(dependency: &Dependency, destination: &Path) -> Result<(), ManifestError> {
+fn git_clone_ref(dependency: &Dependency, destination: &Path) -> Result<(), ManifestError> {
     if !valid_git_url(&dependency.git) {
         return Err(invalid(format!(
             "unsupported git URL scheme: {}",
@@ -789,6 +793,40 @@ fn git_clone(dependency: &Dependency, destination: &Path) -> Result<(), Manifest
         )?;
     }
     Ok(())
+}
+
+fn git_fetch_commit(git_url: &str, commit: &str, destination: &Path) -> Result<(), ManifestError> {
+    if !valid_git_url(git_url) {
+        return Err(invalid(format!("unsupported git URL scheme: {git_url}")));
+    }
+
+    let destination = destination.display().to_string();
+    run_git(
+        &["init".to_string(), destination.clone()],
+        format!("git init {destination}"),
+    )?;
+    run_git(
+        &[
+            "-C".to_string(),
+            destination.clone(),
+            "fetch".to_string(),
+            "--depth=1".to_string(),
+            "--no-tags".to_string(),
+            git_url.to_string(),
+            commit.to_string(),
+        ],
+        format!("git fetch locked commit {commit} from {git_url}"),
+    )?;
+    run_git(
+        &[
+            "-C".to_string(),
+            destination,
+            "checkout".to_string(),
+            "--detach".to_string(),
+            commit.to_string(),
+        ],
+        format!("git checkout locked commit {commit}"),
+    )
 }
 
 fn git_rev_parse(dir: &Path) -> Result<String, ManifestError> {

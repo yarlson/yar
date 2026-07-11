@@ -252,10 +252,9 @@ fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
         if !is_cached(&cache_dir, &entry.git, &entry.commit) {
             println!("fetching {}...", entry.name);
         }
-        let dependency = entry.dependency();
         fetch_locked_dependency(
             &cache_dir,
-            &dependency,
+            &entry.git,
             &entry.commit,
             &entry.hash,
             |dependency_dir| {
