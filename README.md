@@ -142,6 +142,8 @@ operand width. Invalid division and remainder terminate deterministically.
 - `taskgroup []R { ... }` spawns concurrent calls and yields results in spawn
   order.
 - `spawn call(...)` is valid only inside a taskgroup body.
+- `?` is rejected inside a taskgroup body because propagation could bypass the
+  mandatory join; handle errors locally or propagate after the group yields.
 - `chan[T]` is a bounded typed channel created with `chan_new[T](capacity)`.
 - `chan_send`, `chan_recv`, and `chan_close` provide the channel operations.
 - The current implementation uses POSIX threads under the hood.

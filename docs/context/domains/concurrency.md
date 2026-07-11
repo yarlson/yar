@@ -22,6 +22,9 @@
 - `spawn` is also rejected inside a function literal nested under a taskgroup
   body. A nested closure may create and use its own inner taskgroup instead.
 - `return` is rejected inside a taskgroup body in the current implementation.
+- `?` is rejected at the taskgroup body's current function-literal depth
+  because propagation would return before the taskgroup join. A nested
+  function literal may use `?` for its own errorable return.
 - `break` and `continue` may be used for loops nested inside the taskgroup
   body, but may not jump out through an enclosing loop outside the taskgroup.
 - Taskgroup bodies execute sequentially, but each `spawn` starts work
@@ -31,8 +34,9 @@
 ## Error Model Integration
 
 - `taskgroup []!T` produces a slice of first-class errorable values.
-- `?` and `or |err| { ... }` operate on those values after indexing or binding,
-  not just on direct errorable calls.
+- After the taskgroup expression has joined, `?` and `or |err| { ... }` operate
+  on its errorable results after indexing or binding, not just on direct
+  errorable calls.
 - Raw errorable call expressions are still not generally storable or passable;
   they must still be returned directly, propagated, or handled immediately.
 

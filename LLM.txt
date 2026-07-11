@@ -431,6 +431,8 @@ taskgroup []void {
 - spawned call return type must match the taskgroup element type exactly
 - `spawn` is rejected inside a function literal nested under the same taskgroup
 - `return` is rejected inside a taskgroup body
+- `?` is rejected inside a taskgroup body because it could bypass the join;
+  nested function literals remain separate propagation scopes
 - `break` / `continue` cannot jump out through an enclosing loop outside the taskgroup
 - channels are bounded FIFO values
 - `chan_send` / `chan_recv` report `error.Closed` on closed-channel failure

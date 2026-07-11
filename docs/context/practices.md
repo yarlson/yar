@@ -59,7 +59,8 @@
   carrying a code pointer plus an optional captured environment.
 - `taskgroup` is an expression, `spawn` is a statement valid only inside a
   taskgroup body, and `spawn` is rejected inside function literals nested under
-  a taskgroup body.
+  a taskgroup body. `return` and same-function `?` propagation are rejected in
+  taskgroup bodies so every accepted path reaches the join.
 - `chan[T]` is a builtin type. Channel element types cannot be `void`,
   `noreturn`, or another channel type.
 - Methods are allowed only on named local struct types, with either value

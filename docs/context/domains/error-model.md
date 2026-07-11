@@ -58,6 +58,9 @@
 - `expr?` is valid only on `!T` or `error`.
 - `expr?` is valid only when the current function can return a compatible error
   shape: either `!T` or plain `error`.
+- `expr?` is rejected inside a taskgroup body at the current function-literal
+  depth because propagation would return before the taskgroup join. Errorable
+  nested function literals remain independent propagation scopes.
 - For `expr or |err| { ... }`, the handler block runs only when the error is
   non-zero.
 - In `or`, the bound name has type `error` and is scoped only within the
