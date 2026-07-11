@@ -2,7 +2,7 @@
 
 YAR is a small, compiled language with direct syntax, explicit types, errors as values, and LLVM-based native code generation via clang.
 
-Implementation note: the shipped compiler CLI is the Rust 2024 `yar` binary from `crates/yar-cli`; `crates/yar-compiler` owns Rust token, diagnostic, AST, lexer, parser, package-graph loading, package-lowering, monomorphization, semantic checking, and LLVM emission. It checks and emits clang-accepted LLVM for every checked-in `testdata/**/main.yar` entry program, including stdlib-backed host packages and the native main wrapper. `crates/yar-cli` provides `check`, `emit-ir`, `build`, host `run`, host `test`, `init`, dependency manifest, lock, fetch, and update commands, plus origin-scoped package loading. Native build/run/test paths link the Rust runtime archive from `YAR_RUNTIME_ARCHIVE`, a sibling `libyar_runtime.a`/`yar_runtime.lib`, or the workspace `target/release` archive. `crates/yar-runtime` is the Rust runtime crate and exports the C ABI `yar_*` helpers used by generated code for allocation, strings, maps, string builders, taskgroups, channels, argv, environment, child processes, filesystem, and TCP networking.
+Implementation note: the shipped compiler CLI is the Rust 2024 `yar` binary from `crates/yar-cli`; `crates/yar-compiler` owns Rust token, diagnostic, AST, lexer, parser, package-graph loading, package-lowering, monomorphization, semantic checking, and LLVM emission. Semantic analysis produces a checked program: `check` stops there, while code-producing commands explicitly invoke LLVM emission. The emitter produces clang-accepted LLVM for every checked-in `testdata/**/main.yar` entry program, including stdlib-backed host packages and the native main wrapper. `crates/yar-cli` provides `check`, `emit-ir`, `build`, host `run`, host `test`, `init`, dependency manifest, lock, fetch, and update commands, plus origin-scoped package loading. Native build/run/test paths link the Rust runtime archive from `YAR_RUNTIME_ARCHIVE`, a sibling `libyar_runtime.a`/`yar_runtime.lib`, or the workspace `target/release` archive. `crates/yar-runtime` is the Rust runtime crate and exports the C ABI `yar_*` helpers used by generated code for allocation, strings, maps, string builders, taskgroups, channels, argv, environment, child processes, filesystem, and TCP networking.
 
 ## Project Structure
 
@@ -814,7 +814,7 @@ yar --manifest-path <path/to/yar.toml> <command> ...  # optional global prefix
 yar build <path>           # compile to native executable
 yar run <path>             # build and execute
 yar test <path>            # discover and run tests
-yar check <path>           # type-check only, no artifacts
+yar check <path>           # type-check only; no LLVM generation or artifacts
 yar emit-ir <path>         # output LLVM IR to stdout
 ```
 

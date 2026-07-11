@@ -8,12 +8,12 @@ and top-level `struct`, `interface`, `enum`, `fn`, and method declarations.
 package — A directory of one or more `.yar` files that declare the same package
 name and share one top-level namespace.
 
-program — The lowered, checked compilation unit produced from the entry package
-graph rooted at `package main`.
+program — The AST container used for one parsed file and for the combined,
+monomorphized declarations produced from an entry package graph.
 
 package graph — The directed acyclic graph of packages rooted at the entry
-`package main`, resolved by `crates/yar-compiler` before lowering into a
-single checked program.
+`package main`, resolved by `crates/yar-compiler` before lowering into one
+combined program.
 
 package origin — One source tree that owns package lookup and dependency
 bindings: the entry tree, one path dependency, one pinned git source, or the
@@ -36,8 +36,12 @@ monomorphization — The compiler pass that substitutes explicit type arguments
 into generic structs and functions and emits ordinary non-generic declarations
 before checking and code generation.
 
-unit — The result of successful compilation before linking; it contains
-generated LLVM IR and checker metadata.
+checked program — A monomorphized program paired with the checker metadata
+derived from that exact program. It is the semantic frontend result and the
+only input accepted by the compiler orchestration layer's LLVM emission step.
+
+unit — The generated LLVM IR result produced from a checked program before
+native linking.
 
 diagnostic — A source-positioned parse or semantic problem returned alongside
 compilation results instead of as a hard process error.

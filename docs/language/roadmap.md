@@ -34,6 +34,7 @@ Current baseline already includes:
 - `if`, `else`, `for`, `break`, `continue`
 - boolean operators `&&` and `||`
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
+- an explicit checked-program boundary before LLVM generation
 - LLVM-based native code generation
 
 See `current-state.md` for exact truth.

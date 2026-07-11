@@ -28,6 +28,52 @@ fn check_accepts_testdata_fixture() {
 }
 
 #[test]
+fn check_stops_before_llvm_generation() {
+    let dir = temp_dir("yar-cli-check-without-codegen");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"package main
+
+enum Huge {
+    Value { data [268435456]i64 }
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let emit_output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["emit-ir", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!emit_output.status.success(), "expected emit-ir to fail");
+    assert!(
+        String::from_utf8_lossy(&emit_output.stderr).contains("array size overflow"),
+        "stderr did not include the LLVM generation failure: {}",
+        String::from_utf8_lossy(&emit_output.stderr)
+    );
+    assert!(emit_output.stdout.is_empty());
+
+    let check_output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        check_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&check_output.stderr)
+    );
+    assert!(check_output.stdout.is_empty());
+    assert!(check_output.stderr.is_empty());
+}
+
+#[test]
 fn check_rejects_method_value_selector() {
     let dir = temp_dir("yar-cli-method-value-check");
     let source = dir.join("main.yar");

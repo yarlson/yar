@@ -15,7 +15,7 @@ use metadata_transaction::{FileChange, MetadataChanges};
 use project::ProjectPaths;
 
 use yar_compiler::{
-    compile::{CompileOptions, Unit, compile_path, compile_test_path},
+    compile::{CompileOptions, Unit, check_path, compile_path, compile_test_path},
     diag,
     lock_graph::{
         merge_lock_entries_for_update, reconcile_lock_entries, requires_lock,
@@ -138,19 +138,15 @@ fn run_check(
 ) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar check <file|dir>")?;
     let project = entry_project(current_dir, &path, manifest_path)?;
-    let options = CompileOptions {
-        project_root: Some(project.root().to_path_buf()),
-        ..CompileOptions::default()
-    };
-    let (unit, diagnostics) = compile_path(&path, &options)?;
+    let (checked, diagnostics) = check_path(&path, Some(project.root()))?;
     if !diagnostics.is_empty() {
         return Err(CliError::Diagnostics {
             path: path_string(&path),
             diagnostics,
         });
     }
-    if unit.is_none() {
-        return Err(CliError::other("compilation stopped without diagnostics"));
+    if checked.is_none() {
+        return Err(CliError::other("checking stopped without diagnostics"));
     }
     Ok(())
 }
@@ -962,6 +958,12 @@ impl Error for CliError {}
 
 impl From<yar_compiler::compile::CompileError> for CliError {
     fn from(value: yar_compiler::compile::CompileError) -> Self {
+        CliError::Other(Box::new(value))
+    }
+}
+
+impl From<yar_compiler::package::LoadError> for CliError {
+    fn from(value: yar_compiler::package::LoadError) -> Self {
         CliError::Other(Box::new(value))
     }
 }

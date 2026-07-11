@@ -15,8 +15,8 @@
   `Program`, `Package`, and `PackageGraph` containers used by single-file and
   package-graph compilation.
 - `crates/yar-compiler/src/compile.rs` is the orchestration boundary. It
-  exposes `compile_source`, `compile_path`, `compile_test_path`, test discovery,
-  and test runner generation.
+  exposes `check_path`, the full-pipeline `compile_path` and
+  `compile_test_path` wrappers, test discovery, and test runner generation.
 - `crates/yar-compiler/src/lexer.rs` tokenizes source text, including control-flow, aggregate,
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.
@@ -77,12 +77,17 @@
 
 ## Stage Contracts
 
-- `Compile` returns a `Unit` only when parse and semantic checking succeed.
-- Diagnostics stop code generation but are reported as Yar diagnostics rather
-  than host-language errors.
-- `Compile` works on one already-loaded source string. `CompilePath` is the
-  path-based entrypoint that supports packages, imports, reserved stdlib
-  routing, and export validation.
+- `check_path` loads, lowers, monomorphizes, and checks a package graph. It
+  returns a `CheckedProgram` only when those frontend stages have no
+  diagnostics and never invokes LLVM generation.
+- `CheckedProgram` owns a monomorphized `Program` and the matching
+  `checker::Info`. Its private pairing is the input to
+  `CheckedProgram::emit_llvm`; a generated `Unit` contains LLVM IR only.
+- `compile_path` and `compile_test_path` are full-pipeline wrappers that compose
+  the checked-program stage with explicit LLVM generation.
+- Parse and semantic failures are returned as Yar diagnostics. Package-loading
+  failures are `LoadError` values, and failures after the checked-program
+  boundary are `CodegenError` values.
 - Path compilation uses an explicitly supplied project root or discovers the
   nearest ancestor `yar.toml` from the entry directory. Without a manifest, the
   entry directory is the root. The entry must be within the selected root and
