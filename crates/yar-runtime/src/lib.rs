@@ -1,5 +1,6 @@
 mod concurrency;
 mod filesystem;
+mod handle_registry;
 mod host;
 mod map;
 mod memory;
@@ -277,17 +278,17 @@ pub extern "C" fn yar_map_keys(map_ptr: *mut u8) -> YarSlice {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_sb_new() -> *mut u8 {
+pub extern "C" fn yar_sb_new() -> i64 {
     string_builder::new()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_sb_write(handle: *mut u8, data: *const u8, data_len: i64) {
+pub extern "C" fn yar_sb_write(handle: i64, data: *const u8, data_len: i64) {
     string_builder::write(handle, data, data_len);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_sb_string(handle: *mut u8) -> YarStr {
+pub extern "C" fn yar_sb_string(handle: i64) -> YarStr {
     string_builder::string(handle)
 }
 
@@ -511,13 +512,35 @@ mod tests {
     #[test]
     fn string_builder_returns_accumulated_string_and_resets() {
         let handle = yar_sb_new();
-        assert!(!handle.is_null());
+        assert_ne!(handle, 0);
 
         yar_sb_write(handle, b"hello".as_ptr(), 5);
         yar_sb_write(handle, b", yar".as_ptr(), 5);
 
         assert_eq!(str_from_runtime(yar_sb_string(handle)), "hello, yar");
         assert_eq!(str_from_runtime(yar_sb_string(handle)), "");
+    }
+
+    #[test]
+    fn string_builder_serializes_concurrent_writes() {
+        let handle = yar_sb_new();
+        let writers = (0..8)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    for _ in 0..128 {
+                        yar_sb_write(handle, b"x".as_ptr(), 1);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for writer in writers {
+            writer.join().expect("string builder writer should finish");
+        }
+
+        let value = str_from_runtime(yar_sb_string(handle));
+        assert_eq!(value.len(), 1024);
+        assert!(value.bytes().all(|byte| byte == b'x'));
     }
 
     #[test]
@@ -711,6 +734,12 @@ mod tests {
         assert_ne!(handle, 0);
 
         let mut written = 0_i32;
+        let invalid_data = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 1,
+        };
+        assert_eq!(yar_fs_write_handle(handle, invalid_data, &mut written), 6);
+        assert_eq!(written, 0);
         assert_eq!(
             yar_fs_write_handle(
                 handle,
@@ -722,19 +751,72 @@ mod tests {
         assert_eq!(written, 6);
         assert_eq!(yar_fs_close_handle(handle), 0);
         assert_eq!(yar_fs_close_handle(handle), 7);
+        let closed_handle = handle;
 
         assert_eq!(
             yar_fs_open_read(string::from_owned(file_path), &mut handle),
             0
         );
+        assert_ne!(handle, closed_handle);
         let mut chunk = YarStr {
             ptr: std::ptr::null_mut(),
             len: 0,
         };
+        assert_eq!(yar_fs_read_handle(closed_handle, 3, &mut chunk), 7);
+        assert_eq!(yar_fs_read_handle(handle, 0, &mut chunk), 6);
         assert_eq!(yar_fs_read_handle(handle, 3, &mut chunk), 0);
         assert_eq!(str_from_runtime(chunk), "abc");
         assert_eq!(yar_fs_close_handle(handle), 0);
 
+        assert_eq!(yar_fs_remove_all(string::from_owned(root)), 0);
+    }
+
+    #[test]
+    fn filesystem_stream_handle_serializes_concurrent_writes() {
+        let mut temp_dir = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(
+            yar_fs_temp_dir(
+                string::from_owned("yar-stream-concurrent-".to_owned()),
+                &mut temp_dir
+            ),
+            0
+        );
+
+        let root = str_from_runtime(temp_dir);
+        let file_path = format!("{root}/stream.txt");
+        let mut handle = 0_i64;
+        assert_eq!(
+            yar_fs_open_write(string::from_owned(file_path.clone()), &mut handle),
+            0
+        );
+
+        let writers = (0..8)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let byte = YarStr {
+                        ptr: b"x".as_ptr().cast_mut(),
+                        len: 1,
+                    };
+                    for _ in 0..128 {
+                        let mut written = 0_i32;
+                        assert_eq!(yar_fs_write_handle(handle, byte, &mut written), 0);
+                        assert_eq!(written, 1);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for writer in writers {
+            writer.join().expect("filesystem writer should finish");
+        }
+        assert_eq!(yar_fs_close_handle(handle), 0);
+
+        let contents = std::fs::read(&file_path).expect("stream file should be readable");
+        assert_eq!(contents.len(), 1024);
+        assert!(contents.iter().all(|byte| *byte == b'x'));
         assert_eq!(yar_fs_remove_all(string::from_owned(root)), 0);
     }
 
@@ -774,6 +856,24 @@ mod tests {
         assert_ne!(server, 0);
 
         let mut written = 0_i32;
+        let invalid_data = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 1,
+        };
+        let empty_data = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        let mut invalid_read = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(server, 0, &mut invalid_read), 7);
+        assert_eq!(yar_net_write(client, invalid_data, &mut written), 7);
+        assert_eq!(written, 0);
+        assert_eq!(yar_net_write(client, empty_data, &mut written), 0);
+        assert_eq!(written, 0);
+        assert_eq!(yar_net_set_read_deadline(client, -1), 7);
         assert_eq!(
             yar_net_write(client, string::from_owned("hello".to_owned()), &mut written),
             0
@@ -864,8 +964,141 @@ mod tests {
             len: 0,
         };
         assert_eq!(yar_net_read(0, 1, &mut out), 9);
-        assert_eq!(yar_net_read(handle, 0, &mut out), 7);
-        assert_eq!(yar_net_set_read_deadline(handle, -1), 7);
+        assert_eq!(yar_net_read(handle, 0, &mut out), 9);
+        assert_eq!(yar_net_set_read_deadline(handle, -1), 9);
+    }
+
+    #[test]
+    fn opaque_handle_abis_reject_unissued_ids() {
+        let data = YarStr {
+            ptr: b"x".as_ptr().cast_mut(),
+            len: 1,
+        };
+        let invalid_data = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 1,
+        };
+        let empty_data = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+
+        for handle in [0, -1, i64::MAX] {
+            let mut text = YarStr {
+                ptr: std::ptr::null_mut(),
+                len: 0,
+            };
+            let mut written = -1_i32;
+            let mut addr = YarNetAddr {
+                host: YarStr {
+                    ptr: std::ptr::null_mut(),
+                    len: 0,
+                },
+                port: 0,
+            };
+
+            assert_eq!(yar_fs_read_handle(handle, 1, &mut text), 7);
+            assert_eq!(yar_fs_read_handle(handle, 0, &mut text), 7);
+            assert_eq!(yar_fs_write_handle(handle, data, &mut written), 7);
+            assert_eq!(yar_fs_write_handle(handle, invalid_data, &mut written), 7);
+            assert_eq!(written, 0);
+            assert_eq!(yar_fs_close_handle(handle), 7);
+
+            assert_eq!(yar_net_listener_addr(handle, &mut addr), 9);
+            assert_eq!(yar_net_close_listener(handle), 9);
+            assert_eq!(yar_net_read(handle, 1, &mut text), 9);
+            assert_eq!(yar_net_read(handle, 0, &mut text), 9);
+            assert_eq!(yar_net_write(handle, data, &mut written), 9);
+            assert_eq!(yar_net_write(handle, invalid_data, &mut written), 9);
+            assert_eq!(yar_net_write(handle, empty_data, &mut written), 9);
+            assert_eq!(written, 0);
+            assert_eq!(yar_net_set_read_deadline(handle, -1), 9);
+            assert_eq!(yar_net_set_write_deadline(handle, -1), 9);
+            assert_eq!(yar_net_close(handle), 9);
+        }
+    }
+
+    #[test]
+    fn wrong_kind_lookups_do_not_consume_live_resources() {
+        let mut temp_dir = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(
+            yar_fs_temp_dir(
+                string::from_owned("yar-handle-kinds-".to_owned()),
+                &mut temp_dir
+            ),
+            0
+        );
+        let root = str_from_runtime(temp_dir);
+        let file_path = format!("{root}/data.txt");
+        let mut file = 0_i64;
+        assert_eq!(
+            yar_fs_open_write(string::from_owned(file_path), &mut file),
+            0
+        );
+
+        let builder = yar_sb_new();
+        let mut listener = 0_i64;
+        assert_eq!(
+            yar_net_listen(string::from_owned("127.0.0.1".to_owned()), 0, &mut listener),
+            0
+        );
+        let mut addr = YarNetAddr {
+            host: YarStr {
+                ptr: std::ptr::null_mut(),
+                len: 0,
+            },
+            port: 0,
+        };
+        assert_eq!(yar_net_listener_addr(listener, &mut addr), 0);
+
+        let mut client = 0_i64;
+        assert_eq!(
+            yar_net_connect(
+                string::from_owned("127.0.0.1".to_owned()),
+                addr.port,
+                &mut client,
+            ),
+            0
+        );
+        let mut server = 0_i64;
+        assert_eq!(yar_net_accept(listener, &mut server), 0);
+
+        let data = YarStr {
+            ptr: b"ok".as_ptr().cast_mut(),
+            len: 2,
+        };
+        let mut text = YarStr {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        let mut written = 0_i32;
+
+        assert_eq!(yar_fs_close_handle(listener), 7);
+        assert_eq!(yar_fs_close_handle(builder), 7);
+        assert_eq!(yar_net_close(file), 9);
+        assert_eq!(yar_net_close(builder), 9);
+        assert_eq!(yar_net_close_listener(client), 9);
+        assert_eq!(yar_net_read(listener, 1, &mut text), 9);
+        assert_eq!(yar_net_listener_addr(client, &mut addr), 9);
+
+        assert_eq!(yar_fs_write_handle(file, data, &mut written), 0);
+        assert_eq!(written, 2);
+        yar_sb_write(builder, b"builder".as_ptr(), 7);
+        assert_eq!(str_from_runtime(yar_sb_string(builder)), "builder");
+        assert_eq!(yar_net_listener_addr(listener, &mut addr), 0);
+        assert_eq!(yar_net_write(client, data, &mut written), 0);
+        assert_eq!(written, 2);
+        assert_eq!(yar_net_read(server, 2, &mut text), 0);
+        assert_eq!(str_from_runtime(text), "ok");
+
+        assert_eq!(yar_fs_close_handle(file), 0);
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+        assert_eq!(yar_fs_remove_all(string::from_owned(root)), 0);
     }
 
     extern "C" fn task_square(ctx: *mut u8, result: *mut u8) {

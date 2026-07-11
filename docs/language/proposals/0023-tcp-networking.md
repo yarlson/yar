@@ -7,7 +7,8 @@ Status: accepted
 Add a `net` stdlib package providing TCP client/server primitives: listen,
 accept, connect, read, write, close, address inspection, timeouts, and DNS
 resolution. Connections and listeners are represented as opaque `i64` handles.
-All calls are blocking.
+The runtime represents those handles as kind-checked, non-reused process-local
+registry IDs. All calls are blocking.
 
 ## 2. Motivation
 
@@ -75,11 +76,12 @@ fn main() !i32 {
 ```
 // Cannot use listener handle as connection handle
 ln := net.listen("127.0.0.1", 8080)?
-net.read(ln, 4096)?  // runtime error: ln is a listener, not a connection
+net.read(ln, 4096)?  // error.Closed: ln is a listener, not a connection
 ```
 
 Both listeners and connections are `i64`, so misuse is not caught at compile
-time. This is consistent with how `sb_new`/`sb_write`/`sb_string` handles work.
+time. Runtime lookup validates the ID and expected resource kind. This is
+consistent with how `sb_new`/`sb_write`/`sb_string` handles work.
 
 ## 4. Semantics
 
@@ -103,6 +105,12 @@ time. This is consistent with how `sb_new`/`sb_write`/`sb_string` handles work.
 - `set_read_deadline(conn, millis)` / `set_write_deadline(conn, millis)` set
   socket timeouts. 0 means no timeout.
 - `resolve(host, port)` performs DNS resolution and returns the first result.
+- Handle IDs are positive, process-local, and never reused. Mutable listener and
+  connection state is synchronized. Closing removes the ID so new lookups fail,
+  then waits for any operation holding the socket lock before releasing it;
+  close does not interrupt blocking I/O.
+- Unknown, stale, and wrong-kind handles produce `error.Closed`. This runtime
+  check does not give raw `i64` values nominal types or compile-time provenance.
 
 All functions that can fail return errorable types (`!i64`, `!str`, `!i32`,
 `!void`, `!Addr`).
@@ -150,6 +158,8 @@ None.
 ### Runtime impact
 
 - TCP helper implementations in `crates/yar-runtime`.
+- Listener and connection state lives behind the validated runtime handle
+  registry; runtime code never dereferences an `i64` as a native address.
 - BSD sockets on POSIX, Winsock2 on Windows.
 - `yar_net_ensure_init()` for one-time Winsock/SIGPIPE setup.
 - Windows builds link `-lws2_32`.

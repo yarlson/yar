@@ -646,6 +646,11 @@ not deep copies. The transitive share-safety rule prevents those copies from
 carrying mutable aliases into another thread. Channels are the synchronized
 exception. Bare `i64` values are scalars, so the checker cannot distinguish an
 ordinary integer from a raw runtime or OS handle represented as `i64`.
+Runtime-backed handles are kind-checked registry IDs with synchronized state,
+so invalid or concurrently used IDs do not become unchecked pointer
+dereferences. This runtime validation does not add nominal handle types or
+compile-time provenance, and raw handles remain outside the intended
+share-safe source model.
 
 ### Channels
 
@@ -878,6 +883,11 @@ Builtins are fixed by the compiler:
 
 They are not user-overridable.
 
+String-builder handles are positive, process-local registry IDs. Their mutable
+state is synchronized and IDs are never reused. Passing an unknown or
+wrong-kind ID to a string-builder operation terminates with
+`runtime failure: invalid string builder`.
+
 ## Runtime Behavior
 
 When `main` returns `!i32`:
@@ -1002,6 +1012,12 @@ Types:
 `fs.File` is a resource struct and cannot be passed to or captured by a
 spawned task.
 
+Its `handle` is a kind-checked, non-reused process-local registry ID, not a
+native address. File operations synchronize access to the underlying file.
+Closing removes the ID so new lookups fail, then waits for an operation holding
+the file lock before releasing the host file; it does not interrupt blocking
+I/O. Unknown, stale, and wrong-kind IDs produce `error.Closed`.
+
 Available functions:
 
 - `fs.read_file(path str) !str`
@@ -1121,7 +1137,12 @@ Types:
 `net.Conn` and `net.Listener` are resource structs and cannot be passed to or
 captured by spawned tasks. The lower-level raw `i64` handle functions remain
 available; those handles are indistinguishable from ordinary integers to the
-spawn checker.
+spawn checker. At runtime they are kind-checked, non-reused process-local
+registry IDs with synchronized state. Unknown, stale, and wrong-kind IDs
+produce `error.Closed`. Explicit close removes the ID so new lookups fail, then
+waits for an operation holding the socket lock before releasing it; close does
+not interrupt blocking I/O. Registry validation prevents invalid dereferences
+but does not provide compile-time nominal or provenance safety.
 
 Available functions:
 
@@ -1163,7 +1184,8 @@ Methods on `net.Conn`:
 - `set_read_deadline(millis i32) !void`
 - `set_write_deadline(millis i32) !void`
 
-Listeners and connections use opaque `i64` handles. All calls are blocking.
+Listeners and connections use opaque registry-backed `i64` handles. All calls
+are blocking.
 
 Networking errors surface through ordinary YAR errors using the names:
 

@@ -145,6 +145,12 @@ Methods on `File`:
 - `write(data str) !i32` — write data and return bytes written
 - `close() !void` — close the file handle
 
+File handles are positive, process-local registry IDs rather than native
+addresses. Access is synchronized. Closing removes the ID so new lookups fail,
+then waits for an operation holding the file lock before releasing the host
+file; it does not interrupt blocking I/O. Unknown, stale, and wrong-kind IDs
+produce `error.Closed`.
+
 Errors:
 
 - `error.NotFound`
@@ -367,8 +373,12 @@ Functions:
   `CreateDirectoryA`, `CreateProcessA`, `GetEnvironmentVariableA`, and
   Winsock2 functions). Windows builds link `-lws2_32` for networking.
 - The `net` package uses opaque `i64` handles for listeners and connections.
-  All networking calls are blocking. Timeouts are set per-connection via
-  `SO_RCVTIMEO`/`SO_SNDTIMEO`. SIGPIPE is suppressed on POSIX
+  They are kind-checked, non-reused process-local registry IDs, and their state
+  is synchronized. Explicit close removes the ID so new lookups fail, then
+  waits for an operation holding the socket lock before releasing it; close
+  does not interrupt blocking I/O. Unknown, stale, and wrong-kind IDs produce
+  `error.Closed`. All networking calls are blocking. Timeouts are set
+  per-connection via `SO_RCVTIMEO`/`SO_SNDTIMEO`. SIGPIPE is suppressed on POSIX
   (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
 - `process.run` and `process.run_inherit` require at least one argv element.
   Empty command vectors and strings that cannot cross the host boundary surface

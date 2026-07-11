@@ -55,6 +55,9 @@ while IFS= read -r fixture; do
     testdata/integer_rem_overflow/main.yar)
       expected_stderr="runtime failure: integer division or remainder overflow"
       ;;
+    testdata/invalid_string_builder_handle/main.yar)
+      expected_stderr="runtime failure: invalid string builder"
+      ;;
     testdata/nil_pointer/main.yar)
       expected_stderr="runtime failure: nil pointer dereference"
       ;;

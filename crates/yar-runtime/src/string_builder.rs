@@ -1,82 +1,57 @@
 use std::ptr;
 
-use crate::YarStr;
+use crate::{YarStr, handle_registry};
 
-#[repr(C)]
-struct StringBuilder {
-    buf: *mut u8,
-    len: i64,
-    cap: i64,
+pub(crate) fn new() -> i64 {
+    handle_registry::register_string_builder()
 }
 
-pub(crate) fn new() -> *mut u8 {
-    let handle = super::yar_alloc_zeroed(size_of::<StringBuilder>() as i64).cast::<StringBuilder>();
-    // SAFETY: handle points to writable runtime-managed memory sized for StringBuilder.
-    unsafe {
-        (*handle).cap = 64;
-        (*handle).buf = super::yar_alloc((*handle).cap);
-    }
-    handle.cast::<u8>()
-}
-
-pub(crate) fn write(handle: *mut u8, data: *const u8, data_len: i64) {
+pub(crate) fn write(handle: i64, data: *const u8, data_len: i64) {
+    let Some(handle) = handle_registry::string_builder(handle) else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
     if data_len <= 0 {
         return;
     }
-    if handle.is_null() || data.is_null() {
+    if data.is_null() {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
     }
 
     let Ok(incoming_len) = usize::try_from(data_len) else {
         super::runtime_fail(b"runtime failure: invalid string length\n");
     };
-
-    let sb = handle.cast::<StringBuilder>();
-    // SAFETY: handle is a string builder created by yar_sb_new.
-    unsafe {
-        let Some(needed) = (*sb).len.checked_add(data_len) else {
-            super::runtime_fail(b"runtime failure: invalid string length\n");
-        };
-        if needed > (*sb).cap {
-            let mut new_cap = (*sb).cap.saturating_mul(2);
-            if new_cap < needed {
-                new_cap = needed;
-            }
-            let new_buf = super::yar_alloc(new_cap);
-            if (*sb).len > 0 {
-                ptr::copy_nonoverlapping((*sb).buf, new_buf, (*sb).len as usize);
-            }
-            (*sb).buf = new_buf;
-            (*sb).cap = new_cap;
-        }
-
-        ptr::copy_nonoverlapping(data, (*sb).buf.add((*sb).len as usize), incoming_len);
-        (*sb).len = needed;
+    let mut builder = handle.lock().unwrap_or_else(|err| err.into_inner());
+    if builder.len().checked_add(incoming_len).is_none() {
+        super::runtime_fail(b"runtime failure: invalid string length\n");
     }
+    builder
+        .try_reserve(incoming_len)
+        .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: out of memory\n"));
+
+    // SAFETY: data points to data_len readable bytes from the generated ABI.
+    let incoming = unsafe { std::slice::from_raw_parts(data, incoming_len) };
+    builder.extend_from_slice(incoming);
 }
 
-pub(crate) fn string(handle: *mut u8) -> YarStr {
-    if handle.is_null() {
+pub(crate) fn string(handle: i64) -> YarStr {
+    let Some(handle) = handle_registry::string_builder(handle) else {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
-    }
-
-    let sb = handle.cast::<StringBuilder>();
-    // SAFETY: handle is a string builder created by yar_sb_new.
-    unsafe {
-        if (*sb).len == 0 {
-            return YarStr {
-                ptr: ptr::null_mut(),
-                len: 0,
-            };
-        }
-
-        let buf = super::yar_alloc((*sb).len);
-        ptr::copy_nonoverlapping((*sb).buf, buf, (*sb).len as usize);
-        let result = YarStr {
-            ptr: buf,
-            len: (*sb).len,
+    };
+    let mut builder = handle.lock().unwrap_or_else(|err| err.into_inner());
+    if builder.is_empty() {
+        return YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
         };
-        (*sb).len = 0;
-        result
     }
+
+    let len = i64::try_from(builder.len())
+        .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid string length\n"));
+    let buf = super::yar_alloc(len);
+    // SAFETY: buf points to builder.len() writable bytes allocated above.
+    unsafe {
+        ptr::copy_nonoverlapping(builder.as_ptr(), buf, builder.len());
+    }
+    builder.clear();
+    YarStr { ptr: buf, len }
 }

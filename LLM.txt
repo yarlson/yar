@@ -416,6 +416,10 @@ chan_recv(chan[T]) !T                // receive one value
 chan_close(chan[T]) void             // close a channel
 ```
 
+String-builder handles are synchronized process-local registry IDs. Unknown or
+wrong-kind IDs terminate with
+`runtime failure: invalid string builder`.
+
 ## Concurrency
 
 ```yar
@@ -452,6 +456,9 @@ taskgroup []void {
   concurrency calls fail at runtime
 - arguments and captures are shallow copies, not deep copies; bare `i64`
   handles remain indistinguishable from ordinary scalar integers to the checker
+- runtime-backed `i64` handles are kind-checked, non-reused process-local
+  registry IDs with synchronized state; this prevents invalid pointer
+  dereferences but does not add compile-time nominal types or provenance
 
 ## Standard Library
 
@@ -543,6 +550,10 @@ close() !void
 ```
 
 `fs.File` is a resource struct and cannot cross a spawn boundary.
+Its handle is a kind-checked, non-reused process-local registry ID. Closing
+removes the ID so new lookups fail, then waits for an operation holding the
+file lock before releasing it; close does not interrupt blocking I/O. Unknown,
+stale, and wrong-kind IDs produce `error.Closed`.
 
 Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.InvalidArgument`, `error.Closed`, `error.IO`
 
@@ -603,9 +614,15 @@ net.Listener { handle i64 }
 
 `net.Conn` and `net.Listener` are resource structs and cannot cross a spawn
 boundary. Raw network handles represented as `i64` are not distinguished from
-ordinary integers by the spawn checker.
+ordinary integers by the spawn checker. Runtime lookup validates ID and kind,
+synchronizes per-handle state, never reuses IDs, and maps unknown, stale, or
+wrong-kind IDs to `error.Closed`. Explicit close removes the ID so new lookups
+fail, then waits for an operation holding the socket lock before releasing it;
+close does not interrupt blocking I/O. This is runtime safety, not compile-time
+nominal or provenance safety.
 
-Listeners and connections are opaque `i64` handles. All calls are blocking.
+Listeners and connections are opaque registry-backed `i64` handles. All calls
+are blocking.
 
 ```
 net.listen(host str, port i32) !i64          // bind + listen; "" = all interfaces
