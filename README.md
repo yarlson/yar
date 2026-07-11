@@ -322,6 +322,18 @@ missing SHA that the remote cannot provide fails without falling back to its
 recorded ref. Run `yar lock` or `yar update` to make that version change
 explicit.
 
+Dependency metadata changes are published recoverably. `yar add` and
+`yar remove` resolve the complete target graph before changing either file,
+then commit the new `yar.toml` together with the new `yar.lock` or its deletion.
+`yar lock` and `yar update` preserve the manifest bytes. Pre-commit failures and
+prepared interrupted transactions restore the prior pair, and success output
+appears only after commit and journal cleanup. Existing metadata-file
+permissions are preserved. Verified dependency caches may be warmed during
+resolution and are not rolled back with project metadata. A later CLI command
+recovers journal state only in its current directory. Do not run concurrent Yar
+CLI commands from the same current directory while dependency metadata
+publication or recovery is in progress.
+
 The compiler hash-verifies a selected cache tree before reading its manifest or
 source, then verifies the manifest against the recorded child edges. A missing,
 modified, or edge-divergent selected entry fails closed instead of falling back

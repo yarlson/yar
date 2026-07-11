@@ -45,6 +45,13 @@
   do not require a cache. Local path dependencies remain unhashed, may be
   declared only in the root manifest, and may not be nested through another
   path dependency or a locked git package.
+- `yar.toml` and the presence or contents of `yar.lock` are one recoverable
+  project-metadata state. Dependency mutations resolve and serialize the
+  complete target state before publication; prepared transactions roll back
+  the previous pair, while a completion marker retains the target pair through
+  idempotent cleanup.
+- `yar lock` and `yar update` preserve the manifest byte-for-byte. Removing all
+  effective git roots publishes absence of `yar.lock`, not an empty lock file.
 - Imported names stay package-qualified; imports do not inject unqualified
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary

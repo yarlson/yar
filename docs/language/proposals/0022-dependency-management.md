@@ -18,6 +18,7 @@ The implemented version provides:
   global user cache
 - SHA-256 lock hashes verified before cached source is loaded
 - temporary verification before newly fetched content is published
+- recoverable project-metadata publication for manifest and lock changes
 - transitive dependency resolution with conflict detection
 - exact manifest/lock reconciliation and reachable-closure validation before
   dependency cache or network access
@@ -114,6 +115,19 @@ Invalid because `path` and `git` are mutually exclusive.
 - Lock generation hashes the fresh checkout. If an existing cache entry for the
   resolved commit differs, lock generation fails instead of trusting that
   cache content.
+- `yar add` and `yar remove` resolve, reconcile, and serialize the complete
+  target manifest and lock state before publication. `yar lock` and
+  `yar update` preserve the manifest byte-for-byte. The manifest and target
+  lock contents or absence are one recoverable transition: pre-commit failure
+  and prepared interruption restore the prior pair, while a completion marker
+  retains the target pair through idempotent cleanup. A later command performs
+  recovery only in its current directory. Success output follows commit and
+  cleanup, and existing metadata-file permissions are preserved. No other Yar
+  CLI command may run concurrently from that project directory while metadata
+  changes.
+- Resolution may warm verified content-addressed dependency caches before the
+  project-metadata commit. Those cache entries are outside the transaction and
+  are not rolled back.
 - Before compilation reads dependency caches, and before `yar fetch` uses the
   cache or network, Yar derives git roots from the root manifest and manifests
   of its root path dependencies, then reconciles them with the lock graph. Root
@@ -234,6 +248,9 @@ None.
   manifest-edge verification, and targeted-update merge/prune behavior
 - `crates/yar-compiler/src/package.rs` — origin-scoped source and alias lookup
   with selected locked-cache verification
+- `crates/yar-cli/src/metadata_transaction.rs` — same-directory prepared
+  journal, completion marker, recoverable manifest/lock write or deletion, and
+  current-directory CLI-dispatch recovery
 
 ### External dependency
 
@@ -297,6 +314,14 @@ Rejected because a flat lock cannot distinguish a valid transitive package
 from an unreachable extra, prove missing children, or update one dependency
 without retaining stale descendants. Explicit child edges make the committed
 graph independently reconcilable without opening unused caches.
+
+### Independent manifest and lock replacement
+
+Write `yar.toml` and `yar.lock` separately and rely on one atomic rename per
+file. Rejected because a failure or interruption between those renames exposes
+a mixed dependency state. The implemented journal records both prior states and
+uses an explicit phase transition so recovery can restore a prepared operation
+or retain a committed one.
 
 ### Global reachable-alias visibility
 
@@ -382,6 +407,8 @@ owner-local alias reuse.
 - [x] origin-scoped package identity, direct owner bindings, sealed stdlib
       imports, and origin-safe lowering
 - [x] CLI commands in `crates/yar-cli/src/main.rs`
+- [x] recoverable manifest/lock publication and recovery in
+      `crates/yar-cli/src/metadata_transaction.rs`
 - [x] unit tests in `crates/yar-compiler`
 - [x] integration test with local path dependency fixture
 - [x] `docs/context/` updates

@@ -535,6 +535,293 @@ fn add_and_remove_local_dependency_updates_manifest() {
 }
 
 #[test]
+fn add_resolution_failure_preserves_metadata_pair_and_stdout() {
+    let dir = temp_dir("yar-cli-add-metadata-rollback");
+    let broken = dir.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("yar.toml"), "this is not valid TOML = [\n").unwrap();
+    let original_manifest = r#"[package]
+name = "app"
+
+[dependencies]
+broken = { path = "broken" }
+"#;
+    let original_lock = "original lock bytes\n";
+    fs::write(dir.join("yar.toml"), original_manifest).unwrap();
+    fs::write(dir.join("yar.lock"), original_lock).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "extra", "--path=extra"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "malformed path manifest was accepted"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "failed add emitted success output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.toml")).unwrap(),
+        original_manifest
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.lock")).unwrap(),
+        original_lock
+    );
+}
+
+#[test]
+fn first_add_resolution_failure_preserves_absent_metadata() {
+    let dir = temp_dir("yar-cli-first-add-metadata-rollback");
+    let broken = dir.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("yar.toml"), "this is not valid TOML = [\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "broken", "--path=broken"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "malformed path manifest was accepted"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "failed first add emitted success output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!dir.join("yar.toml").exists());
+    assert!(!dir.join("yar.lock").exists());
+    assert!(!dir.join(".yar-metadata-transaction").exists());
+}
+
+#[test]
+fn add_publication_failure_emits_no_success_output() {
+    let dir = temp_dir("yar-cli-add-publication-failure");
+    fs::create_dir(dir.join("yar.lock")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["add", "local", "--path=local"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "invalid lock target was accepted");
+    assert!(
+        output.stdout.is_empty(),
+        "failed publication emitted success output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!dir.join("yar.toml").exists());
+    assert!(dir.join("yar.lock").is_dir());
+    assert!(!dir.join(".yar-metadata-transaction").exists());
+}
+
+#[test]
+fn remove_resolution_failure_preserves_metadata_pair_and_stdout() {
+    let dir = temp_dir("yar-cli-remove-metadata-rollback");
+    let broken = dir.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("yar.toml"), "this is not valid TOML = [\n").unwrap();
+    let original_manifest = r#"[package]
+name = "app"
+
+[dependencies]
+broken = { path = "broken" }
+remove_me = { path = "remove-me" }
+"#;
+    let original_lock = "original lock bytes\n";
+    fs::write(dir.join("yar.toml"), original_manifest).unwrap();
+    fs::write(dir.join("yar.lock"), original_lock).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["remove", "remove_me"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "remove accepted a malformed remaining dependency"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "failed remove emitted success output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.toml")).unwrap(),
+        original_manifest
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.lock")).unwrap(),
+        original_lock
+    );
+}
+
+#[test]
+fn prepared_metadata_recovery_runs_before_fetch() {
+    let dir = temp_dir("yar-cli-prepared-metadata-recovery");
+    let old_manifest = r#"[package]
+name = "app"
+
+[dependencies]
+local = { path = "local" }
+"#;
+    let partial_manifest = r#"[package]
+name = "app"
+
+[dependencies]
+remote = { git = "https://example.com/remote.git", tag = "v1" }
+"#;
+    fs::write(dir.join("yar.toml"), partial_manifest).unwrap();
+    let journal = dir.join(".yar-metadata-transaction");
+    fs::create_dir(&journal).unwrap();
+    fs::write(journal.join("version"), "1\n").unwrap();
+    fs::write(journal.join("yar.toml.before"), old_manifest).unwrap();
+    fs::write(journal.join("yar.lock.before-absent"), "").unwrap();
+    fs::write(journal.join("yar.lock.after"), "partially staged lock\n").unwrap();
+
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .arg("fetch")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "all dependencies fetched\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("yar.toml")).unwrap(),
+            old_manifest
+        );
+        assert!(!dir.join("yar.lock").exists());
+        assert!(!journal.exists());
+    }
+}
+
+#[test]
+fn remove_last_git_dependency_commits_manifest_and_lock_deletion() {
+    let dir = temp_dir("yar-cli-remove-last-git-dependency");
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+remote = { git = "https://example.com/remote.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("yar.lock"), "old lock bytes\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["remove", "remote"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "removed dependency \"remote\"\n"
+    );
+    let manifest = parse_manifest(&fs::read_to_string(dir.join("yar.toml")).unwrap()).unwrap();
+    assert!(manifest.dependencies.is_empty());
+    assert!(!dir.join("yar.lock").exists());
+    assert!(!dir.join(".yar-metadata-transaction").exists());
+}
+
+#[test]
+fn path_only_lock_deletion_preserves_manifest_bytes() {
+    let dir = temp_dir("yar-cli-path-lock-deletion");
+    let manifest = r#"# keep this formatting
+[package]
+name = "app"
+
+[dependencies]
+local = { path = "local" }
+"#;
+    fs::write(dir.join("yar.toml"), manifest).unwrap();
+    fs::write(dir.join("yar.lock"), "stale lock bytes\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .arg("lock")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(fs::read_to_string(dir.join("yar.toml")).unwrap(), manifest);
+    assert!(!dir.join("yar.lock").exists());
+}
+
+#[test]
+fn full_lock_and_update_failures_preserve_the_prior_lock() {
+    let dir = temp_dir("yar-cli-full-lock-failure");
+    let broken = dir.join("broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("yar.toml"), "this is not valid TOML = [\n").unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+broken = { path = "broken" }
+"#,
+    )
+    .unwrap();
+    let original_lock = "original lock bytes\n";
+    fs::write(dir.join("yar.lock"), original_lock).unwrap();
+
+    for command in ["lock", "update"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+            .arg(command)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "{command} accepted a malformed path manifest"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "failed {command} emitted success output: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("yar.lock")).unwrap(),
+            original_lock
+        );
+    }
+}
+
+#[test]
 fn add_rejects_reserved_std_alias_without_writing_manifest() {
     let dir = temp_dir("yar-cli-reserved-stdlib-alias");
 
@@ -1411,6 +1698,180 @@ fn add_git_dependency_resolves_transitive_lock_and_fetches_without_network() {
 
 #[cfg(unix)]
 #[test]
+fn remove_git_dependency_rebuilds_only_the_reachable_lock_graph() {
+    let dir = temp_dir("yar-cli-remove-git-closure");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+sibling = { git = "https://example.com/sibling.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    let child_source = Dependency {
+        git: "https://example.com/child.git".to_string(),
+        tag: "v1".to_string(),
+        ..Dependency::default()
+    };
+    let mut parent = locked_entry(
+        "parent",
+        "https://example.com/parent.git",
+        "1111111111111111111111111111111111111111",
+        format!("sha256:{}", "a".repeat(64)),
+    );
+    parent.dependencies = vec![LockDependency::new("child", &child_source)];
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[
+            locked_entry(
+                "child",
+                "https://example.com/child.git",
+                "2222222222222222222222222222222222222222",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+            parent,
+            locked_entry(
+                "sibling",
+                "https://example.com/sibling.git",
+                "2222222222222222222222222222222222222222",
+                format!("sha256:{}", "c".repeat(64)),
+            ),
+        ]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["remove", "parent"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "removed dependency \"parent\"\nyar.lock updated\n"
+    );
+    let manifest = parse_manifest(&fs::read_to_string(dir.join("yar.toml")).unwrap()).unwrap();
+    assert_eq!(
+        manifest
+            .dependencies
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["sibling"]
+    );
+    let entries = parse_lock_file(&fs::read_to_string(dir.join("yar.lock")).unwrap()).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["sibling"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_git_dependency_preserves_a_shared_transitive_dependency() {
+    let dir = temp_dir("yar-cli-remove-shared-git-dependency");
+    let local = dir.join("local");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::create_dir(&local).unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local = { path = "local" }
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        local.join("yar.toml"),
+        r#"[package]
+name = "local"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    let child_source = Dependency {
+        git: "https://example.com/child.git".to_string(),
+        tag: "v1".to_string(),
+        ..Dependency::default()
+    };
+    let mut parent = locked_entry(
+        "parent",
+        "https://example.com/parent.git",
+        "1111111111111111111111111111111111111111",
+        format!("sha256:{}", "a".repeat(64)),
+    );
+    parent.dependencies = vec![LockDependency::new("child", &child_source)];
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[
+            locked_entry(
+                "child",
+                "https://example.com/child.git",
+                "2222222222222222222222222222222222222222",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+            parent,
+        ]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["remove", "parent"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "removed dependency \"parent\"\nyar.lock updated\n"
+    );
+    let manifest = parse_manifest(&fs::read_to_string(dir.join("yar.toml")).unwrap()).unwrap();
+    assert_eq!(
+        manifest
+            .dependencies
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["local"]
+    );
+    let entries = parse_lock_file(&fs::read_to_string(dir.join("yar.lock")).unwrap()).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["child"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn lock_follows_git_dependencies_below_a_live_local_root() {
     let dir = temp_dir("yar-cli-lock-local-root");
     let local = dir.join("local-lib");
@@ -1432,6 +1893,7 @@ local_lib = { path = "local-lib" }
 "#,
     )
     .unwrap();
+    let original_manifest = fs::read_to_string(dir.join("yar.toml")).unwrap();
     fs::write(
         local.join("yar.toml"),
         r#"[package]
@@ -1457,6 +1919,10 @@ child = { git = "https://example.com/child.git", tag = "v1" }
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>(),
         ["child"]
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.toml")).unwrap(),
+        original_manifest
     );
 }
 
@@ -1609,6 +2075,7 @@ sibling = { git = "https://example.com/sibling.git", tag = "v1" }
 "#,
     )
     .unwrap();
+    let original_manifest = fs::read_to_string(dir.join("yar.toml")).unwrap();
     fs::write(
         dir.join("yar.lock"),
         r#"# Auto-generated by yar. Do not edit.
@@ -1689,6 +2156,10 @@ hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     assert_eq!(
         entry("sibling").hash,
         "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.toml")).unwrap(),
+        original_manifest
     );
 }
 

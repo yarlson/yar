@@ -927,6 +927,15 @@ local_lib = { path = "../my-local-lib" }
 - `yar update <git-alias>` merges the replacement graph, preserves unrelated
   reachable nodes, refreshes compatible shared nodes, and prunes orphans;
   targeted path updates require `yar lock`
+- `yar add`/`yar remove` resolve and serialize the complete target manifest and
+  lock state before recoverable paired publication; no git roots means lock
+  deletion. Pre-commit failure or a later command dispatched from the same
+  current directory after prepared interruption restores the previous
+  bytes/presence, while committed cleanup keeps the target state. `yar lock`
+  and `yar update` preserve manifest bytes; metadata file permissions are also
+  preserved. Success output follows commit and cleanup. Verified cache warming
+  is outside rollback. Do not run another Yar CLI command concurrently from
+  that directory while metadata changes
 
 **Commands:**
 ```bash

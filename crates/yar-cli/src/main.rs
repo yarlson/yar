@@ -3,11 +3,14 @@ use std::{
     error::Error,
     ffi::OsString,
     fmt, fs, io,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+mod metadata_transaction;
+
+use metadata_transaction::{FileChange, MetadataChanges};
 
 use yar_compiler::{
     compile::{CompileOptions, Unit, compile_path, compile_test_path},
@@ -17,7 +20,7 @@ use yar_compiler::{
         validate_lock_entries_for_update, verify_locked_dependency_manifest,
     },
     manifest::{
-        Dependency, LOCK_FILE, LockEntry, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
+        Dependency, LOCK_FILE, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
         STDLIB_IMPORT_ROOT, cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file,
         read_manifest, resolve_dependencies, to_lock_entries, valid_alias, valid_dependency_alias,
         write_lock_file, write_manifest,
@@ -49,6 +52,9 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         return Err(CliError::usage("usage: yar <command> [arguments]"));
     };
+    let current_dir = env::current_dir()?;
+    metadata_transaction::recover(&current_dir)
+        .map_err(|err| CliError::other(format!("recovering dependency metadata: {err}")))?;
 
     match command {
         "check" => run_check(&args[1..]),
@@ -198,9 +204,18 @@ fn run_add(args: &[OsString]) -> Result<(), CliError> {
 
     let mut manifest = read_or_create_manifest()?;
     manifest.dependencies.insert(alias.to_string(), dependency);
-    write_manifest_file(Path::new(MANIFEST_FILE), &manifest)?;
+    let manifest_content = write_manifest(&manifest)?;
+    let root_dir = env::current_dir()?;
+    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
+    publish_metadata(
+        &root_dir,
+        FileChange::Write(manifest_content.as_bytes()),
+        lock_content.as_deref(),
+    )?;
     println!("added dependency {alias:?}");
-    update_lock_file()?;
+    if lock_content.is_some() {
+        println!("yar.lock updated");
+    }
     Ok(())
 }
 
@@ -214,9 +229,18 @@ fn run_remove(args: &[OsString]) -> Result<(), CliError> {
     if manifest.dependencies.remove(alias.as_ref()).is_none() {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
     }
-    write_manifest_file(Path::new(MANIFEST_FILE), &manifest)?;
+    let manifest_content = write_manifest(&manifest)?;
+    let root_dir = env::current_dir()?;
+    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
+    publish_metadata(
+        &root_dir,
+        FileChange::Write(manifest_content.as_bytes()),
+        lock_content.as_deref(),
+    )?;
     println!("removed dependency {alias:?}");
-    update_lock_file()?;
+    if lock_content.is_some() {
+        println!("yar.lock updated");
+    }
     Ok(())
 }
 
@@ -441,19 +465,26 @@ fn write_manifest_file(path: &Path, manifest: &Manifest) -> Result<(), CliError>
 fn update_lock_file() -> Result<(), CliError> {
     let manifest = read_manifest(MANIFEST_FILE)?;
     let root_dir = env::current_dir()?;
-    if !requires_lock(&root_dir, &manifest)? {
-        return remove_lock_file();
+    let lock_content = resolve_lock_content(&root_dir, &manifest)?;
+    publish_metadata(&root_dir, FileChange::Preserve, lock_content.as_deref())?;
+    if lock_content.is_some() {
+        println!("yar.lock updated");
+    }
+    Ok(())
+}
+
+fn resolve_lock_content(root_dir: &Path, manifest: &Manifest) -> Result<Option<String>, CliError> {
+    if !requires_lock(root_dir, manifest)? {
+        return Ok(None);
     }
     let cache_dir = cache_dir_from_env()?;
-    let resolved = resolve_dependencies(&root_dir, &manifest, &cache_dir)?;
+    let resolved = resolve_dependencies(root_dir, manifest, &cache_dir)?;
     let entries = to_lock_entries(&resolved);
-    reconcile_lock_entries(&root_dir, &manifest, &entries)?;
+    reconcile_lock_entries(root_dir, manifest, &entries)?;
     if entries.is_empty() {
-        return remove_lock_file();
+        return Ok(None);
     }
-    publish_lock_file(&entries)?;
-    println!("yar.lock updated");
-    Ok(())
+    Ok(Some(write_lock_file(&entries)))
 }
 
 fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
@@ -511,67 +542,27 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
         ))
     })?;
 
-    if merged_entries.is_empty() {
-        remove_lock_file()?;
+    let lock_content = if merged_entries.is_empty() {
+        None
     } else {
-        publish_lock_file(&merged_entries)?;
-    }
+        Some(write_lock_file(&merged_entries))
+    };
+    publish_metadata(&root_dir, FileChange::Preserve, lock_content.as_deref())?;
     println!("yar.lock updated");
     Ok(())
 }
 
-fn remove_lock_file() -> Result<(), CliError> {
-    match fs::remove_file(LOCK_FILE) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err.into()),
-    }
-}
-
-fn publish_lock_file(entries: &[LockEntry]) -> Result<(), CliError> {
-    let content = write_lock_file(entries);
-    write_file_atomically(Path::new(LOCK_FILE), content.as_bytes())?;
-    Ok(())
-}
-
-fn write_file_atomically(path: &Path, content: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("yar.lock");
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp_path = parent.join(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
-    write_file_atomically_with_temp(path, &temp_path, content)
-}
-
-fn write_file_atomically_with_temp(
-    path: &Path,
-    temp_path: &Path,
-    content: &[u8],
-) -> io::Result<()> {
-    let mut temp = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp_path)?;
-    let write_result = temp.write_all(content).and_then(|()| temp.sync_all());
-    drop(temp);
-    if let Err(err) = write_result {
-        let _ = fs::remove_file(temp_path);
-        return Err(err);
-    }
-
-    let result = fs::rename(temp_path, path);
-    if result.is_err() {
-        let _ = fs::remove_file(temp_path);
-    }
-    result
+fn publish_metadata(
+    root_dir: &Path,
+    manifest: FileChange<'_>,
+    lock_content: Option<&str>,
+) -> Result<(), CliError> {
+    let lock = match lock_content {
+        Some(content) => FileChange::Write(content.as_bytes()),
+        None => FileChange::Delete,
+    };
+    metadata_transaction::publish(root_dir, MetadataChanges { manifest, lock })
+        .map_err(|err| CliError::other(format!("publishing dependency metadata: {err}")))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -868,31 +859,5 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn atomic_write_replaces_complete_files_and_preserves_old_content_on_failure() {
-        let dir = TempDir::new("yar-atomic-write-test").unwrap();
-        let path = dir.path().join("yar.lock");
-        fs::write(&path, "old").unwrap();
-
-        write_file_atomically(&path, b"new").unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
-
-        fs::write(&path, "old").unwrap();
-        let invalid_temp = dir.path().join("missing").join("yar.lock.tmp");
-        assert!(write_file_atomically_with_temp(&path, &invalid_temp, b"new").is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
-
-        let collision = dir.path().join("yar.lock.tmp");
-        fs::write(&collision, "owned elsewhere").unwrap();
-        assert!(write_file_atomically_with_temp(&path, &collision, b"new").is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
-        assert_eq!(fs::read_to_string(&collision).unwrap(), "owned elsewhere");
     }
 }
