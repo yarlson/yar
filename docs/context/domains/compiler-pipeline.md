@@ -29,15 +29,17 @@
   syntax, qualified call syntax, and sugar nodes for `?` and `or |err| { ... }`.
 - `crates/yar-compiler/src/package.rs` resolves the package graph. It loads local
   `.yar` files from disk, consults the dependency index built from `yar.toml`
-  and `yar.lock` metadata for external packages, verifies a locked cache when
-  its alias is selected, falls back to embedded stdlib packages when both local
-  and dependency paths are missing, validates package names, and checks import
-  cycles.
-- `crates/yar-compiler/src/manifest.rs` provides dependency management infrastructure including
-  `yar.toml` and `yar.lock` parsing, git-based fetching, lock-hash verification
-  for commit-keyed cache entries, transitive resolution with
-  conflict detection, and the alias-to-path index consumed by the package
-  loader.
+  and the reconciled `yar.lock` graph for external packages, verifies a locked
+  cache and its recorded manifest edges when its alias is selected, falls back
+  to embedded stdlib packages when both local and dependency paths are missing,
+  validates package names, and checks import cycles.
+- `crates/yar-compiler/src/manifest.rs` provides `yar.toml` and versioned
+  `yar.lock` parsing, git-based fetching, commit-keyed cache verification, and
+  transitive resolution with conflict detection.
+- `crates/yar-compiler/src/lock_graph.rs` reconciles manifest roots and full
+  source/ref child edges before dependency cache access, rejects malformed or
+  unreachable graphs, verifies selected cached manifests, and merges selective
+  lock updates.
 - `crates/yar-compiler/src/lower.rs` lowers the package graph into one combined
   `Program` by rewriting package-local and imported symbols to canonical names.
 - `crates/yar-compiler/src/mono.rs` monomorphizes explicit generic struct and
@@ -89,9 +91,15 @@
 - Imported package names must match the final segment of the import path, and
   `package main` cannot be imported.
 - Local packages shadow embedded stdlib packages with the same import path.
-- A selected locked dependency is verified before cached source parsing or
-  stdlib fallback. Unused and locally shadowed lock entries are not verified.
-  Compilation never repairs a missing or corrupt cache.
+- Manifest roots and the versioned lock graph are reconciled before dependency
+  cache access. Duplicate aliases or edges, missing nodes, source/ref
+  mismatches, dependency cycles, and unreachable nodes stop package loading.
+- A selected locked dependency is hash-verified before its manifest or source
+  is parsed. The manifest's git dependencies must then match the recorded lock
+  edges. Unused and locally shadowed lock entries are not opened. Compilation
+  never repairs a missing or corrupt cache.
+- A selected local path dependency must exist and does not fall through to a
+  same-named embedded stdlib package.
 - Code generation depends on `checker.Info` for expression types, function
   signatures, struct metadata, local types, and the program-wide error-code
   table.

@@ -299,11 +299,29 @@ local_lib = { path = "../my-local-lib" }
 The alias becomes the import path: `import "http"`. Resolution order: local >
 dependency > stdlib.
 
-`yar.lock` pins exact commit SHAs and content hashes. Commit it to version
-control. The compiler verifies locked cache contents before loading dependency
-source, and `yar fetch` verifies both existing and newly downloaded entries.
-When selected, a missing or modified locked cache entry fails closed instead
-of falling back to a same-named standard-library package.
+`yar.lock` is an explicit `version = 1` graph. It pins exact commit SHAs and
+content hashes and records each package's full alias/git/ref child edges.
+Commit it to version control. Before compilation reads dependency caches, and
+before `yar fetch` uses the cache or network, Yar requires the manifest roots
+and lock graph to match exactly. Duplicate aliases or edges, missing nodes,
+cycles, source/ref conflicts, and unreachable entries are rejected. Old or
+unversioned lock files must be regenerated with `yar lock`; review that diff
+because normal resolution can select a new commit for a moved tag or branch.
+
+The compiler hash-verifies a selected cache tree before reading its manifest or
+source, then verifies the manifest against the recorded child edges. A missing,
+modified, or edge-divergent selected entry fails closed instead of falling back
+to a same-named standard-library package. Unused dependency caches remain lazy.
+
+Every reachable lock alias is globally importable, including transitive
+aliases. There is no root override for conflicting source/ref selections.
+Local path dependencies remain live and unhashed and may be declared only in
+the root manifest. Their manifests may contribute git dependencies, but may
+not declare another path dependency. A selected path alias must exist and does
+not fall through to a same-named standard-library package. `yar update
+<git-alias>` merges the replacement graph, preserves unrelated nodes needed by
+other roots, refreshes compatible shared nodes, and prunes orphans; targeted
+path updates require `yar lock`.
 
 ## Cross-compilation
 

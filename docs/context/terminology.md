@@ -110,11 +110,13 @@ method — A top-level function declaration with an explicit receiver such as
 manifest — The `yar.toml` file declaring the project name and its external
 dependencies with alias names and git URLs or local paths.
 
-lock file — The `yar.lock` file pinning each git dependency to an exact commit
-SHA and content hash for reproducible builds.
+lock file — The versioned `yar.lock` dependency graph, pinning each reachable
+git dependency to an exact commit and content hash and recording full
+source/ref child edges.
 
 dependency alias — The short name used in `yar.toml` to refer to an external
 dependency, which becomes the top-level import path segment in source code.
 
-dependency index — A lookup table mapping dependency aliases to their cached
-directory paths, built from `yar.toml` and `yar.lock` during package loading.
+dependency index — The global lookup table for every alias in the reconciled
+lock graph, resolved lazily to verified cached directory paths during package
+loading.

@@ -8,9 +8,10 @@ use std::{
 use crate::{
     ast::{Package, PackageGraph, PackageImport, Program},
     diag::{Diagnostic, List},
+    lock_graph::{reconcile_lock_entries, requires_lock, verify_locked_dependency_manifest},
     manifest::{
-        Dependency, LOCK_FILE, MANIFEST_FILE, ManifestError, cache_dir_from_env, cache_path,
-        read_lock_file, read_manifest, verify_cached_dependency,
+        Dependency, LOCK_FILE, LockDependency, MANIFEST_FILE, ManifestError, cache_dir_from_env,
+        cache_path, clean_path, read_lock_file, read_manifest, verify_cached_dependency,
     },
     parser::parse_file,
     token::Position,
@@ -106,7 +107,11 @@ fn resolve_entry_dirs(path: &Path) -> Result<(PathBuf, PathBuf), LoadError> {
     if metadata.is_dir() {
         return Ok((clean_path.clone(), clean_path));
     }
-    let parent = clean_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let parent = clean_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
     Ok((parent.clone(), parent))
 }
 
@@ -134,13 +139,17 @@ impl PackageLoader {
 
         let package = match self.read_local_package(import_path, dir)? {
             Some(package) => package,
-            None if !import_path.is_empty() => match read_stdlib_package(import_path) {
-                Some((package, diagnostics)) => {
-                    self.diag.append(&diagnostics);
-                    package
+            None if !import_path.is_empty()
+                && !self.dependency_index.contains_alias(import_path) =>
+            {
+                match read_stdlib_package(import_path) {
+                    Some((package, diagnostics)) => {
+                        self.diag.append(&diagnostics);
+                        package
+                    }
+                    None => return Ok(None),
                 }
-                None => return Ok(None),
-            },
+            }
             None => return Ok(None),
         };
 
@@ -296,10 +305,18 @@ enum DependencyEntry {
         git: String,
         commit: String,
         hash: String,
+        dependencies: Vec<LockDependency>,
     },
 }
 
 impl DependencyIndex {
+    fn contains_alias(&self, import_path: &str) -> bool {
+        let alias = import_path
+            .split_once('/')
+            .map_or(import_path, |(alias, _)| alias);
+        self.entries.contains_key(alias)
+    }
+
     fn load(root_dir: &Path) -> Result<Self, LoadError> {
         let manifest_path = root_dir.join(MANIFEST_FILE);
         if !manifest_path.exists() {
@@ -307,33 +324,42 @@ impl DependencyIndex {
         }
 
         let manifest = read_manifest(&manifest_path)?;
-        if manifest.dependencies.is_empty() {
-            return Ok(Self::default());
-        }
-
         let mut entries = BTreeMap::new();
-        let has_git_dependencies = manifest
-            .dependencies
-            .values()
-            .any(|dependency| !dependency.is_local());
-        if has_git_dependencies {
-            let lock_path = root_dir.join(LOCK_FILE);
-            let lock_entries = read_lock_file(&lock_path).map_err(|err| {
+        let lock_path = root_dir.join(LOCK_FILE);
+        let needs_lock = requires_lock(root_dir, &manifest)?;
+        let lock_entries = match read_lock_file(&lock_path) {
+            Ok(entries) => Some(entries),
+            Err(ManifestError::Io(err))
+                if err.kind() == std::io::ErrorKind::NotFound && !needs_lock =>
+            {
+                None
+            }
+            Err(err) => {
+                return Err(LoadError::Manifest(ManifestError::Invalid(format!(
+                    "yar.toml and yar.lock do not describe one valid dependency graph (run 'yar lock'): {err}"
+                ))));
+            }
+        };
+        if let Some(lock_entries) = lock_entries {
+            reconcile_lock_entries(root_dir, &manifest, &lock_entries).map_err(|err| {
                 LoadError::Manifest(ManifestError::Invalid(format!(
-                    "yar.toml exists but yar.lock is missing or invalid (run 'yar lock'): {err}"
+                    "yar.toml and yar.lock do not describe one valid dependency graph (run 'yar lock'): {err}"
                 )))
             })?;
-            let cache_dir = cache_dir_from_env()?;
-            for entry in lock_entries {
-                entries.insert(
-                    entry.name,
-                    DependencyEntry::Locked {
-                        cache_dir: cache_dir.clone(),
-                        git: entry.git,
-                        commit: entry.commit,
-                        hash: entry.hash,
-                    },
-                );
+            if !lock_entries.is_empty() {
+                let cache_dir = cache_dir_from_env()?;
+                for entry in lock_entries {
+                    entries.insert(
+                        entry.name,
+                        DependencyEntry::Locked {
+                            cache_dir: cache_dir.clone(),
+                            git: entry.git,
+                            commit: entry.commit,
+                            hash: entry.hash,
+                            dependencies: entry.dependencies,
+                        },
+                    );
+                }
             }
         }
 
@@ -357,31 +383,60 @@ impl DependencyIndex {
         let Some(entry) = self.entries.get(alias).cloned() else {
             return Ok(None);
         };
-        let dir = match entry {
-            DependencyEntry::Local(dir) => dir,
+        let (dir, is_local) = match entry {
+            DependencyEntry::Local(dir) => (dir, true),
             DependencyEntry::Locked {
                 cache_dir,
                 git,
                 commit,
                 hash,
+                dependencies,
             } => {
                 if !self.verified.contains(alias) {
-                    verify_cached_dependency(&cache_dir, &git, &commit, &hash).map_err(|err| {
+                    let dependency_dir =
+                        verify_cached_dependency(&cache_dir, &git, &commit, &hash).map_err(
+                            |err| {
+                                LoadError::Manifest(ManifestError::Invalid(format!(
+                                    "dependency {alias:?} cache verification failed: {err}; remove or repair the reported cache path, then run 'yar fetch'"
+                                )))
+                            },
+                        )?;
+                    verify_locked_dependency_manifest(&dependency_dir, &dependencies).map_err(
+                        |err| {
                         LoadError::Manifest(ManifestError::Invalid(format!(
-                            "dependency {alias:?} cache verification failed: {err}; remove or repair the reported cache path, then run 'yar fetch'"
+                            "dependency {alias:?} manifest does not match yar.lock (run 'yar lock'): {err}"
                         )))
-                    })?;
+                    },
+                    )?;
                     self.verified.insert(alias.to_string());
                 }
-                cache_path(cache_dir, &git, &commit)
+                (cache_path(cache_dir, &git, &commit), false)
             }
         };
-        if sub_path.is_empty() {
-            return Ok(Some(dir));
+        let dir = if sub_path.is_empty() {
+            dir
+        } else {
+            dir.join(sub_path.replace('/', std::path::MAIN_SEPARATOR_STR))
+        };
+        if is_local {
+            match fs::metadata(&dir) {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => {
+                    return Err(LoadError::Manifest(ManifestError::Invalid(format!(
+                        "local dependency {alias:?} path {} is not a directory",
+                        dir.display()
+                    ))));
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(LoadError::Manifest(ManifestError::Invalid(format!(
+                        "local dependency {alias:?} path {} does not exist",
+                        dir.display()
+                    ))));
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
-        Ok(Some(dir.join(
-            sub_path.replace('/', std::path::MAIN_SEPARATOR_STR),
-        )))
+        Ok(Some(dir))
     }
 }
 
@@ -393,20 +448,6 @@ fn dependency_dir(root_dir: &Path, dependency: &Dependency) -> PathBuf {
         root_dir.join(path)
     };
     clean_path(&dir)
-}
-
-fn clean_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 fn package_from_files(path: String, name: String, stdlib: bool, files: Vec<Program>) -> Package {
