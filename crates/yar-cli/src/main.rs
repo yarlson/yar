@@ -1,16 +1,18 @@
 use std::{
     env,
     error::Error,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     fmt, fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod invocation;
 mod metadata_transaction;
 mod project;
 
+use invocation::Invocation;
 use metadata_transaction::{FileChange, MetadataChanges};
 use project::ProjectPaths;
 
@@ -22,16 +24,23 @@ use yar_compiler::{
         validate_lock_entries_for_update, verify_locked_dependency_manifest,
     },
     manifest::{
-        Dependency, MANIFEST_FILE, Manifest, ManifestError, PackageInfo, STDLIB_IMPORT_ROOT,
-        cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file, read_manifest,
-        resolve_dependencies, to_lock_entries, valid_alias, valid_dependency_alias,
-        write_lock_file, write_manifest,
+        Dependency, Manifest, ManifestError, PackageInfo, STDLIB_IMPORT_ROOT, cache_dir_from_env,
+        fetch_locked_dependency, is_cached, read_lock_file, read_manifest, resolve_dependencies,
+        to_lock_entries, valid_alias, valid_dependency_alias, write_lock_file, write_manifest,
     },
+};
+use yar_process_control::{
+    Deadline, DeadlineError, ProcessError, Timeout, output as process_output,
+    status as process_status,
 };
 
 const RUNTIME_ARCHIVE_ENV: &str = "YAR_RUNTIME_ARCHIVE";
-const ROOT_USAGE: &str = "usage: yar [--manifest-path <path/to/yar.toml>] <command> [arguments]";
-
+const BUILD_TIMEOUT_ENV: &str = "YAR_BUILD_TIMEOUT_SECS";
+const TEST_TIMEOUT_ENV: &str = "YAR_TEST_TIMEOUT_SECS";
+const GIT_TIMEOUT_ENV: &str = "YAR_GIT_TIMEOUT_SECS";
+const DEFAULT_BUILD_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_GIT_TIMEOUT_SECS: u64 = 300;
 fn main() -> ExitCode {
     match run(env::args_os().skip(1).collect()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -52,11 +61,22 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<OsString>) -> Result<(), CliError> {
-    let Invocation {
-        command,
-        command_args,
-        manifest_path,
-    } = parse_invocation(args)?;
+    let (command, command_args, manifest_path) =
+        match invocation::parse(args).map_err(CliError::usage)? {
+            Invocation::Help(help) => {
+                print!("{help}");
+                return Ok(());
+            }
+            Invocation::Version => {
+                println!("yar {}", invocation::version());
+                return Ok(());
+            }
+            Invocation::Command {
+                command,
+                command_args,
+                manifest_path,
+            } => (command, command_args, manifest_path),
+        };
     let current_dir = env::current_dir()?;
 
     match command.as_str() {
@@ -73,41 +93,6 @@ fn run(args: Vec<OsString>) -> Result<(), CliError> {
         "update" => run_update(&command_args, &current_dir, manifest_path.as_deref()),
         _ => Err(CliError::usage(format!("unknown command {command:?}"))),
     }
-}
-
-struct Invocation {
-    command: String,
-    command_args: Vec<OsString>,
-    manifest_path: Option<PathBuf>,
-}
-
-fn parse_invocation(mut args: Vec<OsString>) -> Result<Invocation, CliError> {
-    let mut manifest_path = None;
-    while args.first().is_some_and(|arg| arg == "--manifest-path") {
-        if manifest_path.is_some() {
-            return Err(CliError::usage(
-                "--manifest-path may be specified only once",
-            ));
-        }
-        if args.len() < 2 {
-            return Err(CliError::usage(ROOT_USAGE));
-        }
-        let path = PathBuf::from(&args[1]);
-        if path.file_name() != Some(OsStr::new(MANIFEST_FILE)) {
-            return Err(CliError::usage("--manifest-path must name yar.toml"));
-        }
-        manifest_path = Some(path);
-        args.drain(..2);
-    }
-
-    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
-        return Err(CliError::usage(ROOT_USAGE));
-    };
-    Ok(Invocation {
-        command: command.to_owned(),
-        command_args: args[1..].to_vec(),
-        manifest_path,
-    })
 }
 
 fn entry_project(
@@ -184,8 +169,9 @@ fn run_build(
 ) -> Result<(), CliError> {
     let target = Target::resolve()?;
     let BuildArgs { path, output } = parse_build_args(args, &target)?;
+    let deadline = build_timeout()?.start()?;
     let project = entry_project(current_dir, &path, manifest_path)?;
-    build_path(&path, project.root(), &target, &output)
+    build_path(&path, project.root(), &target, &output, deadline)
 }
 
 fn run_run(
@@ -193,7 +179,8 @@ fn run_run(
     current_dir: &Path,
     manifest_path: Option<&Path>,
 ) -> Result<(), CliError> {
-    let path = parse_single_path(args, "usage: yar run <file|dir>")?;
+    let RunArgs { path, program_args } = parse_run_args(args)?;
+    let build_deadline = build_timeout()?.start()?;
     let project = entry_project(current_dir, &path, manifest_path)?;
     let target = Target::resolve()?;
     if target.is_cross() {
@@ -207,8 +194,8 @@ fn run_run(
     let output = tmp_dir
         .path()
         .join(format!("program{}", target.exe_suffix()));
-    build_path(&path, project.root(), &target, &output)?;
-    invoke_program(&output)
+    build_path(&path, project.root(), &target, &output, build_deadline)?;
+    invoke_program(&output, &program_args, Deadline::none())
 }
 
 fn run_test(
@@ -217,6 +204,8 @@ fn run_test(
     manifest_path: Option<&Path>,
 ) -> Result<(), CliError> {
     let path = parse_single_path(args, "usage: yar test <file|dir>")?;
+    let build_deadline = build_timeout()?.start()?;
+    let test_timeout = test_timeout()?;
     let project = entry_project(current_dir, &path, manifest_path)?;
     let target = Target::resolve()?;
     if target.is_cross() {
@@ -243,8 +232,8 @@ fn run_test(
 
     let tmp_dir = TempDir::new("yar-rust-test")?;
     let output = tmp_dir.path().join(format!("test{}", target.exe_suffix()));
-    build_unit(unit, &target, &output)?;
-    invoke_program(&output)
+    build_unit(unit, &target, &output, build_deadline)?;
+    invoke_program(&output, &[], test_timeout.start()?)
 }
 
 fn run_init(
@@ -302,12 +291,13 @@ fn run_add(
     }
 
     let dependency = parse_dependency_args(&args[1..])?;
+    let deadline = git_deadline()?;
 
     let project = ProjectPaths::for_metadata(current_dir, manifest_path)?;
     let mut manifest = read_or_create_manifest(&project)?;
     manifest.dependencies.insert(alias.to_string(), dependency);
     let manifest_content = write_manifest(&manifest)?;
-    let lock_content = resolve_lock_content(project.root(), &manifest)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest, deadline)?;
     publish_metadata(
         project.root(),
         FileChange::Write(manifest_content.as_bytes()),
@@ -330,13 +320,14 @@ fn run_remove(
     }
 
     let alias = args[0].to_string_lossy();
+    let deadline = git_deadline()?;
     let project = metadata_project(current_dir, manifest_path)?;
     let mut manifest = read_project_manifest(&project)?;
     if manifest.dependencies.remove(alias.as_ref()).is_none() {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
     }
     let manifest_content = write_manifest(&manifest)?;
-    let lock_content = resolve_lock_content(project.root(), &manifest)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest, deadline)?;
     publish_metadata(
         project.root(),
         FileChange::Write(manifest_content.as_bytes()),
@@ -357,6 +348,7 @@ fn run_fetch(
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar fetch"));
     }
+    let deadline = git_deadline()?;
     let project = metadata_project(current_dir, manifest_path)?;
     let manifest = read_project_manifest(&project)?;
     let needs_lock = requires_lock(project.root(), &manifest)?;
@@ -390,6 +382,7 @@ fn run_fetch(
             &entry.git,
             &entry.commit,
             &entry.hash,
+            deadline,
             |dependency_dir| {
                 verify_locked_dependency_manifest(dependency_dir, &entry.dependencies).map_err(
                     |err| {
@@ -400,7 +393,7 @@ fn run_fetch(
                 )
             },
         )
-        .map_err(|err| CliError::other(format!("fetching {}: {err}", entry.name)))?;
+        .map_err(|error| error.context(format!("fetching {}", entry.name)))?;
     }
     println!("all dependencies fetched");
     Ok(())
@@ -414,8 +407,9 @@ fn run_lock(
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar lock"));
     }
+    let deadline = git_deadline()?;
     let project = metadata_project(current_dir, manifest_path)?;
-    update_lock_file(&project)
+    update_lock_file(&project, deadline)
 }
 
 fn run_update(
@@ -426,10 +420,11 @@ fn run_update(
     if args.len() > 1 {
         return Err(CliError::usage("usage: yar update [alias]"));
     }
+    let deadline = git_deadline()?;
     let project = metadata_project(current_dir, manifest_path)?;
     match args.first() {
-        Some(alias) => update_lock_file_for_alias(&project, &alias.to_string_lossy()),
-        None => update_lock_file(&project),
+        Some(alias) => update_lock_file_for_alias(&project, &alias.to_string_lossy(), deadline),
+        None => update_lock_file(&project, deadline),
     }
 }
 
@@ -438,6 +433,7 @@ fn build_path(
     project_root: &Path,
     target: &Target,
     output: &Path,
+    deadline: Deadline,
 ) -> Result<(), CliError> {
     let options = CompileOptions {
         target_triple: target.triple.clone(),
@@ -454,16 +450,21 @@ fn build_path(
         return Err(CliError::other("compilation stopped without diagnostics"));
     };
 
-    build_unit(unit, target, output)
+    build_unit(unit, target, output, deadline)
 }
 
-fn build_unit(unit: Unit, target: &Target, output: &Path) -> Result<(), CliError> {
-    let archive = runtime_archive(target)?;
+fn build_unit(
+    unit: Unit,
+    target: &Target,
+    output: &Path,
+    deadline: Deadline,
+) -> Result<(), CliError> {
+    let archive = runtime_archive(target, deadline)?;
 
     let tmp_dir = TempDir::new("yar-rust-build")?;
     let ir_path = tmp_dir.path().join("main.ll");
     fs::write(&ir_path, unit.ir)?;
-    invoke_clang(target, &ir_path, &archive, output)?;
+    invoke_clang(target, &ir_path, &archive, output, deadline)?;
     Ok(())
 }
 
@@ -481,6 +482,24 @@ fn parse_single_path(args: &[OsString], usage: &'static str) -> Result<PathBuf, 
 struct BuildArgs {
     path: PathBuf,
     output: PathBuf,
+}
+
+struct RunArgs {
+    path: PathBuf,
+    program_args: Vec<OsString>,
+}
+
+fn parse_run_args(args: &[OsString]) -> Result<RunArgs, CliError> {
+    const USAGE: &str = "usage: yar run <file|dir> [-- <argument>...]";
+    let delimiter = args.iter().position(|arg| arg == "--");
+    let (path_args, program_args) = match delimiter {
+        Some(index) => (&args[..index], args[index + 1..].to_vec()),
+        None => (args, Vec::new()),
+    };
+    Ok(RunArgs {
+        path: parse_single_path(path_args, USAGE)?,
+        program_args,
+    })
 }
 
 fn parse_build_args(args: &[OsString], target: &Target) -> Result<BuildArgs, CliError> {
@@ -594,9 +613,9 @@ fn write_manifest_file(path: &Path, manifest: &Manifest) -> Result<(), CliError>
     Ok(())
 }
 
-fn update_lock_file(project: &ProjectPaths) -> Result<(), CliError> {
+fn update_lock_file(project: &ProjectPaths, deadline: Deadline) -> Result<(), CliError> {
     let manifest = read_project_manifest(project)?;
-    let lock_content = resolve_lock_content(project.root(), &manifest)?;
+    let lock_content = resolve_lock_content(project.root(), &manifest, deadline)?;
     publish_metadata(
         project.root(),
         FileChange::Preserve,
@@ -608,12 +627,16 @@ fn update_lock_file(project: &ProjectPaths) -> Result<(), CliError> {
     Ok(())
 }
 
-fn resolve_lock_content(root_dir: &Path, manifest: &Manifest) -> Result<Option<String>, CliError> {
+fn resolve_lock_content(
+    root_dir: &Path,
+    manifest: &Manifest,
+    deadline: Deadline,
+) -> Result<Option<String>, CliError> {
     if !requires_lock(root_dir, manifest)? {
         return Ok(None);
     }
     let cache_dir = cache_dir_from_env()?;
-    let resolved = resolve_dependencies(root_dir, manifest, &cache_dir)?;
+    let resolved = resolve_dependencies(root_dir, manifest, &cache_dir, deadline)?;
     let entries = to_lock_entries(&resolved);
     reconcile_lock_entries(root_dir, manifest, &entries)?;
     if entries.is_empty() {
@@ -622,7 +645,11 @@ fn resolve_lock_content(root_dir: &Path, manifest: &Manifest) -> Result<Option<S
     Ok(Some(write_lock_file(&entries)))
 }
 
-fn update_lock_file_for_alias(project: &ProjectPaths, alias: &str) -> Result<(), CliError> {
+fn update_lock_file_for_alias(
+    project: &ProjectPaths,
+    alias: &str,
+    deadline: Deadline,
+) -> Result<(), CliError> {
     let manifest = read_project_manifest(project)?;
     let Some(dependency) = manifest.dependencies.get(alias) else {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
@@ -636,7 +663,7 @@ fn update_lock_file_for_alias(project: &ProjectPaths, alias: &str) -> Result<(),
     let existing_entries = match read_lock_file(project.lock()) {
         Ok(entries) => entries,
         Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
-            return update_lock_file(project);
+            return update_lock_file(project, deadline);
         }
         Err(err) => {
             return Err(CliError::other(format!(
@@ -661,7 +688,7 @@ fn update_lock_file_for_alias(project: &ProjectPaths, alias: &str) -> Result<(),
         .insert(alias.to_string(), dependency.clone());
 
     let cache_dir = cache_dir_from_env()?;
-    let resolved = resolve_dependencies(project.root(), &selected_manifest, &cache_dir)?;
+    let resolved = resolve_dependencies(project.root(), &selected_manifest, &cache_dir, deadline)?;
     let updated_entries = to_lock_entries(&resolved);
     let merged_entries = merge_lock_entries_for_update(
         project.root(),
@@ -782,7 +809,7 @@ fn default_output_name(target: &Target) -> &'static str {
     }
 }
 
-fn runtime_archive(target: &Target) -> Result<PathBuf, CliError> {
+fn runtime_archive(target: &Target, deadline: Deadline) -> Result<PathBuf, CliError> {
     if let Some(path) = runtime_archive_from_env() {
         return require_runtime_archive(path);
     }
@@ -797,7 +824,7 @@ fn runtime_archive(target: &Target) -> Result<PathBuf, CliError> {
     }
 
     let root = repo_root()?;
-    build_rust_runtime(&root)?;
+    build_rust_runtime(&root, deadline)?;
     require_runtime_archive(
         root.join("target")
             .join("release")
@@ -838,11 +865,12 @@ fn require_runtime_archive(path: PathBuf) -> Result<PathBuf, CliError> {
     )))
 }
 
-fn build_rust_runtime(root: &Path) -> Result<(), CliError> {
-    let output = Command::new("cargo")
+fn build_rust_runtime(root: &Path, deadline: Deadline) -> Result<(), CliError> {
+    let mut command = Command::new("cargo");
+    command
         .args(["build", "-p", "yar-runtime", "--release"])
-        .current_dir(root)
-        .output()?;
+        .current_dir(root);
+    let output = process_output(command, deadline)?;
     if !output.status.success() {
         return Err(CliError::other(format!(
             "cargo build -p yar-runtime --release failed: {}\n{}",
@@ -858,6 +886,7 @@ fn invoke_clang(
     ir_path: &Path,
     runtime_archive: &Path,
     output_path: &Path,
+    deadline: Deadline,
 ) -> Result<(), CliError> {
     let cc = env::var("CC").unwrap_or_else(|_| "clang".to_string());
     let mut args = vec![OsString::from("-Wno-override-module")];
@@ -875,7 +904,9 @@ fn invoke_clang(
         args.push(OsString::from("-lws2_32"));
     }
 
-    let output = Command::new(&cc).args(&args).output()?;
+    let mut command = Command::new(&cc);
+    command.args(&args);
+    let output = process_output(command, deadline)?;
     if !output.status.success() {
         return Err(CliError::other(format!(
             "{cc} failed: {}\n{}",
@@ -886,12 +917,32 @@ fn invoke_clang(
     Ok(())
 }
 
-fn invoke_program(path: &Path) -> Result<(), CliError> {
-    let status = Command::new(path).status()?;
+fn invoke_program(path: &Path, args: &[OsString], deadline: Deadline) -> Result<(), CliError> {
+    let mut command = Command::new(path);
+    command.args(args);
+    let status = process_status(command, deadline)?;
     if !status.success() {
         return Err(CliError::ProcessExit(status.code().unwrap_or(1)));
     }
     Ok(())
+}
+
+fn build_timeout() -> Result<Timeout, CliError> {
+    Ok(Timeout::from_env(
+        BUILD_TIMEOUT_ENV,
+        DEFAULT_BUILD_TIMEOUT_SECS,
+    )?)
+}
+
+fn test_timeout() -> Result<Timeout, CliError> {
+    Ok(Timeout::from_env(
+        TEST_TIMEOUT_ENV,
+        DEFAULT_TEST_TIMEOUT_SECS,
+    )?)
+}
+
+fn git_deadline() -> Result<Deadline, CliError> {
+    Ok(Timeout::from_env(GIT_TIMEOUT_ENV, DEFAULT_GIT_TIMEOUT_SECS)?.start()?)
 }
 
 fn repo_root() -> Result<PathBuf, CliError> {
@@ -970,12 +1021,30 @@ impl From<yar_compiler::package::LoadError> for CliError {
 
 impl From<ManifestError> for CliError {
     fn from(value: ManifestError) -> Self {
+        if let Some(signal) = value.interrupted_signal() {
+            return CliError::ProcessExit(128 + signal);
+        }
         CliError::Other(Box::new(value))
     }
 }
 
 impl From<io::Error> for CliError {
     fn from(value: io::Error) -> Self {
+        CliError::Other(Box::new(value))
+    }
+}
+
+impl From<DeadlineError> for CliError {
+    fn from(value: DeadlineError) -> Self {
+        CliError::Other(Box::new(value))
+    }
+}
+
+impl From<ProcessError> for CliError {
+    fn from(value: ProcessError) -> Self {
+        if let Some(signal) = value.interrupted_signal() {
+            return CliError::ProcessExit(128 + signal);
+        }
         CliError::Other(Box::new(value))
     }
 }

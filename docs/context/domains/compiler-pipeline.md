@@ -5,8 +5,12 @@
 - `crates/yar-cli` is the shipped CLI wiring. It parses command names and global
   project selection, resolves an entry file or package directory separately
   from its project root, compiles through `crates/yar-compiler`, formats
-  diagnostics, resolves runtime archives, and sets a timeout for `build`, `run`,
-  and `test`.
+  diagnostics, resolves runtime archives, forwards delimited `run` arguments,
+  and assigns operation deadlines to external build, test, and Git work.
+- `crates/yar-process-control` is the shared subprocess boundary used by the CLI
+  and dependency resolver. It owns typed start/timeout errors, concurrent output
+  draining, deadline polling, timed descendant containment, cleanup, and Unix
+  interrupt forwarding.
 - `crates/yar-compiler/src/token.rs` defines the token type set, token values,
   and source positions used by the lexer, parser, and downstream stages.
 - `crates/yar-compiler/src/diag.rs` defines the diagnostic type and accumulator
@@ -34,7 +38,9 @@
   scopes lookup to the importer origin, verifies selected locked sources, seals
   stdlib imports, validates qualifiers and package names, and checks cycles.
 - `crates/yar-compiler/src/manifest.rs` provides `yar.toml` and versioned
-  `yar.lock` parsing, fetching, cache verification, and transitive resolution.
+  `yar.lock` parsing, fetching, cache verification, and transitive resolution;
+  callers supply one deadline shared across a dependency operation's Git
+  subprocesses.
 - `crates/yar-compiler/src/lock_graph.rs` reconciles manifest roots and full
   source/ref child edges before dependency cache access, rejects malformed or
   unreachable graphs, verifies selected cached manifests, and merges selective

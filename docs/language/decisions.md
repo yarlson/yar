@@ -409,6 +409,25 @@ Payload enum cases with exactly one field accept positional syntax:
 `Enum.Case(value)` as sugar for `Enum.Case{field: value}`. Multi-field cases
 keep keyed syntax only. The keyed form remains valid for all cases.
 
+### Compiler CLI process contract
+
+Status: accepted
+
+Root and per-command help are side-effect-free information paths, and release
+builds report the release version injected by the packaging system. `yar run`
+accepts host program arguments only after an explicit `--` delimiter and
+forwards them unchanged; the program's numeric exit status is propagated.
+
+External native-build, test-binary, and Git work uses caller-created absolute
+deadlines through one shared process-control boundary. Cargo and clang share a
+build deadline, a generated test binary has its own deadline, and all Git
+subprocesses in one dependency command share a deadline. A `yar run` user
+program has no default deadline. Timed subprocesses use Unix process groups or
+Windows Job Objects so cleanup follows descendant termination; Unix descendants
+that deliberately create a new session remain outside process-group
+containment. Missing executables are preserved as typed errors with the named
+tool rather than flattened into generic I/O failures.
+
 ---
 
 ## Decision Update Rule

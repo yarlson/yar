@@ -85,6 +85,9 @@
   archive for the selected target; the sibling and workspace runtime archive
   fallbacks are host-only.
 - Invokes `clang -Wno-override-module [--target=<triple>] main.ll <runtime-input> -o <output>`.
+- Applies one absolute `YAR_BUILD_TIMEOUT_SECS` deadline (30 seconds by default)
+  across any Cargo runtime build and the clang invocation. Timed tools and their
+  ordinary descendants are terminated before temporary build state is removed.
 - Returns the produced native executable at the requested output path.
 - Cross-compilation requires a `clang` installation that supports the requested
   target, including the appropriate sysroot and system libraries.
@@ -99,9 +102,13 @@
   platform or be unset.
 - Executes the produced binary as a subprocess.
 - Keeps the invocation directory as the program's working directory.
-- Does not forward user program arguments; the spawned program sees only the
-  temporary executable path in its argv.
+- Accepts `-- <argument>...` after the entry path and forwards every value after
+  the delimiter unchanged. The temporary executable path remains argv element
+  zero.
 - Inherits stdin, stdout, and stderr from the calling process.
+- Applies `YAR_BUILD_TIMEOUT_SECS` to native-build subprocesses but no default
+  deadline to the user program. A numeric program exit status becomes the
+  `yar run` exit status.
 - Removes the temporary build directory and binary after execution.
 
 ## `test`
@@ -118,6 +125,8 @@
 - Compiles and executes the test binary through the same `clang` pipeline as
   `run`; the Rust CLI links the Rust runtime static library through the same
   archive lookup used by `build`.
+- Executes the generated test binary under `YAR_TEST_TIMEOUT_SECS` (30 seconds
+  by default), separately from the native build deadline.
 - Keeps the invocation directory as the test program's working directory.
 - Exit code is `0` when all tests pass, `1` when any test fails.
 - Test files are excluded from `check`, `build`, `emit-ir`, and `run` commands.

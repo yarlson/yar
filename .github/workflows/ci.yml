@@ -62,12 +62,25 @@ jobs:
           ./scripts/verify-rust-testdata.sh
           ./scripts/verify-rust-testdata-run.sh
 
+  process-control-windows:
+    name: Process control (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run process-control tests
+        run: cargo test -p yar-process-control
+
   release-dry-run:
     name: Release dry run
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs:
       - lint
+      - process-control-windows
       - test
 
     steps:
