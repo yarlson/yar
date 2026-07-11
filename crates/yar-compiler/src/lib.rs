@@ -6,6 +6,7 @@ pub mod codegen;
 pub mod compile;
 pub mod diag;
 pub mod lexer;
+pub mod lock_graph;
 pub mod lower;
 pub mod manifest;
 pub mod mono;

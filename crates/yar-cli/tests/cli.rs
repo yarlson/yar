@@ -6,7 +6,8 @@ use std::{
 };
 
 use yar_compiler::manifest::{
-    LockEntry, cache_path, hash_dir, parse_lock_file, parse_manifest, write_lock_file,
+    Dependency, LockDependency, LockEntry, cache_path, hash_dir, parse_lock_file, parse_manifest,
+    write_lock_file,
 };
 
 #[test]
@@ -616,6 +617,41 @@ fn main() i32 {
 }
 
 #[test]
+fn check_rejects_a_missing_direct_lock_entry_before_stdlib_fallback() {
+    let dir = temp_dir("yar-cli-missing-direct-lock-entry");
+    let cache_dir = dir.join("cache");
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+strings = { git = "https://example.com/strings.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("yar.lock"), write_lock_file(&[])).unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nimport \"strings\"\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(!output.status.success(), "missing lock entry was accepted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing package \"strings\"") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "lock reconciliation touched the dependency cache"
+    );
+}
+
+#[test]
 fn check_only_verifies_a_locked_cache_when_the_dependency_is_selected() {
     let dir = temp_dir("yar-cli-lazy-locked-cache");
     let cache_dir = dir.join("cache");
@@ -673,6 +709,265 @@ dep = { git = "https://example.com/dep.git", tag = "v1" }
 }
 
 #[test]
+fn check_rejects_selected_dependency_manifest_edge_drift_after_hash_verification() {
+    let dir = temp_dir("yar-cli-locked-manifest-edge-drift");
+    let cache_dir = dir.join("cache");
+    let git = "https://example.com/parent.git";
+    let commit = "1111111111111111111111111111111111111111";
+    let dependency_dir = cache_path(&cache_dir, git, commit);
+    fs::create_dir_all(&dependency_dir).unwrap();
+    fs::write(
+        dependency_dir.join("yar.toml"),
+        r#"[package]
+name = "parent"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(dependency_dir.join("parent.yar"), "package parent\n").unwrap();
+    let hash = hash_dir(&dependency_dir).unwrap();
+
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry("parent", git, commit, hash)]),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nimport \"parent\"\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(
+        !output.status.success(),
+        "stale dependency edges were accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("manifest") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("hash mismatch"),
+        "valid cached content was reported as corrupt: {stderr}"
+    );
+}
+
+#[test]
+fn check_rejects_path_dependencies_below_the_root_manifest() {
+    let dir = temp_dir("yar-cli-nested-path-dependency");
+    let cache_dir = dir.join("cache");
+    let local = dir.join("local");
+    fs::create_dir_all(&local).unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local = { path = "local" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        local.join("yar.toml"),
+        r#"[package]
+name = "local"
+
+[dependencies]
+nested = { path = "../nested" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(
+        !output.status.success(),
+        "nested path dependency was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("path dependencies are supported only in the root yar.toml"),
+        "stderr: {stderr}"
+    );
+    assert!(!cache_dir.exists(), "check touched dependency cache");
+}
+
+#[test]
+fn check_file_entry_resolves_a_sibling_path_dependency() {
+    let dir = temp_dir("yar-cli-sibling-path-dependency");
+    let project = dir.join("app");
+    let dependency = dir.join("local");
+    let cache_dir = dir.join("cache");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&dependency).unwrap();
+    fs::write(
+        project.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local = { path = "../local" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("main.yar"),
+        r#"package main
+
+import "local"
+
+fn main() i32 {
+    return local.value()
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("yar.toml"),
+        r#"[package]
+name = "local"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dependency.join("local.yar"),
+        "package local\n\npub fn value() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&project, &cache_dir, &["check", "main.yar"]);
+
+    assert!(
+        output.status.success(),
+        "sibling dependency failed for a file entry: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn check_does_not_fall_back_to_stdlib_for_a_missing_path_dependency() {
+    let dir = temp_dir("yar-cli-missing-path-dependency");
+    let cache_dir = dir.join("cache");
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+fs = { path = "../missing" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nimport \"fs\"\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(
+        !output.status.success(),
+        "missing path dependency silently fell back to stdlib"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local dependency \"fs\"") && stderr.contains("does not exist"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn check_does_not_load_stdlib_for_an_empty_path_dependency() {
+    let dir = temp_dir("yar-cli-empty-path-dependency");
+    let dependency = dir.join("local-fs");
+    let cache_dir = dir.join("cache");
+    fs::create_dir_all(&dependency).unwrap();
+    fs::write(dependency.join("yar.toml"), "[package]\nname = \"fs\"\n").unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+fs = { path = "local-fs" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nimport \"fs\"\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["check", "."]);
+
+    assert!(
+        !output.status.success(),
+        "empty path dependency was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("has no .yar files") && stderr.contains("could not be loaded"),
+        "declared path dependency fell through to stdlib: {stderr}"
+    );
+}
+
+#[test]
+fn fetch_succeeds_without_a_lock_for_a_path_only_graph() {
+    let dir = temp_dir("yar-cli-fetch-path-only");
+    let dependency = dir.join("local");
+    let cache_dir = dir.join("cache");
+    fs::create_dir_all(&dependency).unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local = { path = "local" }
+"#,
+    )
+    .unwrap();
+    fs::write(dependency.join("yar.toml"), "[package]\nname = \"local\"\n").unwrap();
+
+    let output = run_yar(&dir, &cache_dir, &["fetch"]);
+
+    assert!(
+        output.status.success(),
+        "path-only fetch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "all dependencies fetched\n"
+    );
+    assert!(!dir.join("yar.lock").exists());
+    assert!(!cache_dir.exists(), "path-only fetch created a git cache");
+}
+
+#[test]
 fn fetch_validates_an_existing_locked_dependency_cache() {
     let project = locked_dependency_project("yar-cli-fetch-tampered-cache");
 
@@ -726,6 +1021,16 @@ fn fetch_does_not_publish_a_fresh_dependency_with_the_wrong_hash() {
     let git = "https://example.com/child.git";
     let commit = "2222222222222222222222222222222222222222";
     fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
         dir.join("yar.lock"),
         write_lock_file(&[locked_entry(
             "child",
@@ -755,6 +1060,67 @@ fn fetch_does_not_publish_a_fresh_dependency_with_the_wrong_hash() {
     assert!(
         !cache_path(&cache_dir, git, commit).exists(),
         "fetch published a dependency before verifying its lock hash"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_does_not_publish_a_fresh_dependency_with_stale_edges() {
+    let dir = temp_dir("yar-cli-fetch-stale-edges");
+    let cache_dir = dir.join("cache");
+    let expected_tree = dir.join("expected-parent");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = "https://example.com/parent.git";
+    let commit = "1111111111111111111111111111111111111111";
+    fs::create_dir_all(&expected_tree).unwrap();
+    fs::write(
+        expected_tree.join("yar.toml"),
+        r#"[package]
+name = "parent"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(expected_tree.join("parent.yar"), "package parent\n").unwrap();
+    let hash = hash_dir(&expected_tree).unwrap();
+
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[locked_entry("parent", git, commit, hash)]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(
+        !output.status.success(),
+        "stale dependency edges were fetched"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("manifest") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !cache_path(&cache_dir, git, commit).exists(),
+        "fetch published a dependency before verifying its manifest edges"
     );
 }
 
@@ -837,6 +1203,19 @@ fn add_git_dependency_resolves_transitive_lock_and_fetches_without_network() {
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, ["child", "parent"]);
+    let parent = lock_entries
+        .iter()
+        .find(|entry| entry.name == "parent")
+        .expect("parent lock entry");
+    assert_eq!(
+        parent
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.name.as_str())
+            .collect::<Vec<_>>(),
+        ["child"]
+    );
+    assert_eq!(parent.dependencies[0].tag, "v1");
     for entry in &lock_entries {
         assert!(cache_path(&cache_dir, &entry.git, &entry.commit).is_dir());
     }
@@ -866,6 +1245,183 @@ fn add_git_dependency_resolves_transitive_lock_and_fetches_without_network() {
 
 #[cfg(unix)]
 #[test]
+fn lock_follows_git_dependencies_below_a_live_local_root() {
+    let dir = temp_dir("yar-cli-lock-local-root");
+    let local = dir.join("local-lib");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::create_dir_all(&local).unwrap();
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+local_lib = { path = "local-lib" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        local.join("yar.toml"),
+        r#"[package]
+name = "local_lib"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["lock"]);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let entries = parse_lock_file(&fs::read_to_string(dir.join("yar.lock")).unwrap()).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["child"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_lock_is_rejected_before_fetch_and_regenerated_by_full_lock() {
+    let dir = temp_dir("yar-cli-fetch-legacy-lock");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    let legacy_lock = r#"[[package]]
+name = "child"
+git = "https://example.com/child.git"
+tag = "v1"
+commit = "2222222222222222222222222222222222222222"
+hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#;
+    fs::write(dir.join("yar.lock"), legacy_lock).unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(!output.status.success(), "legacy lock was fetched");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing version") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(!cache_dir.exists(), "fetch touched cache before validation");
+
+    let selective = run_yar_with_path(&dir, &cache_dir, &path, &["update", "child"]);
+    assert!(
+        !selective.status.success(),
+        "selective update accepted a legacy lock"
+    );
+    let stderr = String::from_utf8_lossy(&selective.stderr);
+    assert!(
+        stderr.contains("invalid or legacy") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "selective update fetched before validation"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("yar.lock")).unwrap(),
+        legacy_lock
+    );
+
+    let lock = run_yar_with_path(&dir, &cache_dir, &path, &["lock"]);
+    assert!(
+        lock.status.success(),
+        "full lock regeneration failed: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+    let content = fs::read_to_string(dir.join("yar.lock")).unwrap();
+    assert!(content.starts_with("# Auto-generated by yar. Do not edit.\n\nversion = 1\n"));
+    let entries = parse_lock_file(&content).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "child");
+}
+
+#[cfg(unix)]
+#[test]
+fn fetch_rejects_unreachable_lock_entries_before_invoking_git() {
+    let dir = temp_dir("yar-cli-fetch-unreachable-lock");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+child = { git = "https://example.com/child.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("yar.lock"),
+        write_lock_file(&[
+            locked_entry(
+                "child",
+                "https://example.com/child.git",
+                "2222222222222222222222222222222222222222",
+                format!("sha256:{}", "a".repeat(64)),
+            ),
+            locked_entry(
+                "injected",
+                "https://example.com/injected.git",
+                "3333333333333333333333333333333333333333",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+        ]),
+    )
+    .unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["fetch"]);
+
+    assert!(
+        !output.status.success(),
+        "unreachable lock entry was fetched"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unreachable package entries") && stderr.contains("injected"),
+        "stderr: {stderr}"
+    );
+    assert!(!cache_dir.exists(), "fetch touched cache before validation");
+}
+
+#[cfg(unix)]
+#[test]
 fn update_one_git_dependency_preserves_unrelated_lock_entries() {
     let dir = temp_dir("yar-cli-update-one-dep");
     let cache_dir = dir.join("cache");
@@ -891,9 +1447,11 @@ sibling = { git = "https://example.com/sibling.git", tag = "v1" }
         dir.join("yar.lock"),
         r#"# Auto-generated by yar. Do not edit.
 
+version = 1
+
 [[package]]
-name = "child"
-git = "https://example.com/child.git"
+name = "old_child"
+git = "https://example.com/old-child.git"
 tag = "v0"
 commit = "0000000000000000000000000000000000000000"
 hash = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -904,6 +1462,11 @@ git = "https://example.com/parent.git"
 tag = "v0"
 commit = "0000000000000000000000000000000000000000"
 hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+[[package.dependencies]]
+name = "old_child"
+git = "https://example.com/old-child.git"
+tag = "v0"
 
 [[package]]
 name = "sibling"
@@ -949,6 +1512,10 @@ hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         entry("child").commit,
         "2222222222222222222222222222222222222222"
     );
+    assert!(
+        lock_entries.iter().all(|entry| entry.name != "old_child"),
+        "orphaned selected descendant was preserved: {lock_entries:?}"
+    );
     assert_eq!(
         entry("sibling").commit,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -961,7 +1528,129 @@ hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 #[cfg(unix)]
 #[test]
-fn update_one_local_dependency_does_not_resolve_unrelated_git_dependencies() {
+fn update_one_rejects_stale_unselected_roots_before_fetching() {
+    let dir = temp_dir("yar-cli-update-stale-unselected");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v1" }
+sibling = { git = "https://example.com/sibling.git", tag = "v2" }
+"#,
+    )
+    .unwrap();
+    let original = write_lock_file(&[
+        locked_entry(
+            "parent",
+            "https://example.com/parent.git",
+            "0000000000000000000000000000000000000000",
+            format!("sha256:{}", "a".repeat(64)),
+        ),
+        locked_entry(
+            "sibling",
+            "https://example.com/sibling.git",
+            "0000000000000000000000000000000000000000",
+            format!("sha256:{}", "b".repeat(64)),
+        ),
+    ]);
+    fs::write(dir.join("yar.lock"), &original).unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["update", "parent"]);
+
+    assert!(
+        !output.status.success(),
+        "stale unselected root was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("sibling") && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "update fetched before graph validation"
+    );
+    assert_eq!(fs::read_to_string(dir.join("yar.lock")).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_one_rejects_a_shared_source_conflict_before_fetching() {
+    let dir = temp_dir("yar-cli-update-shared-source-conflict");
+    let cache_dir = dir.join("cache");
+    let fake_git = fake_git_dir();
+    let path = format!(
+        "{}:{}",
+        fake_git.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    fs::write(
+        dir.join("yar.toml"),
+        r#"[package]
+name = "app"
+
+[dependencies]
+parent = { git = "https://example.com/parent.git", tag = "v2" }
+sibling = { git = "https://example.com/sibling.git", tag = "v1" }
+"#,
+    )
+    .unwrap();
+
+    let parent_source = Dependency {
+        git: "https://example.com/parent.git".to_string(),
+        tag: "v1".to_string(),
+        ..Dependency::default()
+    };
+    let mut sibling = locked_entry(
+        "sibling",
+        "https://example.com/sibling.git",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        format!("sha256:{}", "b".repeat(64)),
+    );
+    sibling.dependencies = vec![LockDependency::new("parent", &parent_source)];
+    let original = write_lock_file(&[
+        locked_entry(
+            "parent",
+            "https://example.com/parent.git",
+            "1111111111111111111111111111111111111111",
+            format!("sha256:{}", "a".repeat(64)),
+        ),
+        sibling,
+    ]);
+    fs::write(dir.join("yar.lock"), &original).unwrap();
+
+    let output = run_yar_with_path(&dir, &cache_dir, &path, &["update", "parent"]);
+
+    assert!(
+        !output.status.success(),
+        "shared source conflict was accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("dependency conflict for \"parent\"")
+            && stderr.contains("unselected root")
+            && stderr.contains("run 'yar lock'"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "update fetched before detecting the shared source conflict"
+    );
+    assert_eq!(fs::read_to_string(dir.join("yar.lock")).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_one_local_dependency_requires_full_lock_regeneration() {
     let dir = temp_dir("yar-cli-update-one-local-dep");
     let cache_dir = dir.join("cache");
     let fake_git = fake_git_dir();
@@ -991,14 +1680,11 @@ sibling = { git = "https://example.com/sibling.git", tag = "v1" }
         .output()
         .unwrap();
 
+    assert!(!output.status.success(), "targeted path update succeeded");
     assert!(
-        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).contains("run 'yar lock'"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "yar.lock updated\n"
     );
     assert!(
         !dir.join("yar.lock").exists(),

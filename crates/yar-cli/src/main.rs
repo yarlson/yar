@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeSet,
     env,
     error::Error,
     ffi::OsString,
     fmt, fs, io,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
     time::{SystemTime, UNIX_EPOCH},
@@ -12,8 +12,12 @@ use std::{
 use yar_compiler::{
     compile::{CompileOptions, Unit, compile_path, compile_test_path},
     diag,
+    lock_graph::{
+        merge_lock_entries_for_update, reconcile_lock_entries, requires_lock,
+        validate_lock_entries_for_update, verify_locked_dependency_manifest,
+    },
     manifest::{
-        Dependency, LOCK_FILE, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
+        Dependency, LOCK_FILE, LockEntry, MANIFEST_FILE, Manifest, ManifestError, PackageInfo,
         cache_dir_from_env, fetch_locked_dependency, is_cached, read_lock_file, read_manifest,
         resolve_dependencies, to_lock_entries, valid_alias, write_lock_file, write_manifest,
     },
@@ -187,13 +191,10 @@ fn run_add(args: &[OsString]) -> Result<(), CliError> {
     let dependency = parse_dependency_args(&args[1..])?;
 
     let mut manifest = read_or_create_manifest()?;
-    let is_local = dependency.is_local();
     manifest.dependencies.insert(alias.to_string(), dependency);
     write_manifest_file(Path::new(MANIFEST_FILE), &manifest)?;
     println!("added dependency {alias:?}");
-    if !is_local {
-        update_lock_file()?;
-    }
+    update_lock_file()?;
     Ok(())
 }
 
@@ -217,15 +218,51 @@ fn run_fetch(args: &[OsString]) -> Result<(), CliError> {
     if !args.is_empty() {
         return Err(CliError::usage("usage: yar fetch"));
     }
-    let entries = read_lock_file(LOCK_FILE)?;
+    let manifest = read_manifest(MANIFEST_FILE)?;
+    let root_dir = env::current_dir()?;
+    let needs_lock = requires_lock(&root_dir, &manifest)?;
+    let entries = match read_lock_file(LOCK_FILE) {
+        Ok(entries) => entries,
+        Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound && !needs_lock => {
+            Vec::new()
+        }
+        Err(err) => {
+            return Err(CliError::other(format!(
+                "yar.lock is invalid: {err}; run 'yar lock'"
+            )));
+        }
+    };
+    reconcile_lock_entries(&root_dir, &manifest, &entries).map_err(|err| {
+        CliError::other(format!(
+            "yar.toml and yar.lock do not describe one valid dependency graph (run 'yar lock'): {err}"
+        ))
+    })?;
+    if entries.is_empty() {
+        println!("all dependencies fetched");
+        return Ok(());
+    }
     let cache_dir = cache_dir_from_env()?;
     for entry in entries {
         if !is_cached(&cache_dir, &entry.git, &entry.commit) {
             println!("fetching {}...", entry.name);
         }
         let dependency = entry.dependency();
-        fetch_locked_dependency(&cache_dir, &dependency, &entry.commit, &entry.hash)
-            .map_err(|err| CliError::other(format!("fetching {}: {err}", entry.name)))?;
+        fetch_locked_dependency(
+            &cache_dir,
+            &dependency,
+            &entry.commit,
+            &entry.hash,
+            |dependency_dir| {
+                verify_locked_dependency_manifest(dependency_dir, &entry.dependencies).map_err(
+                    |err| {
+                        ManifestError::Invalid(format!(
+                            "dependency manifest does not match yar.lock: {err}; run 'yar lock'"
+                        ))
+                    },
+                )
+            },
+        )
+        .map_err(|err| CliError::other(format!("fetching {}: {err}", entry.name)))?;
     }
     println!("all dependencies fetched");
     Ok(())
@@ -398,20 +435,18 @@ fn write_manifest_file(path: &Path, manifest: &Manifest) -> Result<(), CliError>
 
 fn update_lock_file() -> Result<(), CliError> {
     let manifest = read_manifest(MANIFEST_FILE)?;
-    if manifest
-        .dependencies
-        .values()
-        .all(|dependency| dependency.is_local())
-    {
+    let root_dir = env::current_dir()?;
+    if !requires_lock(&root_dir, &manifest)? {
         return remove_lock_file();
     }
-
     let cache_dir = cache_dir_from_env()?;
-    let root_dir = env::current_dir()?;
     let resolved = resolve_dependencies(&root_dir, &manifest, &cache_dir)?;
     let entries = to_lock_entries(&resolved);
-    let content = write_lock_file(&entries);
-    fs::write(LOCK_FILE, content)?;
+    reconcile_lock_entries(&root_dir, &manifest, &entries)?;
+    if entries.is_empty() {
+        return remove_lock_file();
+    }
+    publish_lock_file(&entries)?;
     println!("yar.lock updated");
     Ok(())
 }
@@ -421,9 +456,34 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
     let Some(dependency) = manifest.dependencies.get(alias) else {
         return Err(CliError::other(format!("dependency {alias:?} not found")));
     };
+    if dependency.is_local() {
+        return Err(CliError::other(format!(
+            "dependency {alias:?} is a path dependency and has no independent locked revision; run 'yar lock'"
+        )));
+    }
+
+    let existing_entries = match read_lock_file(LOCK_FILE) {
+        Ok(entries) => entries,
+        Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
+            return update_lock_file();
+        }
+        Err(err) => {
+            return Err(CliError::other(format!(
+                "cannot selectively update an invalid or legacy yar.lock: {err}; run 'yar lock'"
+            )));
+        }
+    };
+    let root_dir = env::current_dir()?;
+    validate_lock_entries_for_update(&root_dir, &manifest, alias, &existing_entries).map_err(
+        |err| {
+            CliError::other(format!(
+                "cannot selectively update {alias:?}: {err}; run 'yar lock' to regenerate the full graph"
+            ))
+        },
+    )?;
 
     let mut selected_manifest = Manifest {
-        package: manifest.package,
+        package: manifest.package.clone(),
         dependencies: Default::default(),
     };
     selected_manifest
@@ -431,35 +491,25 @@ fn update_lock_file_for_alias(alias: &str) -> Result<(), CliError> {
         .insert(alias.to_string(), dependency.clone());
 
     let cache_dir = cache_dir_from_env()?;
-    let root_dir = env::current_dir()?;
     let resolved = resolve_dependencies(&root_dir, &selected_manifest, &cache_dir)?;
-    let mut updated_entries = to_lock_entries(&resolved);
-    let mut replaced_names = BTreeSet::from([alias.to_string()]);
-    replaced_names.extend(updated_entries.iter().map(|entry| entry.name.clone()));
-
-    let existing_entries = match read_lock_file(LOCK_FILE) {
-        Ok(entries) => entries,
-        Err(ManifestError::Io(err)) if err.kind() == io::ErrorKind::NotFound => {
-            if updated_entries.is_empty() {
-                println!("yar.lock updated");
-                return Ok(());
-            }
-            return update_lock_file();
-        }
-        Err(err) => return Err(err.into()),
-    };
-
-    let mut merged_entries = existing_entries
-        .into_iter()
-        .filter(|entry| !replaced_names.contains(&entry.name))
-        .collect::<Vec<_>>();
-    merged_entries.append(&mut updated_entries);
+    let updated_entries = to_lock_entries(&resolved);
+    let merged_entries = merge_lock_entries_for_update(
+        &root_dir,
+        &manifest,
+        alias,
+        &existing_entries,
+        &updated_entries,
+    )
+    .map_err(|err| {
+        CliError::other(format!(
+            "cannot selectively update {alias:?}: {err}; run 'yar lock' to regenerate the full graph"
+        ))
+    })?;
 
     if merged_entries.is_empty() {
         remove_lock_file()?;
     } else {
-        let content = write_lock_file(&merged_entries);
-        fs::write(LOCK_FILE, content)?;
+        publish_lock_file(&merged_entries)?;
     }
     println!("yar.lock updated");
     Ok(())
@@ -471,6 +521,52 @@ fn remove_lock_file() -> Result<(), CliError> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+fn publish_lock_file(entries: &[LockEntry]) -> Result<(), CliError> {
+    let content = write_lock_file(entries);
+    write_file_atomically(Path::new(LOCK_FILE), content.as_bytes())?;
+    Ok(())
+}
+
+fn write_file_atomically(path: &Path, content: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("yar.lock");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_path = parent.join(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
+    write_file_atomically_with_temp(path, &temp_path, content)
+}
+
+fn write_file_atomically_with_temp(
+    path: &Path,
+    temp_path: &Path,
+    content: &[u8],
+) -> io::Result<()> {
+    let mut temp = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp_path)?;
+    let write_result = temp.write_all(content).and_then(|()| temp.sync_all());
+    drop(temp);
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(temp_path);
+        return Err(err);
+    }
+
+    let result = fs::rename(temp_path, path);
+    if result.is_err() {
+        let _ = fs::remove_file(temp_path);
+    }
+    result
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -767,5 +863,31 @@ impl TempDir {
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_write_replaces_complete_files_and_preserves_old_content_on_failure() {
+        let dir = TempDir::new("yar-atomic-write-test").unwrap();
+        let path = dir.path().join("yar.lock");
+        fs::write(&path, "old").unwrap();
+
+        write_file_atomically(&path, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+
+        fs::write(&path, "old").unwrap();
+        let invalid_temp = dir.path().join("missing").join("yar.lock.tmp");
+        assert!(write_file_atomically_with_temp(&path, &invalid_temp, b"new").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+
+        let collision = dir.path().join("yar.lock.tmp");
+        fs::write(&collision, "owned elsewhere").unwrap();
+        assert!(write_file_atomically_with_temp(&path, &collision, b"new").is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(fs::read_to_string(&collision).unwrap(), "owned elsewhere");
     }
 }

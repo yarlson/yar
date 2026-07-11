@@ -231,18 +231,32 @@ Status: accepted
 Yar supports external dependencies through `yar.toml` manifests and `yar.lock`
 lock files. Dependencies are git repositories identified by short alias names.
 There is no central registry, no semver range resolution, and no parser changes.
-The dependency index is consulted between local and stdlib resolution during
-package loading. The index stores lock metadata; when a locked dependency is
-selected, its cache tree is verified before the path is returned or source is
-read. Missing or mismatched selected trees fail package loading, while unused
-or locally shadowed entries do not require a cache. Fresh fetches are verified
-before publication, and lock generation never
+The explicit `version = 1` lock graph records each git package's exact
+commit/hash and full alias/git/ref child edges. Git declarations in the root
+manifest and manifests of root path dependencies, plus every lock edge, must
+match lock nodes exactly before dependency cache or network access. Duplicate
+aliases or edges, missing nodes, cycles, source/ref conflicts, and unreachable
+nodes are rejected. There is no root override.
+
+The dependency index is global: every alias reachable in the reconciled graph
+may be imported by any loaded package, including a transitive alias not
+declared directly by the importer. It is consulted between local and stdlib
+resolution. When a locked dependency is selected, its cache tree is verified
+before its manifest or source is read, then its declared git dependencies are
+checked against the recorded child edges. Missing, mismatched, or
+edge-divergent selected trees fail package loading; unused or locally shadowed
+entries do not require a cache.
+
+Fresh fetches are verified before publication, and lock generation never
 derives a trusted hash from cache content that differs from the fresh checkout.
-Local path dependencies remain unhashed. Transitive dependencies are supported
-with conflict detection. The current flat lock is still indexed as written;
-duplicate package names and missing entries for declared git dependencies are
-not rejected, and exact manifest reachability and source-tuple reconciliation
-are not enforced.
+Local path dependencies remain live and unhashed and may be declared only in
+the root manifest. Their manifests may contribute git roots but may not declare
+another path dependency; locked git packages may not declare path dependencies
+either. A selected path alias must exist and cannot fall through to a
+same-named stdlib package. A targeted git update replaces its reachable graph,
+preserves nodes unrelated to the selected graph, refreshes compatible shared
+nodes, and prunes orphans; a targeted path update requires full `yar lock`
+reconciliation.
 
 ---
 

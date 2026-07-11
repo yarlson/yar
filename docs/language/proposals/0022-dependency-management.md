@@ -10,8 +10,8 @@ Add git-based dependency management to Yar via `yar.toml` manifest and
 The implemented version provides:
 
 - `yar.toml` manifest declaring project metadata and dependencies by alias
-- `yar.lock` lock file pinning git dependencies to exact commit SHAs and
-  content hashes
+- explicit `version = 1` `yar.lock` graph pinning git dependencies to exact
+  commit SHAs and content hashes and recording full source/ref child edges
 - alias-based import mapping (dependency alias becomes the top-level import
   path segment)
 - git-based fetching to a global user cache, with shallow clones for tags and
@@ -19,7 +19,9 @@ The implemented version provides:
 - SHA-256 lock hashes verified before cached source is loaded
 - temporary verification before newly fetched content is published
 - transitive dependency resolution with conflict detection
-- local path overrides for development workflows
+- exact manifest/lock reconciliation and reachable-closure validation before
+  dependency cache or network access
+- local path dependencies for development workflows
 - CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
 - compiler integration via a dependency index consulted between local and
   stdlib resolution
@@ -107,36 +109,58 @@ Invalid because `path` and `git` are mutually exclusive.
 - Each dependency has a short alias name that becomes the first segment of its
   import path in source code.
 - `yar lock` resolves all git dependencies, clones them, computes content
-  hashes, and writes `yar.lock`.
+  hashes, and writes a `version = 1` `yar.lock` graph. Each package node records
+  its alias, git URL, exact ref kind and value, resolved commit, content hash,
+  and full alias/git/ref edges to its git dependencies.
 - Lock generation hashes the fresh checkout. If an existing cache entry for the
   resolved commit differs, lock generation fails instead of trusting that
   cache content.
+- Before compilation reads dependency caches, and before `yar fetch` uses the
+  cache or network, Yar derives git roots from the root manifest and manifests
+  of its root path dependencies, then reconciles them with the lock graph. Root
+  declarations and child edges match nodes by alias, git URL, ref kind, and ref
+  value.
+- Duplicate package aliases or child edges, missing nodes, source/ref
+  mismatches, dependency cycles, and unreachable package nodes are errors.
+  Missing or unsupported lock versions are rejected with guidance to run
+  `yar lock`. Regeneration performs ordinary full resolution, so a moved tag or
+  branch can produce a different commit and the lock diff must be reviewed.
 - `yar fetch` verifies both existing entries and fresh temporary checkouts
   against `yar.lock`. A fresh entry is moved to its final cache path only after
-  its commit and content hash match.
+  its commit and content hash match. Each fetched manifest is also checked
+  against its package node's child edges.
 - During compilation, the package loader builds a dependency index from
   `yar.toml` and `yar.lock`. When a local import path is not found, the loader
   checks the dependency index before falling back to stdlib.
 - The dependency index stores lock metadata. When resolution selects a locked
   dependency, its cache tree is hash-verified before the path is returned or
-  source is parsed. Missing or corrupt selected entries stop package loading;
-  compilation performs no cache repair and does not substitute a same-named
-  stdlib package. Unused and locally shadowed entries do not require a cache.
+  its manifest or source is parsed. The verified manifest's git dependencies
+  must then exactly match the node's child edges. Missing, corrupt, or
+  edge-divergent selected entries stop package loading; compilation performs no
+  cache repair and does not substitute a same-named stdlib package. Unused and
+  locally shadowed entries do not require a cache or manifest read.
 - Cached git trees contain only real directories and regular files. Symlinks
   and special filesystem entries are rejected. Local path dependencies remain
   live, unhashed filesystem inputs.
-- The current flat lock remains the dependency-index input as written. It does
-  not encode dependency edges. Package loading does not reject duplicate
-  package names, prove that every declared git dependency has a matching lock
-  entry, reconstruct the manifest-reachable closure, or reconcile locked source
-  tuples with manifest declarations.
 - Resolution order: local → dependency → stdlib.
 - Local packages shadow dependencies. Dependencies shadow stdlib.
+- A selected dependency alias is authoritative. A missing declared path fails
+  loading instead of falling through to a same-named stdlib package.
+- All aliases in the validated reachable lock graph share one global
+  dependency index. Any loaded package may import a reachable transitive alias
+  even when that alias is not declared directly in its manifest.
 - Transitive dependencies are discovered by reading `yar.toml` in each
-  fetched dependency. Conflicts (same alias, different version) are errors
-  unless the root manifest provides an explicit override.
+  fetched dependency. Reusing an alias with a different git URL, ref kind, or
+  ref value is an error. There is no root override.
 - `path` dependencies are resolved directly from the filesystem and are not
-  written to `yar.lock`.
+  written to `yar.lock`. They may be declared only in the root manifest. A root
+  path dependency's manifest may declare git dependencies, but may not declare
+  another path dependency; neither may a locked git package.
+- `yar update <git-alias>` resolves a replacement graph for the selected root,
+  preserves unrelated nodes still reachable from unselected roots, merges
+  compatible shared nodes using the updated resolution, and prunes orphans. It
+  refuses to write if an unselected root is stale or a shared alias conflicts.
+  A targeted path update is rejected with guidance to run `yar lock`.
 
 ## 5. Type Rules
 
@@ -173,10 +197,10 @@ packages.
 
 - `load_package_graph()` constructs a `DependencyIndex` from `yar.toml` and
   `yar.lock` and gives it to `PackageLoader`.
-- `DependencyIndex::load()` stores locked metadata without requiring every
-  cache entry to exist.
-- `DependencyIndex::resolve()` verifies a locked cache tree when its alias is
-  selected, before exposing the path.
+- `DependencyIndex::load()` reconciles the complete lock graph, then stores all
+  reachable aliases without requiring every cache entry to exist.
+- `DependencyIndex::resolve()` verifies a selected locked cache tree, then its
+  manifest edges, before exposing the path.
 - `PackageLoader::load_package()` resolves through the dependency index when a
   local directory is not found, before the stdlib fallback.
 
@@ -191,6 +215,8 @@ None.
 - `crates/yar-compiler/src/manifest.rs` — git clone to cache, SHA-256 hash
   computation, pre-publication verification, transitive resolution, and
   conflict detection
+- `crates/yar-compiler/src/lock_graph.rs` — graph reconciliation, selected
+  manifest-edge verification, and targeted-update merge/prune behavior
 - `crates/yar-compiler/src/package.rs` — alias-to-path lookup for the package
   loader with selected locked-cache verification
 
@@ -248,6 +274,26 @@ algorithm. Exact pinning is simpler, deterministic without a solver, and
 appropriate for an early-stage language. MVS can be added later as a
 compatible extension.
 
+### Flat lock entries without dependency edges
+
+Rejected because a flat lock cannot distinguish a valid transitive package
+from an unreachable extra, prove missing children, or update one dependency
+without retaining stale descendants. Explicit child edges make the committed
+graph independently reconcilable without opening unused caches.
+
+### Per-package dependency visibility
+
+Restrict each package to aliases declared directly in its own manifest.
+Rejected for the current design because the loader intentionally exposes the
+validated reachable closure through one global alias index. Graph reachability
+controls lock membership; it does not create per-package import scopes.
+
+### Root dependency overrides
+
+Allow the root manifest to replace a transitive source/ref selection. Rejected
+because the graph uses one exact global identity per alias. Conflicting uses of
+an alias are errors regardless of where they are declared.
+
 ### Central registry
 
 A package registry like crates.io or npm. Rejected because it requires
@@ -292,9 +338,9 @@ None remaining. All design decisions are resolved in the implementation.
 ## 13. Decision
 
 Accepted. The alias-based, git-backed, exact-pinning design fits Yar's
-preference for explicitness and simplicity. The implementation is minimal:
-no parser changes, no type system changes, and one surgical integration point
-in the package loader.
+preference for explicitness and simplicity. The versioned lock graph makes the
+entire resolved closure explicit while preserving lazy cache access and
+requiring no parser, type-system, or runtime changes.
 
 ## 14. Implementation Checklist
 
@@ -303,6 +349,8 @@ in the package loader.
 - [x] `crates/yar-compiler/src/manifest.rs` — git clone, caching, hashing
 - [x] `crates/yar-compiler/src/manifest.rs` — transitive resolution, conflict
       detection
+- [x] `crates/yar-compiler/src/lock_graph.rs` — exact graph reconciliation,
+      selected-manifest verification, and targeted-update merging
 - [x] `crates/yar-compiler/src/package.rs` — alias-to-path index and compiler
       integration
 - [x] CLI commands in `crates/yar-cli/src/main.rs`

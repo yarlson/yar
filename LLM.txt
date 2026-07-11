@@ -882,18 +882,34 @@ local_lib = { path = "../my-local-lib" }
 
 - Alias becomes the import path: `import "http"`, `import "http/router"`
 - Version: exactly one of `tag`, `rev`, or `branch` per git dependency
-- `path` dependencies are local-only (not written to `yar.lock`)
+- `yar.lock` is an explicit `version = 1` graph: each git package node records
+  its exact commit/hash and full alias/git/ref child edges
+- Git dependencies in the root manifest and manifests of root path
+  dependencies, plus every child edge, must exactly match lock nodes before
+  dependency cache or network access
+- Duplicate aliases or child edges, missing nodes, cycles, and unreachable
+  nodes are rejected; missing/unsupported lock versions require `yar lock`
+- `path` dependencies are live and not written to `yar.lock`; only the root
+  manifest may declare them. Their manifests may declare git dependencies, but
+  may not declare another path dependency
+- A selected path alias must exist and does not fall through to a same-named
+  stdlib package
 - Transitive dependencies supported (each dep may have its own `yar.toml`)
-- Conflicts (same alias, different version) are errors unless root overrides
+- Conflicts (same alias, different git source, ref kind, or ref value) are
+  errors; there is no root override
+- Every reachable alias is globally importable through one dependency index,
+  including transitive aliases not directly declared by the importer
 - A selected locked git dependency is hash-verified before cached source is
-  read; missing or mismatched selected entries fail before stdlib fallback,
+  read, then its manifest is checked against the recorded child edges; missing,
+  mismatched, or edge-divergent selected entries fail before stdlib fallback,
   while unused or locally shadowed entries do not require a cache
 - `yar fetch` verifies existing entries and verifies fresh clones before
-  publishing them; cached git trees reject symlinks and special files
+  publishing them; cached git trees reject symlinks and special files. A graph
+  with no git roots needs no lock file or dependency cache
 - Local `path` dependencies remain unhashed filesystem inputs
-- The flat lock is still indexed as written; duplicate package names, missing
-  entries for declared git dependencies, manifest reachability, and exact
-  source/ref agreement are not validated
+- `yar update <git-alias>` merges the replacement graph, preserves unrelated
+  reachable nodes, refreshes compatible shared nodes, and prunes orphans;
+  targeted path updates require `yar lock`
 
 **Commands:**
 ```bash
@@ -904,6 +920,7 @@ yar remove http
 yar lock                                          # regenerate yar.lock
 yar fetch                                         # download to cache
 yar update                                        # re-resolve all deps
+yar update http                                   # update one git dependency graph
 ```
 
 Cache: `$HOME/Library/Caches/yar/deps/` on macOS, otherwise

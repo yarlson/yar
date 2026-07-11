@@ -15,9 +15,23 @@
 - Imports resolve from local packages under the entry root first, then check
   the dependency index built from `yar.toml` and `yar.lock`, and fall back to
   the embedded stdlib only when both local and dependency paths are absent.
+- A selected dependency entry is authoritative; a missing declared path does
+  not fall through to a same-named stdlib package.
+- A versioned `yar.lock` records the complete reachable git dependency graph.
+  Git declarations in the root manifest and manifests of root path
+  dependencies, plus lock child edges, must agree on alias, git URL, ref kind,
+  and ref value before cache or network access.
+- Lock graphs reject duplicate aliases or edges, missing nodes, dependency
+  cycles, and unreachable nodes. There is no root dependency override; one
+  alias cannot identify different source/ref tuples in the same graph.
+- Reachable lock aliases share one global dependency index and may be imported
+  without being declared directly by each importing package.
 - When resolution selects a locked git dependency, its cache tree is verified
-  against `yar.lock` before cached source is read. Unused or locally shadowed
-  entries do not require a cache; local path dependencies remain unhashed.
+  against `yar.lock` before cached source is read. Its manifest is then checked
+  against the node's recorded child edges. Unused or locally shadowed entries
+  do not require a cache. Local path dependencies remain unhashed, may be
+  declared only in the root manifest, and may not be nested through another
+  path dependency or a locked git package.
 - Imported names stay package-qualified; imports do not inject unqualified
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary
