@@ -111,11 +111,11 @@ p.x += 1
 - Package ownership uses the declaration's resolved origin-safe package identity,
   not the import spelling or displayed package name.
 
-The construction restriction does not yet cover zero-value declarations or
-aggregate zero-initialization. For example, `var value imported.Type` remains
-accepted when `Type` has private fields because it does not use a struct literal.
-Closing those loopholes belongs to the separate zero-value/initialization design
-work.
+Package-relative implicit-zero checking applies the same ownership boundary to
+initializer-free declarations, nested aggregates, and omitted fields or array
+tails. Importers cannot synthesize private representations without a literal;
+the declaring package may zero its own private fields when their types are
+recursively zeroable.
 
 ## 5. Type Rules
 
@@ -193,8 +193,9 @@ representations and creates a second visibility mechanism.
 
 ### Allow external literals to initialize only public fields
 
-Rejected because omitted private fields currently receive zero values, allowing
-external code to forge package-owned state.
+Rejected because allowing any external literal for a private-field struct would
+create a second construction rule. Omitted values are checked recursively, but
+the whole literal remains package-owned when any field is private.
 
 ### Make enum payload fields private by default too
 

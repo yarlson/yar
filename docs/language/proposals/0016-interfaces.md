@@ -87,6 +87,8 @@ matching stays exact and `Counter` does not satisfy a `*Counter` method set.
 - Interface method calls use dynamic dispatch through the interface value.
 - Zero-valued interface values are allowed and panic on method call with
   `nil interface method call`.
+- Interfaces are implicitly zeroable in every package because their nil value
+  contains no hidden concrete representation.
 
 ## 5. Type Rules
 

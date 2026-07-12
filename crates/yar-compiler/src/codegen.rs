@@ -6356,6 +6356,7 @@ mod tests {
         "testdata/maps_keys/main.yar",
         "testdata/match_else/main.yar",
         "testdata/methods/main.yar",
+        "testdata/nil_interface/main.yar",
         "testdata/nil_pointer/main.yar",
         "testdata/panic/main.yar",
         "testdata/pointer_escape/main.yar",
@@ -6378,6 +6379,7 @@ mod tests {
         "testdata/testing_basic/main.yar",
         "testdata/testing_fail/main.yar",
         "testdata/unhandled_error/main.yar",
+        "testdata/zero_initialization/main.yar",
     ];
 
     #[test]

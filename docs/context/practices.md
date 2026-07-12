@@ -75,9 +75,16 @@
   interface, or enum types. Private fields may use them.
 - Generic instantiation preserves field visibility and declaration-package
   ownership. Function literals retain their defining package's private-field
-  authority. Zero-value declarations and aggregate zero-initialization of
-  imported private-field structs remain separate zero-value/initialization
-  design work.
+  authority.
+- Every source-level implicit zero is checked recursively at the use site.
+  Initializer-free locals, omitted struct fields, and omitted fixed-array tails
+  require an accessible zero value for the synthesized type.
+- Scalars, strings, pointers, slices, interfaces, and channels have implicit
+  zero values. Maps, functions, errors, and enums require explicit values;
+  errorable values must be handled before ordinary binding.
+- Struct zeroability follows field ownership and field types: a package may
+  zero its own private fields, but cannot synthesize another package's private
+  representation. Generic structs retain their declaration package as owner.
 - Import cycles are rejected.
 - Package lowering rewrites package-local and imported declarations to
   canonical origin-safe names before checking and code generation. Equal

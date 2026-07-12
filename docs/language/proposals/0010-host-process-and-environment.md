@@ -68,8 +68,9 @@ environment. Captured `run` uses null stdin; `run_inherit` inherits stdin.
 
 A zero capture cap allows exactly zero bytes; it does not mean unlimited.
 `process.run` validates `Limits` again as a host-boundary defense and because
-zero-value or aggregate initialization can still produce invalid `Limits`
-values even though its fields are now private.
+the owning `process` package may still construct its own zero-valued private
+representation. Importing packages cannot implicitly zero `Limits` or
+`Cancellation`; they must use `process.limits` and `process.cancellation`.
 
 The cancellation signal is checked before launch. After the host creates and
 contains the child, the deadline and cancellation signal cover execution,

@@ -160,10 +160,26 @@
   private field access and literals.
 - Enum payload fields are unchanged and inherently public; `pub` is not part of
   enum payload field syntax and produces a targeted parse diagnostic.
-- A zero-value declaration such as `var value imported.Type` and aggregate
-  zero-initialization are not struct literals and can still create values whose
-  types have private fields. Closing those loopholes belongs to separate
-  zero-value/initialization design work.
+- Implicit zero initialization is checked at its source use. It applies to an
+  initializer-free `var`, each omitted struct field, and an omitted fixed-array
+  tail.
+- `bool`, `i32`, `i64`, `str`, pointers, slices, interfaces, and channels have
+  implicit zero values. Zero interfaces retain the nil-interface method-call
+  trap; zero channels are closed, so send and receive return `error.Closed` and
+  close is a no-op.
+- Maps, function values, errors, and enums require explicit values. Empty map
+  and slice literals are explicit constructors. Errorable values have no
+  implicit zero and must be handled before ordinary binding.
+- A positive-length array is implicitly zeroable only when its element type is.
+  A zero-length array requires no element value.
+- A struct is implicitly zeroable in a package only when every field type is
+  recursively zeroable there and every private field belongs to that package.
+  Owning packages may zero their own private and resource structs; importing
+  packages cannot zero structs with private fields.
+- Generic structs apply the same rule to instantiated field types while private
+  field ownership remains with the generic declaration package.
+- Explicit initializers, fully initialized arrays, and explicitly initialized
+  struct fields do not require an implicit zero value for their value type.
 - Duplicate top-level names are rejected package-wide, including across files.
 - Import cycles are rejected.
 - Enum case names must be unique within their enum.

@@ -93,11 +93,17 @@ Filesystem stream failures use ordinary errors:
 - `error.Closed`
 - `fs.IO`
 
+The private registry field blocks external literals and implicit-zero
+construction of `fs.File`; callers use `open_read` or `open_write`.
+
 ### `net`
 
 `Conn` and `Listener` are public package-owned named structs. Their registry
 fields are private under the general struct visibility rules, so external code
-cannot select those fields or construct resource literals.
+cannot select those fields or construct resource literals. Package-relative
+implicit-zero checking also prevents importing packages from synthesizing these
+resource representations through initializer-free locals, wrappers, arrays, or
+omitted aggregate slots.
 
 ```yar
 pub fn listen_stream(host str, port i32) !Listener

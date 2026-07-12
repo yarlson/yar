@@ -203,6 +203,21 @@ Locals:
 - may be reassigned after declaration
 - cannot be redeclared in the same scope
 
+An initializer-free `var name T` is valid only when `T` has an implicit zero
+value accessible in the current package. Implicit zeros are:
+
+- `false` for `bool`, `0` for `i32` and `i64`, and `""` for `str`
+- `nil` for pointers
+- an empty nil-backed slice
+- a nil interface
+- a closed nil channel
+- a recursively eligible fixed array or struct
+
+Maps, function values, errors, and enums require explicit initializers. Use an
+empty map literal such as `map[str]i32{}` when an initialized empty map is
+needed. Errorable `!T` values have no implicit zero and must be handled before
+ordinary local binding.
+
 ## Structs
 
 User-defined structs are declared at top level:
@@ -239,10 +254,17 @@ Generic structs preserve each declared field's visibility in every concrete
 instantiation. Package ownership follows the generic declaration, not the
 instantiating package.
 
-The current restriction applies to struct literals, not every zero-initialized
-path. `var value imported.Type` and aggregate zero-initialization can still
-produce values whose types have private fields. Closing those construction
-loopholes belongs to separate zero-value/initialization design work.
+Implicit zero construction follows the same package boundary recursively. A
+struct is implicitly zeroable only when every field type is zeroable in the
+current package and every private field belongs to that package. Owning packages
+may zero their own private and resource structs. Importers cannot zero structs
+with private fields, including through containing arrays, wrappers, or omitted
+aggregate slots.
+
+Each omitted struct-literal field must have an accessible implicit zero. Fields
+with explicit values do not impose that requirement. Generic structs apply the
+rule to instantiated field types while ownership remains with the generic
+declaration package.
 
 Recursive data is modeled through pointer indirection:
 
@@ -332,6 +354,10 @@ enum Expr {
 }
 ```
 
+Enums have no implicit zero case. An initializer-free enum local is invalid;
+source code must choose a case explicitly. Omitted enum payload fields follow
+the same implicit-zero rule as omitted struct fields.
+
 Supported enum operations:
 
 - plain cases such as `TokenKind.Ident`
@@ -397,6 +423,12 @@ Supported array operations:
 Array reads, assignments, and element address-taking are bounds-checked at
 runtime and trap with `runtime failure: array index out of range`.
 
+A zero-length array is implicitly zeroable for any element type. A
+positive-length array is implicitly zeroable only when its element type is.
+Array literals may use non-zeroable element types when every element is
+provided; an omitted tail requires an accessible implicit zero for the element
+type.
+
 ## Slices
 
 Slices are supported:
@@ -426,6 +458,9 @@ and `append` may reuse that storage or allocate a new backing buffer. The
 runtime may reclaim backing storage after it becomes unreachable.
 
 Slice indexing and slicing are bounds-checked at runtime and trap on invalid ranges.
+
+The implicit zero slice is empty and nil-backed regardless of element type.
+An empty slice literal is an explicit empty value.
 
 ## Maps
 
@@ -457,6 +492,9 @@ Supported map operations:
 
 Map storage is runtime-managed. Unreachable maps and their internal storage may
 be reclaimed by the runtime collector.
+
+Maps have no implicit zero value. Use an explicit map literal, including
+`map[K]V{}` for an initialized empty map.
 
 Supported key types: `bool`, `i32`, `i64`, `str`.
 
@@ -725,6 +763,8 @@ Channel rules:
 - taskgroup and channel element sizes use a checked signed 64-bit runtime ABI
 - channels support `==` and `!=` identity comparison
 - `chan_send` and `chan_recv` use `error.Closed` for closed-channel failures
+- the implicit zero channel is closed: send and receive return `error.Closed`,
+  and close is a no-op
 - the native-thread runtime supports Linux, macOS, and Windows GNU
 - unreachable channel tokens finalize their synchronized external state;
   buffered values remain collector roots only while the channel is live

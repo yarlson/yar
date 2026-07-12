@@ -78,6 +78,9 @@ while IFS= read -r fixture; do
     testdata/invalid_string_builder_handle/main.yar)
       expected_stderr="runtime failure: invalid string builder"
       ;;
+    testdata/nil_interface/main.yar)
+      expected_stderr="nil interface method call"
+      ;;
     testdata/nil_pointer/main.yar)
       expected_stderr="runtime failure: nil pointer dereference"
       ;;
