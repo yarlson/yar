@@ -44,9 +44,14 @@ case "$target" in
     export AR_aarch64_unknown_linux_gnu="zig ar"
     ;;
   x86_64-pc-windows-gnu)
+    if ! command -v llvm-dlltool >/dev/null 2>&1; then
+      echo "llvm-dlltool is required to build the Windows GNU runtime bundle" >&2
+      exit 1
+    fi
     export CC_x86_64_pc_windows_gnu="$PWD/scripts/zig-cc.sh"
     export CFLAGS_x86_64_pc_windows_gnu="-target x86_64-windows-gnu"
     export AR_x86_64_pc_windows_gnu="zig ar"
+    export RUSTFLAGS="${RUSTFLAGS:-} -C dlltool=llvm-dlltool"
     ;;
 esac
 

@@ -28,6 +28,9 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 capture_script="$tmp_dir/capture.sh"
 inherit_script="$tmp_dir/inherit.sh"
+timeout_script="$tmp_dir/timeout.sh"
+limit_script="$tmp_dir/limit.sh"
+cancel_script="$tmp_dir/cancel.sh"
 cat >"$capture_script" <<'EOF'
 #!/usr/bin/env sh
 printf 'captured stdout\n'
@@ -40,7 +43,19 @@ printf 'inherit stdout\n'
 printf 'inherit stderr\n' >&2
 exit 3
 EOF
-chmod +x "$capture_script" "$inherit_script"
+cat >"$timeout_script" <<'EOF'
+#!/usr/bin/env sh
+sleep 1
+EOF
+cat >"$limit_script" <<'EOF'
+#!/usr/bin/env sh
+printf 'four'
+EOF
+cat >"$cancel_script" <<'EOF'
+#!/usr/bin/env sh
+sleep 1
+EOF
+chmod +x "$capture_script" "$inherit_script" "$timeout_script" "$limit_script" "$cancel_script"
 
 find testdata -name main.yar | sort >"$fixtures"
 
@@ -99,7 +114,9 @@ while IFS= read -r fixture; do
     fi
     continue
   elif [ "$fixture" = "testdata/stdlib_process_env/main.yar" ]; then
-    if ! YAR_PROCESS_ENV_TEST="env ok" "$output" "$capture_script" "$inherit_script" >"$stdout" 2>"$stderr"; then
+    if ! YAR_GC_HEAP_TARGET_BYTES=1024 YAR_PROCESS_ENV_TEST="env ok" \
+      "$output" "$capture_script" "$inherit_script" \
+      "$timeout_script" "$limit_script" "$cancel_script" >"$stdout" 2>"$stderr"; then
       echo "fixture failed: $fixture" >&2
       echo "stdout:" >&2
       cat "$stdout" >&2

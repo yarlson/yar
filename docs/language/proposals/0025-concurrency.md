@@ -335,8 +335,10 @@ thread. A program with no taskgroups retains the single-threaded behavior.
   task is unjoined, then terminate the whole process without waiting for output,
   shutdown handlers, or tasks. Single-threaded failures retain best-effort
   locked stderr diagnostics.
-- **`process.run`**: safe to call concurrently (each call creates a separate
-  child process). `process.args()` returns a snapshot and is safe.
+- **Process execution**: each call owns a separately contained child tree.
+  Explicit deadlines, cancellation signals, and capture caps bound the call;
+  blocking consumes only the calling native task thread. `process.args()`
+  returns a snapshot and is safe.
 - **`env.lookup`**: reads from the process environment through the Rust host
   runtime. Yar currently exposes no environment-mutation or timezone API.
 
@@ -763,8 +765,8 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 | Function              | Safe?     | Change needed                                                                                                                                                                                                                                                                                               |
 | --------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `process.args`        | Yes       | Reads `yar_host_argc`/`yar_host_argv` which are set once at startup and never modified. Safe for concurrent reads.                                                                                                                                                                                          |
-| `process.run`         | Partially | The process creation and wait logic is safe (OS handles separate child processes). However, the POSIX implementation calls `getenv("TMPDIR")` for temp file creation — same fix as `fs.temp_dir` (use cached value). Parks task, submits to I/O thread pool.                                                |
-| `process.run_inherit` | Partially | Parks task, submits to I/O thread pool. Multiple tasks running child processes with inherited stdio will produce interleaved output on stdout/stderr. This is the programmer's responsibility — the runtime cannot prevent it because the child processes write directly to the inherited file descriptors. |
+| `process.run`         | Yes | Uses explicit timeout, cancellation, and independent capture caps. Containment cleanup completes before the blocked calling task resumes. |
+| `process.run_inherit` | Yes | Uses explicit timeout and cancellation. Concurrent inherited children may interleave output because they write directly to inherited descriptors. |
 
 ### Host intrinsics: `stdio` package
 
@@ -1210,10 +1212,12 @@ values, timezone-data ownership and versioning, Windows/IANA mapping, and DST
 gap/fold behavior. No future design may implement conversion by mutating
 process-global `TZ` state.
 
-### Child process waiting: I/O thread pool
+### Child process waiting in the deferred M:N design
 
-**Decision**: `process.run` submits `waitpid` to the I/O thread pool. The
-calling task is parked until the child exits.
+The implemented native-thread runtime blocks only the calling task thread and
+uses platform process-group or Job Object containment. A future M:N runtime
+would move the same bounded operation to an I/O thread pool so its worker
+thread can run other tasks.
 
 **Research findings**:
 
@@ -1223,7 +1227,7 @@ calling task is parked until the child exits.
 - However, `process.run` in Yar also captures stdout/stderr, which requires
   reading from pipes. Pipe reads can be integrated with the netpoller (pipes
   are pollable on both Linux and macOS).
-- The simplest correct approach for v1: submit the entire `process.run`
+- The simplest M:N approach: submit the entire `process.run`
   operation (fork + exec + pipe reads + waitpid) to an I/O thread. The task
   is parked and resumed when the I/O thread signals completion. This avoids
   splitting the operation across poller and thread pool.

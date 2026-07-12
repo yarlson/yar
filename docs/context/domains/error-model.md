@@ -76,9 +76,10 @@
 - Filesystem intrinsics contribute stable host error names when they are used:
   `AlreadyExists`, `Closed`, `IO`, `InvalidArgument`, `InvalidPath`,
   `NotFound`, and `PermissionDenied`.
-- Process and environment intrinsics contribute stable host error names when
-  they are used: `IO`, `InvalidArgument`, `NotFound`, and
-  `PermissionDenied`.
+- Process intrinsics contribute stable host error names when they are used:
+  `Cancelled`, `IO`, `InvalidArgument`, `LimitExceeded`, `NotFound`,
+  `PermissionDenied`, and `Timeout`. Environment intrinsics contribute `IO`,
+  `InvalidArgument`, `NotFound`, and `PermissionDenied`.
 - Networking intrinsics contribute stable host error names when they are used:
   `AddrInUse`, `Closed`, `ConnectionRefused`, `ConnectionReset`, `IO`,
   `InvalidArgument`, `NotFound`, `PermissionDenied`, and `Timeout`.

@@ -4,7 +4,12 @@ use std::{
     ffi::{OsStr, OsString},
     fmt,
     io::{self, Read},
-    process::{Command, ExitStatus, Output, Stdio},
+    process::{ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -12,8 +17,9 @@ use std::{
 use process_wrap::std::{ChildWrapper, CommandWrap};
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::os::unix::{io::AsRawFd, process::CommandExt};
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CAPTURE_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 const TERMINATION_GRACE: Duration = Duration::from_secs(5);
 #[cfg(unix)]
@@ -535,8 +541,19 @@ pub enum ProcessError {
         program: OsString,
         timeout: Duration,
     },
+    OutputLimitExceeded {
+        program: OsString,
+        stream: &'static str,
+        limit: usize,
+    },
+    Cancelled {
+        program: OsString,
+    },
     #[cfg(unix)]
-    Interrupted { program: OsString, signal: i32 },
+    Interrupted {
+        program: OsString,
+        signal: i32,
+    },
     #[cfg(unix)]
     SignalSetup {
         program: OsString,
@@ -598,6 +615,20 @@ impl fmt::Display for ProcessError {
                 program.to_string_lossy(),
                 format_duration(*timeout)
             ),
+            ProcessError::OutputLimitExceeded {
+                program,
+                stream,
+                limit,
+            } => write!(
+                f,
+                "{stream} from process {:?} exceeded the {limit}-byte capture limit",
+                program.to_string_lossy()
+            ),
+            ProcessError::Cancelled { program } => write!(
+                f,
+                "operation running {:?} was cancelled",
+                program.to_string_lossy()
+            ),
             #[cfg(unix)]
             ProcessError::Interrupted { program, signal } => write!(
                 f,
@@ -632,7 +663,9 @@ impl Error for ProcessError {
             | ProcessError::Wait { source, .. }
             | ProcessError::Terminate { source, .. }
             | ProcessError::Capture { source, .. } => Some(source),
-            ProcessError::TimedOut { .. } => None,
+            ProcessError::TimedOut { .. }
+            | ProcessError::OutputLimitExceeded { .. }
+            | ProcessError::Cancelled { .. } => None,
             #[cfg(unix)]
             ProcessError::Interrupted { .. } => None,
             #[cfg(unix)]
@@ -650,33 +683,116 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-pub fn output(mut command: Command, deadline: Deadline) -> Result<Output, ProcessError> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureLimits {
+    stdout: usize,
+    stderr: usize,
+}
+
+impl CaptureLimits {
+    pub const fn new(stdout: usize, stderr: usize) -> Self {
+        Self { stdout, stderr }
+    }
+
+    const fn unlimited() -> Self {
+        Self::new(usize::MAX, usize::MAX)
+    }
+}
+
+pub fn output(command: Command, deadline: Deadline) -> Result<Output, ProcessError> {
+    output_impl(
+        command,
+        deadline,
+        CaptureLimits::unlimited(),
+        || false,
+        true,
+    )
+}
+
+pub fn output_with_control<F>(
+    command: Command,
+    deadline: Deadline,
+    limits: CaptureLimits,
+    cancelled: F,
+) -> Result<Output, ProcessError>
+where
+    F: FnMut() -> bool,
+{
+    output_impl(command, deadline, limits, cancelled, false)
+}
+
+fn output_impl<F>(
+    mut command: Command,
+    deadline: Deadline,
+    limits: CaptureLimits,
+    mut cancelled: F,
+    forward_signals: bool,
+) -> Result<Output, ProcessError>
+where
+    F: FnMut() -> bool,
+{
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let program = command.get_program().to_owned();
-    let mut child = spawn(command, deadline, &program)?;
-    let stdout = spawn_reader(child.child_mut().stdout().take(), "stdout", &program)?;
-    let stderr = match spawn_reader(child.child_mut().stderr().take(), "stderr", &program) {
+    if cancelled() {
+        return Err(ProcessError::Cancelled { program });
+    }
+    let controlled = !forward_signals;
+    let mut child = spawn(command, deadline, &program, forward_signals, controlled)?;
+    let (event_tx, event_rx) = mpsc::channel();
+    let stdout = match spawn_reader(
+        child.child_mut().stdout().take(),
+        "stdout",
+        limits.stdout,
+        event_tx.clone(),
+        &program,
+    ) {
+        Ok(stdout) => stdout,
+        Err(error) => {
+            child.terminate(&program)?;
+            return Err(error);
+        }
+    };
+    let stderr = match spawn_reader(
+        child.child_mut().stderr().take(),
+        "stderr",
+        limits.stderr,
+        event_tx,
+        &program,
+    ) {
         Ok(stderr) => stderr,
         Err(error) => {
-            let _ = child.terminate(&program);
-            drop(stdout);
+            child.terminate(&program)?;
+            cleanup_reader(stdout, "stdout", &program)?;
             return Err(error);
         }
     };
 
-    let status = match wait(&mut child, deadline, &program) {
+    let status = match wait(
+        &mut child,
+        deadline,
+        &program,
+        &mut cancelled,
+        Some(&event_rx),
+        controlled,
+    ) {
         Ok(status) => status,
         Err(error) => {
-            drop(stdout);
-            drop(stderr);
+            cleanup_readers(stdout, stderr, &program)?;
             return Err(error);
         }
     };
-    let stdout = join_reader(stdout, "stdout", &program, deadline, &mut child)?;
-    let stderr = join_reader(stderr, "stderr", &program, deadline, &mut child)?;
+    let (stdout, stderr) = join_readers(
+        stdout,
+        stderr,
+        &program,
+        deadline,
+        &mut child,
+        &mut cancelled,
+        &event_rx,
+    )?;
     Ok(Output {
         status,
         stdout,
@@ -685,16 +801,54 @@ pub fn output(mut command: Command, deadline: Deadline) -> Result<Output, Proces
 }
 
 pub fn status(command: Command, deadline: Deadline) -> Result<ExitStatus, ProcessError> {
+    status_impl(command, deadline, || false, true)
+}
+
+pub fn status_with_control<F>(
+    command: Command,
+    deadline: Deadline,
+    cancelled: F,
+) -> Result<ExitStatus, ProcessError>
+where
+    F: FnMut() -> bool,
+{
+    status_impl(command, deadline, cancelled, false)
+}
+
+fn status_impl<F>(
+    command: Command,
+    deadline: Deadline,
+    mut cancelled: F,
+    forward_signals: bool,
+) -> Result<ExitStatus, ProcessError>
+where
+    F: FnMut() -> bool,
+{
     let program = command.get_program().to_owned();
-    let mut child = spawn(command, deadline, &program)?;
-    wait(&mut child, deadline, &program)
+    if cancelled() {
+        return Err(ProcessError::Cancelled { program });
+    }
+    let controlled = !forward_signals;
+    let mut child = spawn(command, deadline, &program, forward_signals, controlled)?;
+    wait(
+        &mut child,
+        deadline,
+        &program,
+        &mut cancelled,
+        None,
+        controlled,
+    )
 }
 
 fn spawn(
     command: Command,
     deadline: Deadline,
     program: &OsStr,
+    forward_signals: bool,
+    controlled: bool,
 ) -> Result<ChildGuard, ProcessError> {
+    #[cfg(windows)]
+    let _ = forward_signals;
     if deadline.expired(Instant::now()) {
         return Err(ProcessError::TimedOut {
             program: program.to_owned(),
@@ -703,7 +857,7 @@ fn spawn(
     }
 
     #[cfg(unix)]
-    let signals = if deadline.has_limit() {
+    let signals = if deadline.has_limit() && forward_signals {
         Some(
             signal_dispatch::subscribe().map_err(|source| ProcessError::SignalSetup {
                 program: program.to_owned(),
@@ -717,24 +871,40 @@ fn spawn(
     #[cfg(unix)]
     let command = {
         let mut command = command;
-        if deadline.has_limit() {
+        if deadline.has_limit() || controlled {
             command.process_group(0);
         }
         command
     };
 
     let mut command = CommandWrap::from(command);
-    if deadline.has_limit() {
+    if deadline.has_limit() || controlled {
         #[cfg(windows)]
         command.wrap(windows_job::JobObject::default());
     }
-    let child = command
+    #[allow(unused_mut)]
+    let mut child = command
         .spawn()
         .map_err(|source| spawn_error(program, source))?;
     #[cfg(unix)]
-    let process_group = deadline
-        .has_limit()
-        .then(|| i32::try_from(child.id()).expect("process ID exceeds i32"));
+    let process_group = if deadline.has_limit() || controlled {
+        let process_id = i32::try_from(child.id()).expect("process ID exceeds i32");
+        // SAFETY: the child is live and its process ID came from `spawn`.
+        let actual_group = unsafe { libc::getpgid(process_id) };
+        if actual_group != process_id {
+            let _ = child.start_kill();
+            let _ = child.wait();
+            return Err(ProcessError::Start {
+                program: program.to_owned(),
+                source: io::Error::other(format!(
+                    "child process group {actual_group} does not match process ID {process_id}"
+                )),
+            });
+        }
+        Some(process_id)
+    } else {
+        None
+    };
     Ok(ChildGuard {
         child: Some(child),
         #[cfg(unix)]
@@ -762,8 +932,11 @@ fn wait(
     child: &mut ChildGuard,
     deadline: Deadline,
     program: &OsStr,
+    cancelled: &mut impl FnMut() -> bool,
+    reader_events: Option<&mpsc::Receiver<ReaderEvent>>,
+    controlled: bool,
 ) -> Result<ExitStatus, ProcessError> {
-    if !deadline.has_limit() {
+    if !deadline.has_limit() && !controlled {
         return child.wait(program);
     }
 
@@ -771,6 +944,24 @@ fn wait(
     let mut interruption: Option<(i32, Instant)> = None;
     loop {
         let now = Instant::now();
+
+        if cancelled() {
+            child.terminate(program)?;
+            return Err(ProcessError::Cancelled {
+                program: program.to_owned(),
+            });
+        }
+
+        if let Some(ReaderEvent::LimitExceeded { stream, limit }) =
+            reader_events.and_then(|events| events.try_iter().next())
+        {
+            child.terminate(program)?;
+            return Err(ProcessError::OutputLimitExceeded {
+                program: program.to_owned(),
+                stream,
+                limit,
+            });
+        }
 
         #[cfg(unix)]
         let pending_signals = child
@@ -843,53 +1034,184 @@ fn wait(
 fn spawn_reader<R>(
     pipe: Option<R>,
     stream: &'static str,
+    limit: usize,
+    events: mpsc::Sender<ReaderEvent>,
     program: &OsStr,
-) -> Result<Option<JoinHandle<io::Result<Vec<u8>>>>, ProcessError>
+) -> Result<Option<ReaderHandle>, ProcessError>
+where
+    R: CapturePipe,
+{
+    if let Some(pipe) = pipe.as_ref() {
+        pipe.configure().map_err(|source| ProcessError::Capture {
+            program: program.to_owned(),
+            stream,
+            source,
+        })?;
+    }
+    spawn_reader_inner(pipe, stream, limit, events, program)
+}
+
+fn spawn_reader_inner<R>(
+    pipe: Option<R>,
+    stream: &'static str,
+    limit: usize,
+    events: mpsc::Sender<ReaderEvent>,
+    program: &OsStr,
+) -> Result<Option<ReaderHandle>, ProcessError>
 where
     R: Read + Send + 'static,
 {
     let Some(mut pipe) = pipe else {
         return Ok(None);
     };
-    thread::Builder::new()
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader_stop = Arc::clone(&stop);
+    let join = thread::Builder::new()
         .name(format!("yar-{stream}-reader"))
         .spawn(move || {
             let mut output = Vec::new();
-            pipe.read_to_end(&mut output)?;
+            let mut buffer = [0_u8; 8192];
+            let mut limit_reported = false;
+            loop {
+                if reader_stop.load(Ordering::Acquire) {
+                    return Ok(output);
+                }
+                let count = match pipe.read(&mut buffer) {
+                    Ok(count) => count,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if reader_stop.load(Ordering::Acquire) {
+                            return Ok(output);
+                        }
+                        thread::sleep(POLL_INTERVAL);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                if count == 0 {
+                    break;
+                }
+                let retained = limit.saturating_sub(output.len()).min(count);
+                if retained > 0 {
+                    output.try_reserve(retained).map_err(io::Error::other)?;
+                    output.extend_from_slice(&buffer[..retained]);
+                }
+                if retained < count && !limit_reported {
+                    limit_reported = true;
+                    let _ = events.send(ReaderEvent::LimitExceeded { stream, limit });
+                }
+            }
             Ok(output)
         })
-        .map(Some)
         .map_err(|source| ProcessError::Capture {
             program: program.to_owned(),
             stream,
             source,
-        })
+        })?;
+    Ok(Some(ReaderHandle { join, stop }))
 }
 
-fn join_reader(
-    reader: Option<JoinHandle<io::Result<Vec<u8>>>>,
-    stream: &'static str,
+struct ReaderHandle {
+    join: JoinHandle<io::Result<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
+}
+
+trait CapturePipe: Read + Send + 'static {
+    fn configure(&self) -> io::Result<()>;
+}
+
+#[cfg(unix)]
+fn configure_capture_pipe(pipe: &impl AsRawFd) -> io::Result<()> {
+    let descriptor = pipe.as_raw_fd();
+    // SAFETY: descriptor is owned by the live ChildStdout.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: F_SETFL updates status flags for the same live descriptor.
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+macro_rules! impl_capture_pipe {
+    ($type:ty) => {
+        impl CapturePipe for $type {
+            fn configure(&self) -> io::Result<()> {
+                #[cfg(unix)]
+                {
+                    configure_capture_pipe(self)
+                }
+                #[cfg(windows)]
+                {
+                    Ok(())
+                }
+            }
+        }
+    };
+}
+
+impl_capture_pipe!(ChildStdout);
+impl_capture_pipe!(ChildStderr);
+
+#[derive(Clone, Copy, Debug)]
+enum ReaderEvent {
+    LimitExceeded { stream: &'static str, limit: usize },
+}
+
+fn join_readers(
+    stdout: Option<ReaderHandle>,
+    stderr: Option<ReaderHandle>,
     program: &OsStr,
     deadline: Deadline,
-    _child: &mut ChildGuard,
-) -> Result<Vec<u8>, ProcessError> {
-    let Some(reader) = reader else {
-        return Ok(Vec::new());
-    };
-    while !reader.is_finished() {
+    child: &mut ChildGuard,
+    cancelled: &mut impl FnMut() -> bool,
+    events: &mpsc::Receiver<ReaderEvent>,
+) -> Result<(Vec<u8>, Vec<u8>), ProcessError> {
+    #[cfg(windows)]
+    let _ = child;
+    while stdout
+        .as_ref()
+        .is_some_and(|reader| !reader.join.is_finished())
+        || stderr
+            .as_ref()
+            .is_some_and(|reader| !reader.join.is_finished())
+    {
+        let trigger = if cancelled() {
+            Some(ProcessError::Cancelled {
+                program: program.to_owned(),
+            })
+        } else if let Some(ReaderEvent::LimitExceeded { stream, limit }) = events.try_iter().next()
+        {
+            Some(ProcessError::OutputLimitExceeded {
+                program: program.to_owned(),
+                stream,
+                limit,
+            })
+        } else {
+            None
+        };
+        if let Some(trigger) = trigger {
+            cleanup_readers(stdout, stderr, program)?;
+            return Err(trigger);
+        }
         #[cfg(unix)]
-        if let Some(signal) = _child.next_signal() {
-            return Err(ProcessError::Interrupted {
+        if let Some(signal) = child.next_signal() {
+            let trigger = ProcessError::Interrupted {
                 program: program.to_owned(),
                 signal,
-            });
+            };
+            cleanup_readers(stdout, stderr, program)?;
+            return Err(trigger);
         }
         let now = Instant::now();
         if deadline.expired(now) {
-            return Err(ProcessError::TimedOut {
+            let trigger = ProcessError::TimedOut {
                 program: program.to_owned(),
                 timeout: deadline.timeout(),
-            });
+            };
+            cleanup_readers(stdout, stderr, program)?;
+            return Err(trigger);
         }
         thread::sleep(
             deadline
@@ -898,8 +1220,78 @@ fn join_reader(
                 .min(POLL_INTERVAL),
         );
     }
-    match reader.join() {
+    let stdout = join_finished_reader(stdout, "stdout", program)?;
+    let stderr = join_finished_reader(stderr, "stderr", program)?;
+    if let Some(ReaderEvent::LimitExceeded { stream, limit }) = events.try_iter().next() {
+        return Err(ProcessError::OutputLimitExceeded {
+            program: program.to_owned(),
+            stream,
+            limit,
+        });
+    }
+    Ok((stdout, stderr))
+}
+
+fn join_finished_reader(
+    reader: Option<ReaderHandle>,
+    stream: &'static str,
+    program: &OsStr,
+) -> Result<Vec<u8>, ProcessError> {
+    let Some(reader) = reader else {
+        return Ok(Vec::new());
+    };
+    match reader.join.join() {
         Ok(Ok(output)) => Ok(output),
+        Ok(Err(source)) => Err(ProcessError::Capture {
+            program: program.to_owned(),
+            stream,
+            source,
+        }),
+        Err(_) => Err(ProcessError::Capture {
+            program: program.to_owned(),
+            stream,
+            source: io::Error::other("reader thread panicked"),
+        }),
+    }
+}
+
+fn cleanup_readers(
+    stdout: Option<ReaderHandle>,
+    stderr: Option<ReaderHandle>,
+    program: &OsStr,
+) -> Result<(), ProcessError> {
+    let stdout_error = cleanup_reader(stdout, "stdout", program).err();
+    let stderr_error = cleanup_reader(stderr, "stderr", program).err();
+    stdout_error.or(stderr_error).map_or(Ok(()), Err)
+}
+
+fn cleanup_reader(
+    reader: Option<ReaderHandle>,
+    stream: &'static str,
+    program: &OsStr,
+) -> Result<(), ProcessError> {
+    let Some(reader) = reader else {
+        return Ok(());
+    };
+    reader.stop.store(true, Ordering::Release);
+    let expires_at = Instant::now()
+        .checked_add(CAPTURE_CLEANUP_GRACE)
+        .expect("short reader cleanup grace");
+    while !reader.join.is_finished() {
+        if Instant::now() >= expires_at {
+            return Err(ProcessError::Capture {
+                program: program.to_owned(),
+                stream,
+                source: io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "capture reader did not stop after process termination",
+                ),
+            });
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    match reader.join.join() {
+        Ok(Ok(_)) => Ok(()),
         Ok(Err(source)) => Err(ProcessError::Capture {
             program: program.to_owned(),
             stream,
@@ -978,14 +1370,24 @@ impl ChildGuard {
             return Ok(());
         };
 
-        if let Err(source) = self.signal_process_group(libc::SIGKILL)
-            && source.raw_os_error() != Some(libc::ESRCH)
-        {
-            self.child = Some(child);
-            return Err(ProcessError::Terminate {
-                program: program.to_owned(),
-                source,
-            });
+        if let Err(source) = self.signal_process_group(libc::SIGKILL) {
+            match source.raw_os_error() {
+                // Once the leader has been reaped, a short-lived process group
+                // may already be gone. macOS can report EPERM for that race.
+                Some(libc::ESRCH) | Some(libc::EPERM) => {
+                    // The leader has already been reaped. macOS reports EPERM
+                    // for this fast-exit group race; a descendant that changed
+                    // credentials is outside the ordinary-descendant contract.
+                    self.process_group = None;
+                }
+                _ => {
+                    self.child = Some(child);
+                    return Err(ProcessError::Terminate {
+                        program: program.to_owned(),
+                        source,
+                    });
+                }
+            }
         }
         drop(child);
         self.wait_for_process_group(program, termination_deadline(program)?)
@@ -1012,48 +1414,73 @@ impl ChildGuard {
             return Ok(());
         }
 
-        if let Err(source) = self.signal_process_group(libc::SIGKILL) {
-            if source.raw_os_error() == Some(libc::ESRCH) {
-                // The leader won the exit race; it still needs to be waited.
-            } else {
+        let leader_exited = match self.child_mut().try_wait() {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(source) => {
                 return Err(ProcessError::Terminate {
                     program: program.to_owned(),
                     source,
                 });
             }
-        }
-        let child = self.child.as_deref_mut().expect("live child");
-        if let Err(source) = child.start_kill()
-            && source.raw_os_error() != Some(libc::ESRCH)
-        {
-            return Err(ProcessError::Terminate {
-                program: program.to_owned(),
-                source,
-            });
-        }
+        };
 
-        let cleanup_deadline = termination_deadline(program)?;
-        loop {
-            match self.child_mut().try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {}
-                Err(source) => {
+        if let Err(source) = self.signal_process_group(libc::SIGKILL) {
+            match source.raw_os_error() {
+                Some(libc::ESRCH) => {
+                    // The leader may have won the exit race. It still needs to
+                    // be waited below.
+                    self.process_group = None;
+                }
+                Some(libc::EPERM) if leader_exited => {
+                    // See `finish`: the operation-owned group is already gone
+                    // or no longer within the ordinary-descendant contract.
+                    self.process_group = None;
+                }
+                _ => {
                     return Err(ProcessError::Terminate {
                         program: program.to_owned(),
                         source,
                     });
                 }
             }
-            if cleanup_deadline.expired(Instant::now()) {
+        }
+        if !leader_exited {
+            let child = self.child.as_deref_mut().expect("live child");
+            if let Err(source) = child.start_kill()
+                && source.raw_os_error() != Some(libc::ESRCH)
+            {
                 return Err(ProcessError::Terminate {
                     program: program.to_owned(),
-                    source: io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "processes did not exit after termination",
-                    ),
+                    source,
                 });
             }
-            thread::sleep(POLL_INTERVAL);
+        }
+
+        let cleanup_deadline = termination_deadline(program)?;
+        if !leader_exited {
+            loop {
+                match self.child_mut().try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {}
+                    Err(source) => {
+                        return Err(ProcessError::Terminate {
+                            program: program.to_owned(),
+                            source,
+                        });
+                    }
+                }
+                if cleanup_deadline.expired(Instant::now()) {
+                    return Err(ProcessError::Terminate {
+                        program: program.to_owned(),
+                        source: io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "processes did not exit after termination",
+                        ),
+                    });
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
         }
         self.child = None;
 
@@ -1191,9 +1618,9 @@ mod tests {
     use super::*;
     use std::{
         fs,
-        io::Write,
+        io::{Cursor, Write},
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::atomic::AtomicU64,
     };
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -1205,6 +1632,15 @@ mod tests {
                 let bytes = vec![b'x'; 256 * 1024];
                 io::stdout().write_all(&bytes).unwrap();
                 io::stderr().write_all(&bytes).unwrap();
+            }
+            Ok("sized-output") => {
+                let stdout = env::var("YAR_STDOUT_BYTES").unwrap().parse().unwrap();
+                let stderr = env::var("YAR_STDERR_BYTES").unwrap().parse().unwrap();
+                io::stdout().write_all(&vec![b'o'; stdout]).unwrap();
+                io::stderr().write_all(&vec![b'e'; stderr]).unwrap();
+                io::stdout().flush().unwrap();
+                io::stderr().flush().unwrap();
+                std::process::exit(0);
             }
             Ok("sleep") => thread::sleep(Duration::from_secs(30)),
             #[cfg(unix)]
@@ -1295,6 +1731,137 @@ mod tests {
         assert!(output.status.success());
         assert!(output.stdout.len() >= 256 * 1024);
         assert!(output.stderr.len() >= 256 * 1024);
+    }
+
+    #[test]
+    fn capture_reader_allows_the_exact_boundary() {
+        let (events, received) = mpsc::channel();
+        let reader = spawn_reader_inner(
+            Some(Cursor::new(vec![b'x'; 4096])),
+            "stdout",
+            4096,
+            events,
+            OsStr::new("probe"),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(reader.join.join().unwrap().unwrap().len(), 4096);
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn capture_reader_stops_even_when_input_remains_continuously_readable() {
+        struct EndlessReader;
+
+        impl Read for EndlessReader {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+
+        let (events, _received) = mpsc::channel();
+        let reader = spawn_reader_inner(
+            Some(EndlessReader),
+            "stdout",
+            0,
+            events,
+            OsStr::new("probe"),
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(20));
+
+        cleanup_reader(reader, "stdout", OsStr::new("probe")).unwrap();
+    }
+
+    #[test]
+    fn capture_limit_cancels_on_the_first_excess_byte() {
+        let mut command = probe_command("sized-output");
+        command
+            .env("YAR_STDOUT_BYTES", "4097")
+            .env("YAR_STDERR_BYTES", "2048");
+        let error = output_with_control(
+            command,
+            Deadline::after(Duration::from_secs(5)).unwrap(),
+            CaptureLimits::new(4096, 2048),
+            || false,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ProcessError::OutputLimitExceeded {
+                    stream: "stdout",
+                    limit: 4096,
+                    ..
+                }
+            ),
+            "error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn cancellation_terminates_a_running_process() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let trigger = Arc::clone(&cancelled);
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            trigger.store(true, Ordering::Release);
+        });
+
+        let error = status_with_control(
+            probe_command("sleep"),
+            Deadline::after(Duration::from_secs(5)).unwrap(),
+            || cancelled.load(Ordering::Acquire),
+        )
+        .unwrap_err();
+        thread.join().unwrap();
+
+        assert!(matches!(error, ProcessError::Cancelled { .. }));
+    }
+
+    #[test]
+    fn controlled_cancellation_works_without_a_deadline() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let trigger = Arc::clone(&cancelled);
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            trigger.store(true, Ordering::Release);
+        });
+
+        let error = status_with_control(probe_command("sleep"), Deadline::none(), || {
+            cancelled.load(Ordering::Acquire)
+        })
+        .unwrap_err();
+        thread.join().unwrap();
+
+        assert!(matches!(error, ProcessError::Cancelled { .. }));
+    }
+
+    #[test]
+    fn controlled_capture_limit_works_without_a_deadline() {
+        let mut command = probe_command("sized-output");
+        command
+            .env("YAR_STDOUT_BYTES", "4097")
+            .env("YAR_STDERR_BYTES", "0");
+        let error = output_with_control(
+            command,
+            Deadline::none(),
+            CaptureLimits::new(4096, 0),
+            || false,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProcessError::OutputLimitExceeded {
+                stream: "stdout",
+                limit: 4096,
+                ..
+            }
+        ));
     }
 
     #[test]

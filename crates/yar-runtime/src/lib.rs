@@ -372,15 +372,34 @@ pub extern "C" fn yar_env_lookup(name: *const YarStr, out: *mut YarStr) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_process_run(argv: *const YarSlice, out: *mut YarProcessResult) -> i32 {
+pub extern "C" fn yar_process_run(
+    argv: *const YarSlice,
+    timeout_milliseconds: i64,
+    max_stdout_bytes: i64,
+    max_stderr_bytes: i64,
+    cancel: *mut u8,
+    out: *mut YarProcessResult,
+) -> i32 {
     require_abi_out(out);
-    host::process_run(argv, out)
+    host::process_run(
+        argv,
+        timeout_milliseconds,
+        max_stdout_bytes,
+        max_stderr_bytes,
+        cancel,
+        out,
+    )
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_process_run_inherit(argv: *const YarSlice, out: *mut i32) -> i32 {
+pub extern "C" fn yar_process_run_inherit(
+    argv: *const YarSlice,
+    timeout_milliseconds: i64,
+    cancel: *mut u8,
+    out: *mut i32,
+) -> i32 {
     require_abi_out(out);
-    host::process_run_inherit(argv, out)
+    host::process_run_inherit(argv, timeout_milliseconds, cancel, out)
 }
 
 #[unsafe(no_mangle)]
@@ -759,7 +778,7 @@ mod tests {
                 len: 0,
                 cap: 0,
             };
-            super::yar_process_run(&argv, ptr::null_mut());
+            super::yar_process_run(&argv, 1, 0, 0, ptr::null_mut(), ptr::null_mut());
             panic!("null ABI output returned");
         }
 
@@ -1625,7 +1644,11 @@ mod tests {
             },
         };
 
-        assert_eq!(yar_process_run(&argv, &mut out), 0);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        assert_eq!(
+            yar_process_run(&argv, 5_000, 1024, 1024, cancel, &mut out),
+            0
+        );
         assert_eq!(out.exit_code, 7);
         assert_eq!(str_from_runtime(out.stdout), "captured stdout\n");
         assert_eq!(str_from_runtime(out.stderr), "captured stderr\n");
@@ -1637,8 +1660,40 @@ mod tests {
         let argv = runtime_slice(&["/bin/sh", "-c", "exit 3"]);
         let mut exit_code = 0_i32;
 
-        assert_eq!(yar_process_run_inherit(&argv, &mut exit_code), 0);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        assert_eq!(
+            yar_process_run_inherit(&argv, 5_000, cancel, &mut exit_code),
+            0
+        );
         assert_eq!(exit_code, 3);
+    }
+
+    #[test]
+    fn process_run_inherit_honors_preclosed_cancellation_before_launch() {
+        let argv = runtime_slice(&["yar-command-that-must-not-launch"]);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        yar_chan_close(cancel);
+        let mut exit_code = 9_i32;
+
+        assert_eq!(
+            yar_process_run_inherit(&argv, 5_000, cancel, &mut exit_code),
+            7
+        );
+        assert_eq!(exit_code, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_run_inherit_honors_timeout() {
+        let argv = runtime_slice(&["/bin/sh", "-c", "sleep 30"]);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let mut exit_code = 9_i32;
+
+        assert_eq!(
+            yar_process_run_inherit(&argv, 20, cancel, &mut exit_code),
+            5
+        );
+        assert_eq!(exit_code, 0);
     }
 
     #[test]
@@ -1656,6 +1711,105 @@ mod tests {
             },
         };
 
-        assert_eq!(yar_process_run(&argv, &mut out), 3);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        assert_eq!(
+            yar_process_run(&argv, 5_000, 1024, 1024, cancel, &mut out),
+            3
+        );
+    }
+
+    #[test]
+    fn process_run_validates_limits_and_cancellation_before_launch() {
+        let argv = runtime_slice(&["yar-command-that-must-not-launch"]);
+        let mut out = YarProcessResult {
+            exit_code: 9,
+            stdout: string::from_owned("stale stdout".to_owned()),
+            stderr: string::from_owned("stale stderr".to_owned()),
+        };
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+
+        for (timeout, stdout, stderr) in [
+            (0, 0, 0),
+            (86_400_001, 0, 0),
+            (1, -1, 0),
+            (1, 0, -1),
+            (1, 67_108_865, 0),
+            (1, 0, 67_108_865),
+        ] {
+            assert_eq!(
+                yar_process_run(&argv, timeout, stdout, stderr, cancel, &mut out),
+                3
+            );
+            assert_eq!(
+                out,
+                YarProcessResult {
+                    exit_code: 0,
+                    stdout: YarStr {
+                        ptr: ptr::null_mut(),
+                        len: 0
+                    },
+                    stderr: YarStr {
+                        ptr: ptr::null_mut(),
+                        len: 0
+                    },
+                }
+            );
+        }
+
+        assert_eq!(
+            yar_process_run(&argv, 1, 0, 0, ptr::null_mut(), &mut out),
+            3
+        );
+        let wrong_channel = yar_chan_new(size_of::<i64>() as i64, 1);
+        assert_eq!(yar_process_run(&argv, 1, 0, 0, wrong_channel, &mut out), 3);
+    }
+
+    #[test]
+    fn process_run_maps_a_preclosed_cancellation() {
+        let argv = runtime_slice(&["yar-command-that-must-not-launch"]);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        yar_chan_close(cancel);
+        let mut out = YarProcessResult {
+            exit_code: 9,
+            stdout: string::from_owned("stale stdout".to_owned()),
+            stderr: string::from_owned("stale stderr".to_owned()),
+        };
+
+        assert_eq!(
+            yar_process_run(&argv, 5_000, 1024, 1024, cancel, &mut out),
+            7
+        );
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(out.stdout.len, 0);
+        assert_eq!(out.stderr.len, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_run_maps_timeout_and_output_limit() {
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let mut out = YarProcessResult {
+            exit_code: 0,
+            stdout: YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            },
+            stderr: YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            },
+        };
+
+        let timeout_argv = runtime_slice(&["/bin/sh", "-c", "sleep 30"]);
+        assert_eq!(
+            yar_process_run(&timeout_argv, 20, 1024, 1024, cancel, &mut out),
+            5
+        );
+
+        let output_argv = runtime_slice(&["/bin/sh", "-c", "while :; do printf x; done"]);
+        assert_eq!(
+            yar_process_run(&output_argv, 5_000, 1, 1024, cancel, &mut out),
+            6
+        );
     }
 }

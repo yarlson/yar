@@ -94,6 +94,11 @@
   rejected with migration guidance.
 - The Rust runtime uses `#[cfg(...)]` platform modules and branches to select
   POSIX or Win32 implementations at compile time.
+- Source-level child execution uses explicit argument-owned deadlines and
+  cancellation. Captured runs drain both pipes under independent byte caps.
+  Timeout, cancellation, or a cap breach synchronously terminates ordinary
+  descendants and reaps the leader before returning. This contract is
+  independent of deadlines for subprocesses owned by the Rust CLI.
 - Concurrency uses portable Rust native threads on Linux, macOS, and Windows
   GNU. CI executes taskgroup and channel programs on Windows in addition to
   building the target runtime bundle.
@@ -104,7 +109,7 @@
 
 ## Runtime Surface
 
-- Runtime ABI 2 passes every aggregate input and output through explicit
+- Runtime ABI 3 passes every aggregate input and output through explicit
   caller-owned pointers. Generated LLVM therefore does not depend on
   target-specific aggregate argument or return conventions at the Rust/C
   boundary. Runtime calls read input slots during the call and initialize
@@ -266,20 +271,21 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 
 - `yar_process_args(yar_slice *out)` copies the full host argument vector,
   including `argv[0]`, into a runtime-managed `[]str`.
-- `yar_process_run(const yar_slice *argv, yar_process_result *out)` launches
-  one child process, captures stdout/stderr into runtime-managed strings, and
-  returns a stable host-process status code.
-- `yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out)`
-  launches one child with inherited stdin/stdout/stderr and returns a stable
-  host-process status code.
+- `yar_process_run` receives argv, validated timeout/capture limits, a close-only
+  cancellation signal, and a result out-pointer. It drains bounded stdout and
+  stderr concurrently.
+- `yar_process_run_inherit` receives argv, a timeout, a cancellation signal,
+  and an exit-code out-pointer while inheriting stdin/stdout/stderr.
 - `yar_env_lookup(const yar_str *name, yar_str *out)` looks up one environment
   variable and returns a stable host-process status code.
 - Host-process status codes map in code generation to stable YAR error names:
-  `NotFound`, `PermissionDenied`, `InvalidArgument`, and `IO`.
-- On POSIX, the implementation uses `fork`, `execvp`, `waitpid`, `mkstemp`,
-  and `getenv`. On Windows, the implementation uses `CreateProcessA`,
-  `GetEnvironmentVariableA`, and Win32 pipe/file handles. Both paths capture
-  child stdout/stderr through temporary files.
+  `NotFound`, `PermissionDenied`, `InvalidArgument`, `Timeout`,
+  `LimitExceeded`, `Cancelled`, and `IO`.
+- Process launch and waiting use the shared Rust process-control layer. Captured
+  runs drain bounded stdout/stderr pipes concurrently. Controlled Unix children
+  run in an operation-owned process group; controlled Windows children are
+  assigned to a kill-on-close Job Object before they resume. Environment lookup
+  remains a separate Rust host operation.
 
 ### Networking Runtime
 

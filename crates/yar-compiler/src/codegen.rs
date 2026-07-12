@@ -229,8 +229,8 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_net_set_write_deadline(i64, i32)\n");
         out.push_str("declare i32 @yar_net_resolve(ptr, i32, ptr)\n");
         out.push_str("declare void @yar_process_args(ptr)\n");
-        out.push_str("declare i32 @yar_process_run(ptr, ptr)\n");
-        out.push_str("declare i32 @yar_process_run_inherit(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_process_run(ptr, i64, i64, i64, ptr, ptr)\n");
+        out.push_str("declare i32 @yar_process_run_inherit(ptr, i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_env_lookup(ptr, ptr)\n");
         out.push_str("declare ptr @yar_taskgroup_new(i64)\n");
         out.push_str("declare void @yar_taskgroup_spawn(ptr, ptr, ptr)\n");
@@ -4206,6 +4206,23 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                     "  store %yar.slice {}, ptr %{argv}\n",
                     args[0].repr
                 ));
+                let timeout = self.emit_struct_field_extract(
+                    "process.run.timeout",
+                    &args[1],
+                    "timeout_milliseconds",
+                )?;
+                let max_stdout = self.emit_struct_field_extract(
+                    "process.run.max_stdout",
+                    &args[1],
+                    "max_stdout_bytes",
+                )?;
+                let max_stderr = self.emit_struct_field_extract(
+                    "process.run.max_stderr",
+                    &args[1],
+                    "max_stderr_bytes",
+                )?;
+                let cancellation =
+                    self.emit_struct_field_extract("process.run.cancellation", &args[2], "signal")?;
                 let out = self.temp("process.run.out");
                 let return_type = self.llvm_type(&signature.return_type)?.to_string();
                 self.body
@@ -4215,7 +4232,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 ));
                 let status = self.temp("process.run.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_process_run(ptr %{argv}, ptr %{out})\n"
+                    "  %{status} = call i32 @yar_process_run(ptr %{argv}, i64 {}, i64 {}, i64 {}, ptr {}, ptr %{out})\n",
+                    timeout.repr, max_stdout.repr, max_stderr.repr, cancellation.repr
                 ));
                 let value = self.temp("process.run.value");
                 self.body
@@ -4239,8 +4257,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 self.body.push_str(&format!("  %{out} = alloca i32\n"));
                 self.body.push_str(&format!("  store i32 0, ptr %{out}\n"));
                 let status = self.temp("process.run_inherit.status");
+                let cancellation = self.emit_struct_field_extract(
+                    "process.run_inherit.cancellation",
+                    &args[2],
+                    "signal",
+                )?;
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_process_run_inherit(ptr %{argv}, ptr %{out})\n"
+                    "  %{status} = call i32 @yar_process_run_inherit(ptr %{argv}, i64 {}, ptr {}, ptr %{out})\n",
+                    args[1].repr, cancellation.repr
                 ));
                 let value = self.temp("process.run_inherit.value");
                 self.body
@@ -4889,7 +4913,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 (2, "PermissionDenied"),
                 (1, "NotFound"),
             ][..]
-        } else if is_process_env_host_intrinsic(full_name) {
+        } else if is_process_host_intrinsic(full_name) {
+            &[
+                (7, "Cancelled"),
+                (6, "LimitExceeded"),
+                (5, "Timeout"),
+                (3, "InvalidArgument"),
+                (2, "PermissionDenied"),
+                (1, "NotFound"),
+            ][..]
+        } else if is_env_host_intrinsic(full_name) {
             &[
                 (3, "InvalidArgument"),
                 (2, "PermissionDenied"),
@@ -5144,6 +5177,25 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         self.body
             .push_str(&format!("  store {llvm_type} {value}, ptr %{slot}\n"));
         Ok(format!("%{slot}"))
+    }
+
+    fn emit_struct_field_extract(
+        &mut self,
+        label: &str,
+        value: &Value,
+        field_name: &str,
+    ) -> Result<Value, CodegenError> {
+        let (field_index, field_type) = self.generator.struct_field(&value.type_, field_name)?;
+        let result = self.temp(label);
+        self.body.push_str(&format!(
+            "  %{result} = extractvalue {} {}, {field_index}\n",
+            self.llvm_type(&value.type_)?,
+            value.repr
+        ));
+        Ok(Value {
+            type_: field_type,
+            repr: format!("%{result}"),
+        })
     }
 
     fn emit_map_set(
@@ -6077,11 +6129,12 @@ fn is_fs_host_intrinsic(name: &str) -> bool {
     )
 }
 
-fn is_process_env_host_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        "process.args" | "process.run" | "process.run_inherit" | "env.lookup"
-    )
+fn is_process_host_intrinsic(name: &str) -> bool {
+    matches!(name, "process.run" | "process.run_inherit")
+}
+
+fn is_env_host_intrinsic(name: &str) -> bool {
+    name == "env.lookup"
 }
 
 fn is_net_host_intrinsic(name: &str) -> bool {
@@ -6211,6 +6264,7 @@ mod tests {
         fs,
         path::{Path, PathBuf},
         process::Command,
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     use crate::{
@@ -6341,20 +6395,60 @@ mod tests {
 
     #[test]
     fn lowers_process_env_and_stdio_intrinsics_to_runtime_calls() {
-        let ir = emit_fixture("testdata/stdlib_process_env/main.yar");
+        let ir = emit_project_source(
+            "process-limits",
+            r#"package main
+
+import "std/env"
+import "std/process"
+import "std/stdio"
+
+fn main() !i32 {
+    host_args := process.args()
+    limits := process.limits(1000, 64, 64)?
+    cancellation := process.cancellation()
+    result := process.run([]str{"tool"}, limits, cancellation)?
+    code := process.run_inherit([]str{"tool"}, 1000, cancellation)?
+    value := env.lookup("HOME")?
+    stdio.eprint(value)
+    return result.exit_code + code + len(host_args)
+}
+"#,
+        );
         for expected in [
             "declare void @yar_process_args(ptr)",
-            "declare i32 @yar_process_run(ptr, ptr)",
-            "declare i32 @yar_process_run_inherit(ptr, ptr)",
+            "declare i32 @yar_process_run(ptr, i64, i64, i64, ptr, ptr)",
+            "declare i32 @yar_process_run_inherit(ptr, i64, ptr, ptr)",
             "declare i32 @yar_env_lookup(ptr, ptr)",
             "declare void @yar_eprint(ptr, i64)",
             "call void @yar_process_args(ptr %",
-            "call i32 @yar_process_run(ptr %",
-            "call i32 @yar_process_run_inherit(ptr %",
+            "call i32 @yar_process_run(ptr %process.run.argv",
+            "i64 %process.run.timeout",
+            "i64 %process.run.max_stdout",
+            "i64 %process.run.max_stderr",
+            "ptr %process.run.cancellation",
+            "call i32 @yar_process_run_inherit(ptr %process.run_inherit.argv",
+            "ptr %process.run_inherit.cancellation",
             "call i32 @yar_env_lookup(ptr %",
             "call void @yar_eprint(ptr %",
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
+        }
+        for status in [5, 6, 7] {
+            assert!(
+                ir.lines().any(|line| {
+                    line.contains("icmp eq i32 %process.run.status")
+                        && line.ends_with(&format!(", {status}"))
+                }),
+                "missing process status {status}:\n{ir}"
+            );
+            assert!(
+                !ir.lines().any(|line| {
+                    line.contains("icmp eq i32 %env.lookup.status")
+                        && line.ends_with(&format!(", {status}"))
+                }),
+                "environment lookup inherited process-only status {status}:\n{ir}"
+            );
         }
     }
 
@@ -6904,6 +6998,32 @@ fn main() i32 {
         let (info, diagnostics) = check_program(&mono);
         assert_eq!(diagnostics, Vec::new(), "{fixture} check");
         emit_llvm(&mono, &info)
+    }
+
+    fn emit_project_source(label: &str, source: &str) -> String {
+        static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
+
+        let id = NEXT_PROJECT.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("yar-codegen-{label}-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let entry = dir.join("main.yar");
+        fs::write(&entry, source).unwrap();
+
+        let result = {
+            let (graph, diagnostics) = load_package_graph(&entry, false).unwrap();
+            assert_eq!(diagnostics, Vec::new(), "{label} load");
+            let (lowered, diagnostics) = lower_package_graph(&graph);
+            assert_eq!(diagnostics, Vec::new(), "{label} lower");
+            let (mono, diagnostics) = monomorphize_program(&lowered);
+            assert_eq!(diagnostics, Vec::new(), "{label} mono");
+            let (info, diagnostics) = check_program(&mono);
+            assert_eq!(diagnostics, Vec::new(), "{label} check");
+            emit_llvm(&mono, &info).unwrap()
+        };
+
+        fs::remove_dir_all(&dir).unwrap();
+        result
     }
 
     fn emit_source(src: &str) -> String {

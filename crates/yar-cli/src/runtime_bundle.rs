@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 pub const MANIFEST_FILE: &str = "yar-runtime.toml";
 pub const FORMAT_VERSION: u32 = 1;
-pub const RUNTIME_ABI: u32 = 2;
+pub const RUNTIME_ABI: u32 = 3;
 pub const COMPILER_COMPATIBILITY: u32 = 1;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -209,7 +209,7 @@ mod tests {
             &dir,
             r#"format = 1
 target = "x86_64-unknown-linux-gnu"
-runtime_abi = 2
+runtime_abi = 3
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 
@@ -248,7 +248,7 @@ system_libraries = ["m", "m", "dl"]
             ),
             (
                 "abi",
-                manifest_with("runtime_abi = 3"),
+                manifest_with("runtime_abi = 4"),
                 "incompatible with compiler ABI",
             ),
             (
@@ -283,8 +283,8 @@ system_libraries = ["m", "m", "dl"]
     #[test]
     fn checked_in_target_manifests_match_the_compiler_contract() {
         for (target, libraries) in [
-            ("x86_64-apple-darwin", &["System", "c", "m"][..]),
-            ("aarch64-apple-darwin", &["System", "c", "m"][..]),
+            ("x86_64-apple-darwin", &["iconv", "System", "c", "m"][..]),
+            ("aarch64-apple-darwin", &["iconv", "System", "c", "m"][..]),
             (
                 "x86_64-unknown-linux-gnu",
                 &["gcc_s", "util", "rt", "pthread", "m", "dl", "c"][..],
@@ -364,7 +364,7 @@ system_libraries = ["m", "m", "dl"]
     fn manifest_with(replacement: &str) -> String {
         let base = r#"format = 1
 target = "x86_64-unknown-linux-gnu"
-runtime_abi = 2
+runtime_abi = 3
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 

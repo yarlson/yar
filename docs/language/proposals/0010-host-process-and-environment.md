@@ -4,298 +4,158 @@ Status: implemented
 
 ## 1. Summary
 
-Add the minimum host process surface needed for a self-hosted compiler CLI.
+The embedded `process`, `env`, and `stdio` packages provide the host boundary
+needed by compiler-style programs without exposing a shell language or raw
+process handles.
 
-The proposed packages are:
+The process API is explicit about lifetime and capture bounds:
 
-- `process` for command-line arguments and child-process execution
-- `env` for environment lookup
-- `stdio` for stderr output
-
-The minimal API is:
-
-- `process.args() []str`
-- `process.run(argv []str) !process.Result`
-- `process.run_inherit(argv []str) !i32`
-- `env.lookup(name str) !str`
-- `stdio.eprint(msg str) void`
-
+```yar
+process.args() []str
+process.limits(timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64) !process.Limits
+process.cancellation() process.Cancellation
+process.cancel(value process.Cancellation) void
+process.run(argv []str, limits process.Limits, cancellation process.Cancellation) !process.Result
+process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.Cancellation) !i32
 ```
-struct Result {
+
+`env.lookup(name str) !str` reads one environment value, and
+`stdio.eprint(msg str) void` writes one complete stderr message.
+
+## 2. Types
+
+```yar
+pub struct Result {
     exit_code i32
     stdout str
     stderr str
 }
-```
 
-## 2. Motivation
+pub struct Limits {
+    timeout_milliseconds i64
+    max_stdout_bytes i64
+    max_stderr_bytes i64
+}
 
-Filesystem access is enough to self-host package loading, but not enough to
-self-host the command-line tool around it.
-
-A self-hosted `yar` compiler eventually needs to:
-
-- read command-line arguments
-- honor environment overrides such as `CC`
-- invoke external tools such as `clang`
-- run built programs with inherited stdio
-- print diagnostics to stderr without treating them as panics
-
-Today the Rust CLI owns all of that host process logic. Without a corresponding
-Yar surface, a self-hosted frontend can at best become a library embedded inside
-a permanent host CLI.
-
-## 3. User-Facing Examples
-
-### Valid examples
-
-```
-import "std/process"
-
-fn main() i32 {
-    args := process.args()
-    if len(args) < 2 {
-        return 2
-    }
-    return 0
+pub struct Cancellation {
+    signal chan[bool]
 }
 ```
 
-```
-import "std/env"
+`Cancellation` is a share-safe, close-only signal. Copies refer to the same
+signal. `cancel` is idempotent and never sends or consumes a channel value.
 
-fn cc_name() str {
-    cc := env.lookup("CC") or |err| {
-        return "clang"
-    }
-    return cc
-}
-```
+## 3. Process Arguments
 
-```
-import "std/process"
+`process.args()` returns the full host-provided argument vector as copied Yar
+strings. Index zero is the executable name when the host provides it.
 
-fn link(ir_path str, runtime_path str, out_path str, cc str) !i32 {
-    result := process.run([]str{
-        cc,
-        "-Wno-override-module",
-        ir_path,
-        runtime_path,
-        "-o",
-        out_path,
-    })?
-    return result.exit_code
-}
-```
+Child argv is passed directly without shell parsing or interpolation.
+`argv[0]` must be non-empty, and every argument must cross the host boundary
+without an embedded NUL. The child inherits the caller's working directory and
+environment. Captured `run` uses null stdin; `run_inherit` inherits stdin.
 
-```
-import "std/stdio"
+## 4. Limits and Cancellation
 
-fn report(msg str) void {
-    stdio.eprint(msg)
-}
-```
+`process.limits` validates all three values:
 
-### Invalid examples
+- timeout: 1 through 86,400,000 milliseconds (24 hours)
+- stdout cap: 0 through 67,108,864 bytes (64 MiB)
+- stderr cap: 0 through 67,108,864 bytes (64 MiB)
 
-```
-result := process.run("clang")
-```
+A zero capture cap allows exactly zero bytes; it does not mean unlimited.
+`process.run` validates `Limits` again because struct fields are directly
+constructible.
 
-Invalid because child-process execution takes `[]str`, not one flat command
-string.
+The cancellation signal is checked before launch. After the host creates and
+contains the child, the deadline and cancellation signal cover execution,
+concurrent pipe draining, leader wait, and ordinary descendants that retain a
+capture pipe. Portable process creation is a synchronous host call: a stalled
+executable lookup or host spawn operation cannot be interrupted until that call
+returns. This limitation does not give the child extra execution time after a
+successful launch.
 
-```
-name := env.lookup(1)?
-```
+The exact configured cap is allowed. The first byte beyond either cap,
+deadline expiry, or cancellation terminates the contained process tree. The
+runtime closes/drains capture readers as needed, waits for termination, and
+reaps the leader before returning. Captured partial output is discarded.
 
-Invalid because environment names are strings.
+The resulting errors are:
 
-```
-code := process.args()?
-```
+- `error.Timeout` for deadline expiry
+- `error.LimitExceeded` for either capture cap
+- `error.Cancelled` for an explicit cancellation signal
+- `error.IO` when termination, cleanup, capture, or waiting cannot complete
 
-Invalid because `process.args()` is not errorable.
+Cleanup failure takes precedence over the trigger error because the runtime
+cannot claim successful containment when cleanup is incomplete.
 
-## 4. Semantics
+## 5. `process.run`
 
-This proposal adds a small host process boundary.
+`run` captures stdout and stderr concurrently so one full pipe cannot deadlock
+the other. Caps count raw bytes independently. Successful completion returns
+the complete captured byte strings and the leader exit status. A non-zero exit
+status remains data in `Result.exit_code`, not a Yar error.
 
-### `process.args`
+The call blocks only its calling native Yar task thread. Sibling taskgroup
+threads continue to run and may cancel the shared `Cancellation` value.
 
-- returns the full argument vector as `[]str`
-- index `0` is the executable name when the host provides it
-- argument values are copied into ordinary YAR strings and slices
+## 6. `process.run_inherit`
 
-### `process.run`
+`run_inherit` inherits stdin, stdout, and stderr, so capture caps do not apply.
+Its timeout uses the same 1-through-24-hour range, and its cancellation and
+cleanup semantics match `run`. Successful completion returns the child exit
+status as `i32`.
 
-- launches one child process from `argv`
-- `argv[0]` names the executable to launch
-- captures child stdout and stderr into the returned `Result`
-- returns `error.NotFound`, `error.PermissionDenied`, `error.InvalidArgument`,
-  or `error.IO` only when process launch or host coordination fails
-- a non-zero child exit status is not a YAR `error`; it is represented by
-  `Result.exit_code`
+## 7. Containment Boundary
 
-This separation matters because compilers often need to inspect failed child
-results rather than treating them as host failures.
+On Unix, controlled children start in a new process group. Timeout, capture
+limit, or cancellation terminates that group and reaps the leader. A descendant
+that deliberately creates a new session can escape this boundary.
 
-### `process.run_inherit`
+On Windows, the child is assigned to a kill-on-close Job Object before it is
+resumed. Cleanup waits until the job reports no active processes.
 
-- launches one child process with inherited stdin, stdout, and stderr
-- returns the child exit code on successful launch and completion
-- is useful for the eventual `yar run` path
+This contract controls wall-clock lifetime and captured byte volume. It is not
+a sandbox and does not impose CPU, address-space, file, network, or process-count
+quotas.
 
-### `env.lookup`
+## 8. Other Host Operations
 
-- returns the value of one environment variable
-- returns `error.NotFound` when absent
+`env.lookup` returns `error.NotFound` when a name is absent and
+`error.InvalidArgument` when a name cannot cross the host boundary.
+`stdio.eprint` serializes one complete message with other runtime stderr calls.
 
-### `stdio.eprint`
+## 9. CLI Boundary
 
-- writes a string to stderr
-- does not return an error in the first version
+Source-level process limits are function arguments. They are independent of
+the Rust CLI's build, test, and Git operation deadlines. CLI timeout environment
+variables neither configure nor override `std/process`, and `yar run` does not
+apply its build deadline to the user program.
 
-The first version intentionally avoids a general streaming I/O model. The
-immediate self-hosting need is compiler diagnostics and child-process
-coordination, not an open-ended descriptor API.
+## 10. Implementation Model
 
-## 5. Type Rules
+The package surface lowers to ABI-stable runtime entry points using status plus
+out-parameters for aggregate results. Host launch and coordination failures map
+to stable Yar error names. Concurrent bounded readers prevent pipe deadlock,
+and platform containment keeps ordinary descendants within cleanup scope.
 
-- `process.args()` returns `[]str`
-- `process.run(argv)` requires `argv` to be `[]str` and returns `!process.Result`
-- `process.run_inherit(argv)` requires `argv` to be `[]str` and returns `!i32`
-- `env.lookup(name)` requires `name` to be `str` and returns `!str`
-- `stdio.eprint(msg)` requires `msg` to be `str` and returns `void`
-- raw errorable host-process calls remain subject to the ordinary error rules
+No grammar or syntax-level process builtin is required.
 
-## 6. Grammar / Parsing Shape
+## 11. Errors
 
-No new grammar is required.
+Process execution may produce `NotFound`, `PermissionDenied`,
+`InvalidArgument`, `Timeout`, `LimitExceeded`, `Cancelled`, or `IO`.
+Environment lookup contributes `NotFound`, `PermissionDenied`,
+`InvalidArgument`, or `IO` independently.
 
-This proposal is entirely library-shaped:
+## 12. Verification Contract
 
-- `process.args()`
-- `process.run(argv)`
-- `env.lookup("CC")`
-- `stdio.eprint(msg)`
-
-## 7. Lowering / Implementation Model
-
-- parser: no changes
-- AST / IR: no new node kinds
-- checker: ordinary package-qualified function calls, with selected embedded
-  stdlib declarations tagged as host intrinsics during package-loaded signature
-  registration
-- codegen: lower host-bound calls to runtime/ABI shims
-- runtime: add argument retrieval, environment lookup, child-process launch,
-  output capture, inherited stdio execution, and stderr write support
-
-As with filesystem access, these packages are standard-library in user shape but
-host-backed in implementation.
-
-The key lowering rule is:
-
-- host launch failure becomes a YAR `error`
-- child exit status becomes data in `Result.exit_code`
-
-Additional implementation constraints from proposal 0009:
-
-- keep the user-facing API package-shaped rather than introducing a new family
-  of syntax-level host builtins
-- prefer ABI-stable runtime entry points such as `status + out-parameter`
-  signatures for larger aggregate results instead of relying on direct
-  aggregate returns across all targets
-- preserve stable user-visible YAR error names even if the runtime uses
-  implementation-specific host status codes internally
-- keep as much deterministic logic as possible in Yar source, reserving runtime
-  shims for irreducible host interaction only
-
-## 8. Interactions
-
-- errors: integrates directly with the existing explicit error model
-- structs: `process.Result` is an ordinary struct
-- arrays: no special interaction
-- control flow: child-process failure stays explicit and inspectable
-- returns: `Result` and exit codes return like normal values
-- builtins: no new syntax-level process builtin is required
-- future modules/imports: a self-hosted CLI depends on args, env, and process
-  execution
-- future richer type features: later streaming or binary I/O can extend this
-  boundary without changing the minimal self-hosting story
-
-## 9. Alternatives Considered
-
-### Keep process execution in an outer host launcher forever
-
-Rejected because that would make the self-hosted compiler permanently dependent
-on a privileged non-Yar shell around it.
-
-### Treat non-zero child exit as `error`
-
-Rejected because build tools often need the child exit code and captured stderr
-as data rather than as a collapsed failure path.
-
-### Add a full shell language interface
-
-Rejected because shell parsing, pipelines, quoting, and redirection would add
-far too much surface. An explicit `[]str` argv model is smaller and clearer.
-
-## 10. Complexity Cost
-
-- language surface: medium
-- parser complexity: low
-- checker complexity: low
-- lowering/codegen complexity: medium
-- runtime complexity: high
-- diagnostics complexity: medium
-- test burden: high
-- documentation burden: high
-
-## 11. Why Now?
-
-Once filesystem access exists, the next blocker for a true self-hosted compiler
-CLI is the process boundary: arguments in, diagnostics out, toolchain
-subprocesses around the generated IR.
-
-This proposal keeps that boundary explicit and intentionally small.
-
-## 12. Open Questions
-
-- Should `process.run` grow a working-directory parameter in the first version,
-  or remain argv-only?
-- Should `stdio.eprint` stay infallible, or should stderr writes eventually
-  return `!void` like other host operations?
-- Should `env.lookup` be accompanied by `env.has` or `env.value_or` helpers, or
-  is the ordinary error model sufficient?
-- Should `process.Result` include a `success bool`, or is `exit_code == 0`
-  enough?
-- Should the first runtime implementation be explicitly POSIX-oriented, with a
-  later Windows-specific layer, or should cross-platform parity be required in
-  the first cut?
-- Which process/environment entry points should use direct returns versus
-  explicit out-parameters to keep the runtime ABI robust across targets?
-
-## 13. Decision
-
-Proposed.
-
-This belongs in the self-hosting proposal set because it defines the host
-process boundary around a self-hosted compiler, not just one isolated library
-convenience.
-
-## 14. Implementation Checklist
-
-- stdlib package API design
-- runtime process and environment boundary
-- lowering/codegen hooks
-- checker support for tagging selected embedded stdlib declarations as host
-  intrinsics
-- ABI design for runtime shims, including out-parameter shapes where needed
-- diagnostics for launch failures and environment lookup failures
-- stable mapping from runtime host statuses to user-visible YAR error names
-- integration tests for args, stderr, and subprocesses
-- ABI-sensitive tests on supported targets for aggregate-returning APIs
-- CLI bootstrap plan
-- `current-state.md` update
-- `decisions.md` update
+Tests cover validation before spawn, direct argv behavior, inherited cwd and
+environment, exact capture boundaries, concurrent stdout/stderr draining,
+captured and inherited timeout behavior, pre-spawn and in-flight cancellation,
+ordinary descendant containment, and native Unix and Windows process-control
+paths. The native Yar fixture exercises the public API while collection is
+forced to a low threshold. CLI subprocess tests independently retain their own
+timeout and signal-forwarding contract; source limits come only from explicit
+Yar arguments.
