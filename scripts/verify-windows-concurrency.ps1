@@ -18,6 +18,10 @@ cargo build -p yar-runtime --release
 if ($LASTEXITCODE -ne 0) {
     throw "failed to build the Yar runtime"
 }
+cargo test -p yar-runtime --release
+if ($LASTEXITCODE -ne 0) {
+    throw "failed to run the Yar runtime tests"
+}
 
 New-Item -ItemType Directory -Force -Path $bundle | Out-Null
 Copy-Item $runtime (Join-Path $bundle "libyar_runtime.a")
