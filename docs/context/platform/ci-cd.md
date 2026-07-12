@@ -8,7 +8,13 @@ The workflow validates the shipped Rust CLI/runtime path and the Rust
 workspace:
 
 - `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` run on Linux.
-- `cargo test --workspace` runs on Linux and macOS.
+- `cargo test --workspace` runs on Linux and macOS. Its `design_records`
+  integration guard checks proposal-header and registry one-to-one metadata,
+  decision-log section/status coherence, the portable syntax fixture and its
+  compiler coverage registration, and references to the removed legacy
+  current-state document. This is a structural repository check; it does not
+  validate proposal prose, implementation truth, checklists, roadmap choices,
+  or external tooling projections.
 - Windows GNU CI builds the native CLI/runtime bundle and executes the
   taskgroup, channel, share-safety, filesystem, networking, and
   garbage-collection fixtures under a forced 1 KiB collection threshold. It
