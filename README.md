@@ -119,9 +119,11 @@ $ yar run squares.yar
 - Closures capture by value at creation time.
 - Structured concurrency uses `taskgroup` for scoped spawning and `chan[T]`
   for bounded FIFO communication.
-- The runtime owns heap allocation. The current Rust runtime retains allocated
-  storage until process exit; there is no manual `free` or user-visible
-  collector.
+- The runtime owns heap allocation and reclaims unreachable managed storage
+  with a conservative non-moving collector. There is no manual `free` or
+  user-visible collection API.
+- `YAR_GC_HEAP_TARGET_BYTES` overrides the initial 1 MiB collection threshold;
+  it is primarily a runtime-testing and tuning control.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
 - The standard library is written in Yar and compiled through the same pipeline

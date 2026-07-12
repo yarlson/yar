@@ -139,8 +139,9 @@ Heap-backed values use runtime-managed storage.
 - user code does not manually free memory
 - there is no `gc()` builtin or `free(...)` operation
 - allocation failure is an unrecoverable runtime failure, not a YAR `error`
-- the current Rust runtime does not reclaim unreachable storage during program
-  execution; the operating system releases it when the process exits
+- the Rust runtime may reclaim unreachable managed storage during allocation
+- collection is conservative and non-moving; programs cannot observe or depend
+  on its exact timing
 
 ## Generics
 
@@ -391,7 +392,7 @@ Supported slice operations:
 
 Slices are views over runtime-managed backing storage. Slicing shares storage,
 and `append` may reuse that storage or allocate a new backing buffer. The
-current Rust runtime retains unused backing storage until process exit.
+runtime may reclaim backing storage after it becomes unreachable.
 
 Slice indexing and slicing are bounds-checked at runtime and trap on invalid ranges.
 
@@ -423,8 +424,8 @@ Supported map operations:
 - `keys(m)` returns `[]K`
 - `len(m)` returns `i32`
 
-Map storage is runtime-managed. The current Rust runtime retains unreachable
-maps and their internal storage until process exit.
+Map storage is runtime-managed. Unreachable maps and their internal storage may
+be reclaimed by the runtime collector.
 
 Supported key types: `bool`, `i32`, `i64`, `str`.
 

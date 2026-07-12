@@ -69,7 +69,21 @@ while IFS= read -r fixture; do
   esac
 
   output="$(mktemp "$tmp_dir/yar-rust-fixture.XXXXXX")"
-  YAR_RUNTIME_BUNDLE="$runtime_bundle" "$yar_bin" build "$fixture" -o "$output"
+  if [ "$fixture" = "testdata/garbage_collection/main.yar" ]; then
+    ir="$tmp_dir/garbage-collection.ll"
+    "$yar_bin" emit-ir "$fixture" >"$ir"
+    system_libraries="$(
+      sed -n 's/^system_libraries = \[\(.*\)\]$/\1/p' "$runtime_bundle/yar-runtime.toml" |
+        tr -d '" ' |
+        tr ',' '\n' |
+        sed 's/^/-l/' |
+        paste -sd ' ' -
+    )"
+    # shellcheck disable=SC2086 -- manifest library names are validated by the CLI.
+    clang -O2 "$ir" "$runtime_archive" $system_libraries -o "$output"
+  else
+    YAR_RUNTIME_BUNDLE="$runtime_bundle" "$yar_bin" build "$fixture" -o "$output"
+  fi
 
   stdout="$tmp_dir/stdout"
   stderr="$tmp_dir/stderr"
@@ -87,6 +101,20 @@ while IFS= read -r fixture; do
   elif [ "$fixture" = "testdata/stdlib_process_env/main.yar" ]; then
     if ! YAR_PROCESS_ENV_TEST="env ok" "$output" "$capture_script" "$inherit_script" >"$stdout" 2>"$stderr"; then
       echo "fixture failed: $fixture" >&2
+      echo "stdout:" >&2
+      cat "$stdout" >&2
+      echo "stderr:" >&2
+      cat "$stderr" >&2
+      exit 1
+    fi
+  elif [ "$fixture" = "testdata/garbage_collection/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_basic/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_channels/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_errors/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_fs/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_share_safe/main.yar" ]; then
+    if ! YAR_GC_HEAP_TARGET_BYTES=1024 "$output" >"$stdout" 2>"$stderr"; then
+      echo "fixture failed under forced garbage collection: $fixture" >&2
       echo "stdout:" >&2
       cat "$stdout" >&2
       echo "stderr:" >&2

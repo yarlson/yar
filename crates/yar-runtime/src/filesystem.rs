@@ -53,6 +53,10 @@ pub(crate) fn write_file(path: YarStr, data: YarStr) -> i32 {
 }
 
 pub(crate) fn read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
+    // Directory entries temporarily hold managed string pointers in a Rust Vec,
+    // outside the conservatively scanned heap. Keep collection disabled until
+    // those entries have been copied into their managed result slice.
+    let _collection_guard = super::memory::inhibit_collection();
     write_out_slice(out, empty_slice());
     let Ok(path) = path_from_yar(path) else {
         return FS_INVALID_PATH;

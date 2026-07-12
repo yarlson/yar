@@ -74,6 +74,9 @@
 
 - `crates/yar-runtime` is the Rust 2024 runtime crate. It builds as an `rlib`
   for tests and as a `staticlib` for the native link boundary.
+- Cargo compiles a small target-native C shim with the runtime archive. The shim
+  uses `setjmp` to expose ABI-preserved register roots to the Rust collector;
+  allocation, marking, sweeping, and runtime policy remain in Rust.
 - The Rust crate exports C ABI symbols with the existing `yar_*` names for the
   helpers it has ported. The ported surface currently includes low-level I/O,
   trap, allocation, bounds-checking, string conversion / concatenation, map,
@@ -108,24 +111,28 @@
 - The generated native `main` wrapper accepts `argc` / `argv`, records a
   stack-top pointer through `yar_gc_init_stack_top(void *stack_top)`, forwards
   arguments to `yar_set_args(int32_t argc, char **argv)`, and then calls user
-  `yar.main()`. The current Rust runtime keeps the GC initialization hook as a
-  no-op.
+  `yar.main()`.
 - The generated unhandled-error path uses `yar_print`, so unhandled `main`
   errors currently surface on stdout rather than stderr.
 
 ### Allocation
 
-- `yar_gc_init_stack_top(void *stack_top)` is a reserved ABI hook and currently
-  does nothing.
-- `yar_gc_collect(void)` is a reserved ABI hook and currently does nothing.
+- `yar_gc_init_stack_top(void *stack_top)` registers the outer main-stack
+  boundary used by conservative collection.
+- `yar_gc_collect(void)` captures ABI-preserved registers, scans the main stack,
+  live channel slots, and transitively reachable managed blocks, then sweeps
+  unreachable blocks. Calls are deferred while spawned results are unjoined.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
   stderr and exit status `1`.
-- `yar_alloc(long long size)` allocates process-lifetime storage and traps on
-  invalid size or allocation failure.
+- `yar_alloc(long long size)` allocates initialized collector-managed storage,
+  may trigger collection when the heap target is crossed, and traps on invalid
+  size or allocation failure.
 - `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage
   and traps on invalid size or allocation failure.
-- The current Rust runtime does not reclaim individual heap allocations;
-  process teardown releases them.
+- Runtime configuration may override the initial collection threshold; invalid
+  or empty values use the 1 MiB default.
+- The collector is conservative, non-moving, and recognizes exact, interior,
+  and unaligned pointer representations.
 
 ### Integer Arithmetic Runtime
 
@@ -330,8 +337,8 @@ long long b_len)` allocates and returns a new string containing the
 - Slice literals, `append`, pointer composite literals, map allocations, and
   local or parameter storage used by address-taking all reuse that same
   allocation boundary.
-- The current Rust runtime retains allocations until process exit. The GC ABI
-  hooks remain reserved for a future collector implementation.
+- The Rust runtime reclaims unreachable managed allocations. Conservative false
+  positives may delay reclamation, and collection timing is not user-visible.
 - Pointer composite literals lower by allocating storage for the pointed-to
   value and storing the literal into that storage.
 - Map creation, growth, string concatenation results, host-returned strings,

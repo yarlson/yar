@@ -141,9 +141,9 @@
 - Native builds link `crates/yar-runtime` through a validated target bundle;
   bundle metadata owns the archive name and ordered native-library contract.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
-  storage, and other heap-backed features. The current Rust runtime retains
-  allocations until process exit. Allocation failure is still an unrecoverable
-  runtime failure rather than a YAR `error`.
+  storage, and other heap-backed features. The Rust runtime reclaims unreachable
+  blocks with a conservative non-moving collector. Allocation failure remains
+  an unrecoverable runtime failure rather than a YAR `error`.
 - User-visible `i64` handles for string builders, streaming files, TCP
   listeners, and TCP connections are process-local registry IDs, never native
   addresses. The registry validates both ID and resource kind before access,
