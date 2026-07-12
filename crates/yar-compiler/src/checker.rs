@@ -955,6 +955,15 @@ impl Checker {
                 );
                 return;
             }
+        } else if let Some(blocking_type) = self.implicit_zero_blocker(&declared_type) {
+            self.diag.add(
+                stmt.name_pos.clone(),
+                format!(
+                    "local {:?} requires an initializer because type {:?} has no accessible zero value",
+                    stmt.name,
+                    diagnostic_type_name(&blocking_type),
+                ),
+            );
         }
         self.bind_local(&stmt.name, declared_type);
     }
@@ -1663,6 +1672,50 @@ impl Checker {
             .unwrap_or_default()
     }
 
+    fn implicit_zero_blocker(&self, type_: &str) -> Option<Type> {
+        self.implicit_zero_blocker_inner(type_, &mut BTreeSet::new())
+    }
+
+    fn implicit_zero_blocker_inner(
+        &self,
+        type_: &str,
+        visiting: &mut BTreeSet<Type>,
+    ) -> Option<Type> {
+        if matches!(type_, TYPE_BOOL | TYPE_I32 | TYPE_I64 | TYPE_STR)
+            || parse_pointer_type(type_).is_some()
+            || parse_slice_type(type_).is_some()
+            || parse_chan_type(type_).is_some()
+            || self.info.interfaces.contains_key(type_)
+        {
+            return None;
+        }
+        if let Some((len, element_type)) = parse_array_type(type_) {
+            if len == 0 {
+                return None;
+            }
+            return self.implicit_zero_blocker_inner(&element_type, visiting);
+        }
+        if let Some(info) = self.info.structs.get(type_) {
+            let package = package_for_type(&info.name);
+            if info.fields.iter().any(|field| !field.exported)
+                && !package.is_empty()
+                && self.current_package() != package
+            {
+                return Some(info.name.clone());
+            }
+            if !visiting.insert(info.name.clone()) {
+                return None;
+            }
+            let blocker = info
+                .fields
+                .iter()
+                .find_map(|field| self.implicit_zero_blocker_inner(&field.type_, visiting));
+            visiting.remove(&info.name);
+            return blocker;
+        }
+        Some(type_.to_owned())
+    }
+
     fn private_field_is_inaccessible(
         &mut self,
         info: &StructInfo,
@@ -1832,6 +1885,20 @@ impl Checker {
                 );
             }
         }
+        for field in &info.fields {
+            if !seen.contains(&field.name)
+                && let Some(blocking_type) = self.implicit_zero_blocker(&field.type_)
+            {
+                self.diag.add(
+                    literal.type_ref.pos.clone(),
+                    format!(
+                        "field {:?} must be initialized because type {:?} has no accessible zero value",
+                        field.name,
+                        diagnostic_type_name(&blocking_type),
+                    ),
+                );
+            }
+        }
         ExprType::plain(self.enum_type_for_payload(&type_).unwrap_or(type_))
     }
 
@@ -1852,6 +1919,17 @@ impl Checker {
         }
         for element in &literal.elements {
             self.check_aggregate_element(element, &elem_type, "array literal");
+        }
+        if literal.elements.len() < len
+            && let Some(blocking_type) = self.implicit_zero_blocker(&elem_type)
+        {
+            self.diag.add(
+                literal.type_ref.pos.clone(),
+                format!(
+                    "array literal must initialize all elements because type {:?} has no accessible zero value",
+                    diagnostic_type_name(&blocking_type),
+                ),
+            );
         }
         ExprType::plain(type_)
     }
@@ -4381,6 +4459,7 @@ struct Secret {
 }
 
 fn inspect(value Secret) i32 {
+    var zero Secret
     return value.secret
 }
 "#,
@@ -4391,9 +4470,15 @@ fn inspect(value Secret) i32 {
         program.structs[0].name = secret_type.clone();
         program.functions[0].name = "origin_b.model.inspect".to_string();
         program.functions[0].params[0].type_ref.name = secret_type;
+        let Statement::Var(zero) = &mut program.functions[0].body.stmts[0] else {
+            panic!("expected zero-value declaration");
+        };
+        zero.type_ref.name = "origin_a.model.Secret".to_string();
 
         let (_info, diagnostics) = check_program(&program);
 
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.message
+            == "local \"zero\" requires an initializer because type \"origin_a.model.Secret\" has no accessible zero value"));
         assert!(diagnostics.iter().any(|diagnostic| diagnostic.message
             == "field \"secret\" of struct \"origin_a.model.Secret\" is not exported by package \"model\""));
     }
@@ -5084,6 +5169,102 @@ fn main() i32 {
             &diagnostics,
             "function \"function value\" expects 1 arguments, got 0",
         );
+    }
+
+    #[test]
+    fn validates_every_source_level_implicit_zero() {
+        let program = parse_ok(
+            r#"
+package main
+
+interface Reader { read() i32 }
+
+enum Choice { First Second }
+
+struct LocalPrivate { value i32 }
+struct WithMap { value map[str]i32 }
+
+fn (value LocalPrivate) zero() i32 {
+    var local LocalPrivate
+    return local.value
+}
+
+fn closure_zero() i32 {
+    read := fn() i32 {
+        var local LocalPrivate
+        return local.value
+    }
+    return read()
+}
+
+fn main() i32 {
+    var number i32
+    var text str
+    var pointer *i32
+    var values []i32
+    var reader Reader
+    var channel chan[i32]
+    var local LocalPrivate
+    var empty [0]map[str]i32
+
+    var lookup map[str]i32
+    var callback fn() i32
+    var failure error
+    var pending !i32
+    var choice Choice
+    var nested WithMap
+
+    omitted := WithMap{}
+    explicit := WithMap{value: map[str]i32{}}
+    partial := [2]map[str]i32{map[str]i32{}}
+    complete := [2]map[str]i32{map[str]i32{}, map[str]i32{}}
+
+    if number != 0 || text != "" || pointer != nil || len(values) != 0 ||
+        local.value != 0 || len(empty) != 0 ||
+        len(explicit.value) != 0 || len(complete) != 2 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&program);
+        assert_has(
+            &diagnostics,
+            "local \"lookup\" requires an initializer because type \"map[str]i32\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "local \"callback\" requires an initializer because type \"fn() i32\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "local \"failure\" requires an initializer because type \"error\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "local \"pending\" requires an initializer because type \"!i32\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "local \"choice\" requires an initializer because type \"Choice\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "local \"nested\" requires an initializer because type \"map[str]i32\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "field \"value\" must be initialized because type \"map[str]i32\" has no accessible zero value",
+        );
+        assert_has(
+            &diagnostics,
+            "array literal must initialize all elements because type \"map[str]i32\" has no accessible zero value",
+        );
+        assert_not_has(&diagnostics, "local \"number\" requires an initializer");
+        assert_not_has(&diagnostics, "local \"reader\" requires an initializer");
+        assert_not_has(&diagnostics, "local \"channel\" requires an initializer");
     }
 
     #[test]

@@ -140,8 +140,10 @@ All functions and methods that can fail return errorable types.
 - `Addr` is a public transparent struct with `pub host str` and `pub port i32`.
 - Listener and connection values use public named `Listener` and `Conn` structs
   whose private registry fields make external selector access and literal
-  construction invalid under ordinary struct visibility rules. Other zero-value
-  creation paths are outside this proposal's field-visibility guarantee.
+  construction invalid under ordinary struct visibility rules. Package-relative
+  implicit-zero checking also rejects initializer-free or omitted external
+  construction; callers obtain values from `listen_stream`, `connect_stream`,
+  and `accept`.
 - Port must be `i32` (valid range 0–65535, validated at runtime).
 - Host must be `str`.
 - `max_bytes` for `read` must be 1 through 67,108,864 inclusive.

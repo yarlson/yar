@@ -919,6 +919,10 @@ fn main() i32 {
         );
         assert_diag_contains(
             &diagnostics,
+            "local \"conn\" requires an initializer because type \"net.Conn\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
             "struct literal for \"net.Conn\" is not allowed outside package \"net\" because it has package-private fields",
         );
         assert_diag_contains(
@@ -937,9 +941,10 @@ fn main() i32 {
 import "model"
 
 fn main() i32 {
+    var zero model.Value
     value := model.Value{number: 7}
     reader := model.secret_reader(4)
-    return value.number + reader()
+    return zero.number + value.number + reader()
 }
 "#,
         );
@@ -1050,6 +1055,75 @@ pub fn make_secret(value i32) Secret {
             &diagnostics,
             "struct literal for \"model.Secret\" is not allowed outside package \"model\" because it has package-private fields",
         );
+    }
+
+    #[test]
+    fn compile_path_rejects_implicit_zeros_that_bypass_package_ownership() {
+        let root = temp_dir("yar-rust-package-owned-zero-values");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "model"
+
+fn main() i32 {
+    var direct model.Secret
+    var array [2]model.Secret
+    var wrapped model.Box[model.Secret]
+    var private_generic model.PrivateBox[i32]
+    omitted := model.Box[model.Secret]{}
+    partial := [2]model.Secret{model.make_secret(1)}
+    complete := [2]model.Secret{model.make_secret(2), model.make_secret(3)}
+    explicit := model.Box[model.Secret]{value: model.make_secret(4)}
+    return len(complete) + len(partial)
+}
+"#,
+        );
+        write_source(
+            &root.join("model/model.yar"),
+            r#"package model
+
+pub struct Secret { value i32 }
+pub struct Box[T] { pub value T }
+pub struct PrivateBox[T] { value T }
+
+pub fn make_secret(value i32) Secret {
+    return Secret{value: value}
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "local \"direct\" requires an initializer because type \"model.Secret\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "local \"array\" requires an initializer because type \"model.Secret\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "local \"wrapped\" requires an initializer because type \"model.Secret\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "local \"private_generic\" requires an initializer because type \"model.PrivateBox[i32]\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "field \"value\" must be initialized because type \"model.Secret\" has no accessible zero value",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "array literal must initialize all elements because type \"model.Secret\" has no accessible zero value",
+        );
+        assert!(!diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("complete") || diagnostic.message.contains("explicit")
+        }));
     }
 
     #[test]

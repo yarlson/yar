@@ -125,9 +125,27 @@ Private fields may use private types, public fields may not expose them, and
 generic instantiations preserve declaration visibility and ownership. Enum
 payload fields remain inherently public.
 
-This boundary does not yet reject zero-value declarations or aggregate
-zero-initialization of imported structs with private fields. Those construction
-loopholes remain separate zero-value/initialization design work.
+### Implicit zero initialization is package-relative
+
+Status: accepted
+
+Every value synthesized by an initializer-free local, omitted struct field, or
+omitted fixed-array tail must have an implicit zero value accessible in the
+package where synthesis occurs. Scalars, strings, pointers, slices, interfaces,
+and channels have implicit zero values. Maps, function values, errors, and enums
+require explicit values. Errorable `!T` values have no implicit zero and must
+be handled before ordinary local binding.
+
+Arrays recurse through their element type. Structs recurse through their field
+types and may synthesize private fields only in the declaring package. The
+owner may still zero its own private and resource structs; field visibility is
+a package boundary, not a constructor-only invariant inside the owner. Generic
+structs retain the generic declaration package as their private-field owner.
+
+Zero interfaces remain valid nil interfaces with a deterministic method-call
+trap. Zero channels behave as closed channels. Explicit initializers, fully
+populated arrays, and explicit struct fields do not require their value type to
+be implicitly zeroable.
 
 ### Documentation authority is explicit
 

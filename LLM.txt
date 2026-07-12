@@ -85,6 +85,11 @@ var user User              // typed declaration (zero value)
 ```
 
 Locals are block-scoped, reassignable, cannot be redeclared in same scope.
+Initializer-free `var name T` requires an implicit zero accessible in the
+current package. Zeroable leaves are bool, i32, i64, str, pointers, slices,
+interfaces, and channels. Maps, functions, errors, and enums require explicit
+values. Errorable `!T` values have no implicit zero and must be handled before
+ordinary local binding. Arrays and structs are checked recursively.
 
 ## Structs
 
@@ -112,11 +117,12 @@ ownership. Function literals retain their defining package's authority. Private
 fields may use private types; public fields may not expose them. Enum payload
 fields are unchanged and inherently public.
 
-This does not yet close zero-value construction: `var value imported.Type` and
-aggregate zero-initialization remain valid for a type with private fields. Those
-loopholes belong to separate zero-value/initialization design work. `pub` on an
-enum payload field is a targeted parse error because enum payload fields are
-inherently public.
+Initializer-free locals and omitted aggregate slots cannot synthesize another
+package's private fields. The owning package may zero its own private/resource
+structs when every field type is recursively zeroable. Omitted struct fields
+and array tails use the same rule; fully explicit values do not. Generic
+ownership follows the declaration package. `pub` on an enum payload field is a
+targeted parse error because enum payload fields are inherently public.
 
 ## Enums
 

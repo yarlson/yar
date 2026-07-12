@@ -75,6 +75,14 @@ error expression — Local `error.Name` or imported `pkg.Name` syntax that
 references a declared named error. Unknown or inaccessible declarations are
 rejected.
 
+implicit zero — A value synthesized by an initializer-free local, omitted
+struct field, or omitted fixed-array tail. Its type must be implicitly zeroable
+in the package where synthesis occurs.
+
+implicitly zeroable type — A type whose zero representation is accessible at a
+source use. The rule is recursive for arrays and structs and respects private
+field ownership.
+
 result type — The generated LLVM struct used to represent an errorable return,
 carrying an error flag, an error code, and optionally a success value.
 

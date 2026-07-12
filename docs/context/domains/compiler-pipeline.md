@@ -67,8 +67,9 @@
   validates map key type restrictions, indexing, and `keys`, validates
   error-sugar legality, enforces package-owned private field selectors and
   struct-literal construction, preserves defining-package authority while
-  checking function literals, validates declared error identities, and records
-  their deterministic program-local code order.
+  checking function literals, validates every source-level implicit zero at
+  initializer-free declarations and omitted aggregate slots, validates declared
+  error identities, and records their deterministic program-local code order.
 - `crates/yar-compiler/src/codegen.rs` lowers the checked AST into LLVM IR, expanding concrete
   method calls into ordinary function calls with an explicit receiver argument,
   lowering interface values to boxed-data-plus-method-table pairs and
