@@ -97,9 +97,10 @@
 - Concurrency uses portable Rust native threads on Linux, macOS, and Windows
   GNU. CI executes taskgroup and channel programs on Windows in addition to
   building the target runtime bundle.
-- Conservative root capture on Windows walks only committed, readable stack
-  regions reported by `VirtualQuery`; guard and inaccessible regions are never
-  dereferenced.
+- Conservative root capture on Windows uses the current thread's OS-reported
+  stack bounds and walks only committed, readable regions reported by
+  `VirtualQuery`; guard and inaccessible regions are never dereferenced.
+  This runtime contract requires Windows 8 or newer.
 
 ## Runtime Surface
 

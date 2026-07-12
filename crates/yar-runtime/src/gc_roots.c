@@ -1,3 +1,7 @@
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0602
+#endif
+
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -42,12 +46,14 @@ static void yar_gc_visit_stack_range(const unsigned char *start,
                                      const unsigned char *end,
                                      yar_gc_root_visitor visitor,
                                      void *context) {
+    (void)end;
+    ULONG_PTR stack_low = 0;
+    ULONG_PTR stack_high = 0;
+    GetCurrentThreadStackLimits(&stack_low, &stack_high);
     uintptr_t low = (uintptr_t)start;
-    uintptr_t high = (uintptr_t)end;
-    if (low > high) {
-        uintptr_t swap = low;
-        low = high;
-        high = swap;
+    uintptr_t high = (uintptr_t)stack_high;
+    if (low < (uintptr_t)stack_low || low >= high) {
+        return;
     }
 
     uintptr_t cursor = low;
