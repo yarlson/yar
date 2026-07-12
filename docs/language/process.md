@@ -31,6 +31,15 @@ Each proposal's `Status` and `Implementation` fields are its canonical metadata.
 [`README.md`](README.md) is the synchronized navigable registry of that metadata.
 Update both in the same change; neither may disagree with the other.
 
+The `design_records` integration guard runs through the existing
+`cargo test --workspace` gate. It enforces proposal-header shape and allowed
+values, one-to-one proposal/registry IDs, links, and metadata, decision-log
+section/status coherence, preservation of the portable syntax fixture and its
+compiler coverage registration, and absence of references to the removed
+legacy current-state document. It checks record structure, not whether
+proposal prose, implementation claims, checklists, roadmap priorities, or
+external tooling projections are semantically correct.
+
 ## Two independent state axes
 
 Design status and implementation delivery are separate. Never combine them in
