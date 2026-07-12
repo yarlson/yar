@@ -29,6 +29,8 @@ decisions, future planning, and the proposal registry, use the
 - [domains/dependency-management.md](domains/dependency-management.md) —
   Git-based dependency management via `yar.toml` and `yar.lock`, resolution
   order, fetching, caching, and CLI commands.
+- [domains/tooling.md](domains/tooling.md) — Language authority and external
+  tooling projection boundaries.
 
 ## Flows
 

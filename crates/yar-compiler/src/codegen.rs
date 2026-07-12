@@ -6326,6 +6326,7 @@ mod tests {
         "testdata/string_builder/main.yar",
         "testdata/string_ops/main.yar",
         "testdata/structs_and_loops/main.yar",
+        "testdata/syntax_surface/main.yar",
         "testdata/testing_basic/main.yar",
         "testdata/testing_fail/main.yar",
         "testdata/unhandled_error/main.yar",
