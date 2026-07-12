@@ -59,7 +59,7 @@ fn main() !i32 {
 fn expect_timeout(path str) !i32 {
     limits := process.limits(10, 1024, 1024)?
     process.run([]str{path}, limits, process.cancellation()) or |err| {
-        if err == error.Timeout {
+        if err == process.Timeout {
             return 0
         }
         return 1
@@ -70,7 +70,7 @@ fn expect_timeout(path str) !i32 {
 fn expect_limit(path str) !i32 {
     limits := process.limits(5000, 3, 1024)?
     process.run([]str{path}, limits, process.cancellation()) or |err| {
-        if err == error.LimitExceeded {
+        if err == process.LimitExceeded {
             return 0
         }
         return 1
@@ -81,7 +81,7 @@ fn expect_limit(path str) !i32 {
 fn wait_for_cancel(path str, cancellation process.Cancellation) !i32 {
     limits := process.limits(5000, 1024, 1024)?
     process.run([]str{path}, limits, cancellation) or |err| {
-        if err == error.Cancelled {
+        if err == process.Cancelled {
             return 0
         }
         return 1

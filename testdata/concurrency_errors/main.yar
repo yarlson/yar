@@ -1,5 +1,7 @@
 package main
 
+error Zero
+
 fn maybe(v i32) !i32 {
 	if v == 0 {
 		return error.Zero

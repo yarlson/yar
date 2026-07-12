@@ -9,22 +9,31 @@
 - A function declared as `error` returns an error code directly.
 - `!void` is valid and carries only the error flag and error code.
 - `error` is a builtin type.
-- The checker records each distinct `error.Name` returned anywhere in the
-  program.
+- Packages declare named errors with `error Name` or `pub error Name`.
+- Each declaration is identified by its origin-safe package identity and leaf
+  name. The checker assigns distinct, deterministic codes within one program.
+- Error names are closed: an `error.Name` spelling that does not resolve to a
+  declaration is a compile-time error.
 - Map indexing returns `!V` and uses `error.MissingKey` when the requested key
   is absent.
 
 ## Error Expressions and Comparison
 
-- `error.Name` is valid as a general expression that produces a value of type
-  `error`.
+- `error.Name` resolves a declaration in the current package and is valid as a
+  general expression that produces a value of type `error`.
+- `pkg.Name` resolves a public error in an imported package. Private imported
+  errors are not externally nameable.
 - `error.Name` is valid as the operand of `return` inside an errorable function
   or a function returning `error`.
 - Error values support `==` and `!=` comparison. Both operands must be `error`.
+- Equal leaf names declared by different package origins are distinct values.
 - Errors are `i32` codes internally; comparison lowers to integer `icmp`.
 - `to_str(err)` converts an error value to its `"error.Name"` string
   representation using a generated switch over the program-wide error-code
-  table.
+  table. The legacy leaf-name display is not an identity operation.
+- Private errors may escape exported errorable functions. Callers can
+  propagate, handle, compare obtained values, and stringify them, but cannot
+  name or construct the private declaration.
 
 ## Handling Rules
 
@@ -71,20 +80,24 @@
 - For value-producing `!T or |err| { ... }`, the handler block must terminate
   control flow.
 
-## Host-Backed Error Names
+## Compiler-Owned and Host-Backed Errors
 
-- Filesystem intrinsics contribute stable host error names when they are used:
-  `AlreadyExists`, `Closed`, `IO`, `InvalidArgument`, `InvalidPath`,
-  `NotFound`, and `PermissionDenied`.
-- Process intrinsics contribute stable host error names when they are used:
-  `Cancelled`, `IO`, `InvalidArgument`, `LimitExceeded`, `NotFound`,
-  `PermissionDenied`, and `Timeout`. Environment intrinsics contribute `IO`,
+- `error.MissingKey` and `error.Closed` are fixed compiler-owned declarations.
+  They cannot be redeclared. Maps use `MissingKey`; channels and closed or
+  invalid resource handles share `Closed`.
+- Filesystem intrinsics map host statuses to declarations owned by `fs`:
+  `AlreadyExists`, `IO`, `InvalidArgument`, `InvalidPath`, `NotFound`, and
+  `PermissionDenied`. Closed resources use compiler-owned `error.Closed`.
+- Process intrinsics map to declarations owned by `process`: `Cancelled`,
+  `IO`, `InvalidArgument`, `LimitExceeded`, `NotFound`, `PermissionDenied`, and
+  `Timeout`.
+- Environment intrinsics map to declarations owned by `env`: `IO`,
   `InvalidArgument`, `NotFound`, and `PermissionDenied`.
-- Networking intrinsics contribute stable host error names when they are used:
-  `AddrInUse`, `Closed`, `ConnectionRefused`, `ConnectionReset`, `IO`,
-  `InvalidArgument`, `NotFound`, `PermissionDenied`, and `Timeout`.
-- These names join user-declared `error.Name` values in one program-wide
-  error-code table.
+- Networking intrinsics map to declarations owned by `net`: `AddrInUse`,
+  `ConnectionRefused`, `ConnectionReset`, `IO`, `InvalidArgument`, `NotFound`,
+  `PermissionDenied`, and `Timeout`. Closed resources use compiler-owned
+  `error.Closed`.
+- Host mapping uses canonical declarations rather than raw error-name strings.
 
 ## Generated Representation
 
@@ -94,6 +107,9 @@
 - Non-`void` results include a third field for the success value.
 - Plain `error` values lower to integer error codes without the result struct
   wrapper.
+- Numeric codes are deterministic for one compilation graph but are not a
+  stable cross-program or host ABI. Existing result layouts and runtime status
+  ABIs are unchanged.
 
 ## Program Exit Behavior
 

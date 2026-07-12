@@ -3,6 +3,9 @@
 Status: accepted
 Implementation: implemented
 
+Package-owned declarations from proposal 0030 now govern which named error
+expressions resolve. The comparison behavior defined here is unchanged.
+
 ## 1. Summary
 
 Allow error values to be compared with `==` and `!=`, and allow `error.Name`
@@ -14,6 +17,9 @@ The implemented version supports:
 - `error.Name` as a standalone expression usable in variables, arguments, and
   comparisons
 - internal representation as `i32` codes with `icmp` comparison
+
+Examples below using `error.NotFound` or `error.InvalidInput` assume those
+errors are declared in the current package unless the declaration is shown.
 
 ## 2. Motivation
 
@@ -43,6 +49,9 @@ adding new syntax.
 ### Valid examples
 
 ```
+error NotFound
+error InvalidInput
+
 fn lookup(key str) !str {
     if key == "" {
         return error.InvalidInput
@@ -88,8 +97,8 @@ defined.
 - `error.Name` produces a value of type `error`
 - `error.Name` is valid in any expression position, not only return statements
 - `==` and `!=` compare two `error`-typed operands and produce `bool`
-- comparison is by identity: two errors are equal if and only if they have the
-  same error name
+- comparison is by declaration identity: two errors are equal if and only if
+  they resolve to the same origin-safe package-owned declaration
 - error values are non-errorable: `error.NotFound` has type `error`, not `!error`
 - the internal representation is an `i32` code, but this is not observable from
   source code
@@ -130,7 +139,8 @@ checker no longer rejects it in non-return positions.
 - returns: `error.Name` in return statements continues to work unchanged
 - builtins: `to_str` accepts error values and uses the comparison machinery
   internally for the switch-based string conversion
-- future modules/imports: no interaction
+- modules/imports: imported public errors use `pkg.Name`; private errors are not
+  externally nameable
 - future richer type features: no interaction
 
 ## 9. Alternatives Considered
@@ -166,9 +176,10 @@ None. The feature is implemented and stable.
 
 ## 13. Decision
 
-Accepted. In the implemented baseline, error values support `==` and `!=` comparison, and
-`error.Name` expressions are valid in any expression position. The internal
-representation remains `i32` codes with `icmp` comparison.
+Accepted. Error values support `==` and `!=` comparison, and resolved local
+`error.Name` or imported `pkg.Name` expressions are valid in any expression
+position. The internal representation remains program-local `i32` codes with
+`icmp` comparison.
 
 ## 14. Implementation Checklist
 

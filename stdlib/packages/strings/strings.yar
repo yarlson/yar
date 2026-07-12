@@ -1,5 +1,8 @@
 package strings
 
+pub error IntegerOverflow
+pub error InvalidInteger
+
 pub fn contains(s str, substr str) bool {
     if len(substr) == 0 {
         return true

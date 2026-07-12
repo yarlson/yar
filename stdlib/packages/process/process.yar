@@ -1,5 +1,13 @@
 package process
 
+pub error Cancelled
+pub error IO
+pub error InvalidArgument
+pub error LimitExceeded
+pub error NotFound
+pub error PermissionDenied
+pub error Timeout
+
 pub struct Result {
     pub exit_code i32
     pub stdout str

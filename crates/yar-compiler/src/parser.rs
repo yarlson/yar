@@ -61,15 +61,29 @@ impl Parser {
                 Kind::Struct => program.structs.push(self.parse_struct(exported)),
                 Kind::Interface => program.interfaces.push(self.parse_interface(exported)),
                 Kind::Enum => program.enums.push(self.parse_enum(exported)),
+                Kind::Error => program.errors.push(self.parse_error(exported)),
                 Kind::Fn => program.functions.push(self.parse_function(exported)),
                 _ => {
-                    self.error_current("expected function, struct, interface, or enum declaration");
+                    self.error_current(
+                        "expected function, struct, interface, enum, or error declaration",
+                    );
                     self.advance();
                 }
             }
         }
 
         program
+    }
+
+    fn parse_error(&mut self, exported: bool) -> ErrorDecl {
+        let error_tok = self.expect(Kind::Error, "expected error");
+        let name_tok = self.expect(Kind::Ident, "expected error name");
+        ErrorDecl {
+            error_pos: error_tok.pos,
+            exported,
+            name: name_tok.text,
+            name_pos: name_tok.pos,
+        }
     }
 
     fn parse_import(&mut self) -> ImportDecl {
@@ -1388,6 +1402,26 @@ fn main() !i32 {
         assert_eq!(program.enums[0].cases.len(), 2);
         assert_eq!(program.functions.len(), 2);
         assert_eq!(program.functions[0].return_type.to_string(), "fn(i32) !i32");
+    }
+
+    #[test]
+    fn parses_private_and_exported_error_declarations() {
+        let (program, diagnostics) = parse(
+            r#"package main
+
+error LocalFailure
+pub error PublicFailure
+
+fn main() !i32 { return error.LocalFailure }
+"#,
+        );
+
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(program.errors.len(), 2);
+        assert_eq!(program.errors[0].name, "LocalFailure");
+        assert!(!program.errors[0].exported);
+        assert_eq!(program.errors[1].name, "PublicFailure");
+        assert!(program.errors[1].exported);
     }
 
     #[test]

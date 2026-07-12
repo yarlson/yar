@@ -27,7 +27,7 @@
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.
 - `crates/yar-compiler/src/parser.rs` builds file ASTs, including top-level `struct`,
-  `interface`, `enum`, `fn`, and receiver-style method declarations, optional
+  `interface`, `enum`, `error`, `fn`, and receiver-style method declarations, optional
   `pub` export markers, explicit generic type parameter and type argument
   syntax, `import` declarations, function-literal and function-type syntax,
   loops, exhaustive enum `match` statements, array and slice literals, enum
@@ -67,7 +67,8 @@
   validates map key type restrictions, indexing, and `keys`, validates
   error-sugar legality, enforces package-owned private field selectors and
   struct-literal construction, preserves defining-package authority while
-  checking function literals, and records ordered error names.
+  checking function literals, validates declared error identities, and records
+  their deterministic program-local code order.
 - `crates/yar-compiler/src/codegen.rs` lowers the checked AST into LLVM IR, expanding concrete
   method calls into ordinary function calls with an explicit receiver argument,
   lowering interface values to boxed-data-plus-method-table pairs and
@@ -126,8 +127,8 @@
   Unresolved bare stdlib names receive a migration diagnostic. Lock v1 retains
   global alias/source uniqueness even though alias visibility is owner-scoped.
 - Code generation depends on `checker.Info` for expression types, function
-  signatures, struct metadata, local types, and the program-wide error-code
-  table.
+  signatures, struct metadata, local types, and the program-wide canonical
+  error-identity/code table.
 - The checker and code generator operate on a monomorphized non-generic
   program; generic declarations do not reach those stages directly.
 - Front-end sugar is preserved through parsing and semantic analysis, then

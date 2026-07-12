@@ -2,6 +2,8 @@ package main
 
 import "std/net"
 
+error IO
+
 fn write_all(conn net.Conn, data str) !void {
     off := 0
     for off < len(data) {

@@ -18,6 +18,8 @@ const TYPE_STR: &str = "str";
 const TYPE_ERROR: &str = "error";
 const TYPE_NIL: &str = "nil";
 const TYPE_UNTYPED_INT: &str = "untyped-int";
+const BUILTIN_ERROR_CLOSED: &str = "error.Closed";
+const BUILTIN_ERROR_MISSING_KEY: &str = "error.MissingKey";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExprType {
@@ -122,6 +124,7 @@ pub struct Info {
     pub interfaces: BTreeMap<String, InterfaceInfo>,
     pub enums: BTreeMap<String, EnumInfo>,
     pub error_codes: BTreeMap<String, i32>,
+    pub error_display_names: BTreeMap<String, String>,
     pub ordered_errors: Vec<String>,
 }
 
@@ -247,6 +250,7 @@ impl Checker {
         }
 
         self.index_type_declarations(program);
+        self.check_errors(program);
         self.check_structs(program);
         self.check_interfaces(program);
         self.check_enums(program);
@@ -257,6 +261,40 @@ impl Checker {
             self.check_function_bodies(program);
         }
         self.assign_error_codes();
+    }
+
+    fn check_errors(&mut self, program: &Program) {
+        for (identity, display_name) in [
+            (BUILTIN_ERROR_CLOSED, "Closed"),
+            (BUILTIN_ERROR_MISSING_KEY, "MissingKey"),
+        ] {
+            self.info.error_codes.insert(identity.to_string(), 0);
+            self.info
+                .error_display_names
+                .insert(identity.to_string(), display_name.to_string());
+        }
+
+        for decl in &program.errors {
+            let display_name = decl.name.rsplit('.').next().unwrap_or(&decl.name);
+            if matches!(display_name, "Closed" | "MissingKey") {
+                self.diag.add(
+                    decl.name_pos.clone(),
+                    format!("error {display_name:?} is reserved by the language"),
+                );
+                continue;
+            }
+            if self.info.error_codes.contains_key(&decl.name) {
+                self.diag.add(
+                    decl.name_pos.clone(),
+                    format!("error {display_name:?} is already declared"),
+                );
+                continue;
+            }
+            self.info.error_codes.insert(decl.name.clone(), 0);
+            self.info
+                .error_display_names
+                .insert(decl.name.clone(), display_name.to_string());
+        }
     }
 
     fn index_type_declarations(&mut self, program: &Program) {
@@ -1048,7 +1086,7 @@ impl Checker {
         };
 
         if let Expression::Error(error) = value_expr {
-            self.record_error(&error.name);
+            self.require_declared_error(error);
             if !signature.errorable && signature.return_type != TYPE_ERROR {
                 self.diag.add(
                     value_expr.pos(),
@@ -1213,7 +1251,7 @@ impl Checker {
             Expression::Bool(_) => ExprType::plain(TYPE_BOOL),
             Expression::Nil(_) => ExprType::plain(TYPE_NIL),
             Expression::Error(expr) => {
-                self.record_error(&expr.name);
+                self.require_declared_error(expr);
                 ExprType::plain(TYPE_ERROR)
             }
             Expression::Group(expr) => self.check_expression(&expr.inner),
@@ -1676,7 +1714,6 @@ impl Checker {
                 );
                 return ExprType::invalid();
             }
-            self.record_error("MissingKey");
             return ExprType {
                 base: value_type,
                 errorable: true,
@@ -1975,7 +2012,6 @@ impl Checker {
                 CallUse::Ordinary
             };
             self.check_call_args(&name, &name_pos, &sig, call, 0, arg_use);
-            self.register_host_error_names(&sig);
             return ExprType {
                 base: sig.return_type,
                 errorable: sig.errorable,
@@ -2761,7 +2797,6 @@ impl Checker {
                     );
                     return Some(ExprType::invalid());
                 }
-                self.record_error("Closed");
                 Some(ExprType {
                     base: TYPE_VOID.to_string(),
                     errorable: true,
@@ -2784,7 +2819,6 @@ impl Checker {
                     );
                     return Some(ExprType::invalid());
                 };
-                self.record_error("Closed");
                 Some(ExprType {
                     base: elem_type,
                     errorable: true,
@@ -3499,73 +3533,29 @@ impl Checker {
         }
     }
 
-    fn record_error(&mut self, name: &str) {
-        self.info.error_codes.entry(name.to_string()).or_insert(0);
-    }
-
-    fn register_host_error_names(&mut self, signature: &Signature) {
-        if !signature.host_intrinsic {
+    fn require_declared_error(&mut self, error: &ErrorLiteral) {
+        if self.info.error_codes.contains_key(&error.name) {
             return;
         }
-        if is_fs_host_intrinsic(&signature.full_name) {
-            for name in [
-                "AlreadyExists",
-                "Closed",
-                "IO",
-                "InvalidArgument",
-                "InvalidPath",
-                "NotFound",
-                "PermissionDenied",
-            ] {
-                self.record_error(name);
-            }
-            return;
-        }
-
-        if is_process_host_intrinsic(&signature.full_name) {
-            for name in [
-                "IO",
-                "InvalidArgument",
-                "LimitExceeded",
-                "NotFound",
-                "PermissionDenied",
-                "Timeout",
-                "Cancelled",
-            ] {
-                self.record_error(name);
-            }
-            return;
-        }
-
-        if is_env_host_intrinsic(&signature.full_name) {
-            for name in ["IO", "InvalidArgument", "NotFound", "PermissionDenied"] {
-                self.record_error(name);
-            }
-            return;
-        }
-
-        if is_net_host_intrinsic(&signature.full_name) {
-            for name in [
-                "AddrInUse",
-                "Closed",
-                "ConnectionRefused",
-                "ConnectionReset",
-                "IO",
-                "InvalidArgument",
-                "NotFound",
-                "PermissionDenied",
-                "Timeout",
-            ] {
-                self.record_error(name);
-            }
-        }
+        let display_name = error.name.rsplit('.').next().unwrap_or(&error.name);
+        self.diag.add(
+            error.err_pos.clone(),
+            format!("error {display_name:?} is not declared"),
+        );
     }
 
     fn assign_error_codes(&mut self) {
         let mut ordered = self.info.error_codes.keys().cloned().collect::<Vec<_>>();
         ordered.sort();
         for (idx, name) in ordered.iter().enumerate() {
-            self.info.error_codes.insert(name.clone(), (idx + 1) as i32);
+            let Ok(code) = i32::try_from(idx + 1) else {
+                self.diag.add(
+                    Position::default(),
+                    "program declares too many distinct errors",
+                );
+                return;
+            };
+            self.info.error_codes.insert(name.clone(), code);
         }
         self.info.ordered_errors = ordered;
     }
@@ -3947,51 +3937,6 @@ fn builtin_functions() -> BTreeMap<String, Signature> {
 
 pub(crate) fn is_builtin_function(name: &str) -> bool {
     builtin_functions().contains_key(name)
-}
-
-fn is_fs_host_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        "fs.read_file"
-            | "fs.write_file"
-            | "fs.read_dir"
-            | "fs.stat"
-            | "fs.mkdir_all"
-            | "fs.remove_all"
-            | "fs.temp_dir"
-            | "fs.open_read_handle"
-            | "fs.open_write_handle"
-            | "fs.read_handle"
-            | "fs.write_handle"
-            | "fs.close_handle"
-    )
-}
-
-fn is_process_host_intrinsic(name: &str) -> bool {
-    matches!(name, "process.run" | "process.run_inherit")
-}
-
-fn is_env_host_intrinsic(name: &str) -> bool {
-    name == "env.lookup"
-}
-
-fn is_net_host_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        "net.listen"
-            | "net.accept"
-            | "net.listener_addr"
-            | "net.close_listener"
-            | "net.connect"
-            | "net.read"
-            | "net.write"
-            | "net.close"
-            | "net.local_addr"
-            | "net.remote_addr"
-            | "net.set_read_deadline"
-            | "net.set_write_deadline"
-            | "net.resolve"
-    )
 }
 
 fn is_builtin_type(name: &str) -> bool {
@@ -4382,54 +4327,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_process_limit_errors_separate_from_environment_errors() {
-        let mut checker = Checker::new();
-        checker.register_host_error_names(&test_host_signature("process.run"));
-        for name in [
-            "Cancelled",
-            "IO",
-            "InvalidArgument",
-            "LimitExceeded",
-            "NotFound",
-            "PermissionDenied",
-            "Timeout",
-        ] {
-            assert!(
-                checker.info.error_codes.contains_key(name),
-                "missing {name}"
-            );
-        }
+    fn predeclares_only_language_owned_errors() {
+        let (program, diagnostics) =
+            parse_file("<test>", "package main\n\nfn main() i32 { return 0 }\n");
+        assert_eq!(diagnostics, Vec::new());
 
-        let mut checker = Checker::new();
-        checker.register_host_error_names(&test_host_signature("env.lookup"));
-        for name in ["IO", "InvalidArgument", "NotFound", "PermissionDenied"] {
-            assert!(
-                checker.info.error_codes.contains_key(name),
-                "missing {name}"
-            );
-        }
-        for name in ["Cancelled", "LimitExceeded", "Timeout"] {
-            assert!(
-                !checker.info.error_codes.contains_key(name),
-                "environment lookup registered process-only error {name}"
-            );
-        }
+        let (info, diagnostics) = check_program(&program);
+
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(
+            info.error_codes
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![BUILTIN_ERROR_CLOSED, BUILTIN_ERROR_MISSING_KEY]
+        );
+        assert_eq!(info.error_display_names[BUILTIN_ERROR_CLOSED], "Closed");
+        assert_eq!(
+            info.error_display_names[BUILTIN_ERROR_MISSING_KEY],
+            "MissingKey"
+        );
     }
 
-    fn test_host_signature(full_name: &str) -> Signature {
-        Signature {
-            name: full_name.to_string(),
-            package: full_name.split_once('.').unwrap().0.to_string(),
-            full_name: full_name.to_string(),
-            method: false,
-            receiver: String::new(),
-            params: Vec::new(),
-            return_type: TYPE_VOID.to_string(),
-            errorable: true,
-            builtin: false,
-            host_intrinsic: true,
-            exported: true,
-        }
+    #[test]
+    fn assigns_distinct_deterministic_codes_to_origin_specific_errors() {
+        let (mut program, diagnostics) = parse_file(
+            "<test>",
+            "package main\n\nerror First\nerror Second\nfn main() i32 { return 0 }\n",
+        );
+        assert_eq!(diagnostics, Vec::new());
+        program.errors[0].name = "origin_b.model.Same".to_string();
+        program.errors[1].name = "origin_a.model.Same".to_string();
+
+        let (info, diagnostics) = check_program(&program);
+
+        assert_eq!(diagnostics, Vec::new());
+        let first = info.error_codes["origin_a.model.Same"];
+        let second = info.error_codes["origin_b.model.Same"];
+        assert_ne!(first, second);
+        assert!(first < second);
+        assert_eq!(info.error_display_names["origin_a.model.Same"], "Same");
+        assert_eq!(info.error_display_names["origin_b.model.Same"], "Same");
     }
 
     #[test]

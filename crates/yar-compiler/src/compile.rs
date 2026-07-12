@@ -708,6 +708,59 @@ fn hidden() i32 {
     }
 
     #[test]
+    fn compile_path_enforces_error_declarations_and_visibility() {
+        let root = temp_dir("yar-rust-error-visibility");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "lib"
+
+fn unknown_local() error {
+    return error.Typo
+}
+
+fn private_import() error {
+    return lib.PrivateFailure
+}
+
+fn missing_import() error {
+    return lib.MissingFailure
+}
+
+fn public_import() error {
+    return lib.PublicFailure
+}
+
+fn main() i32 {
+    return 0
+}
+"#,
+        );
+        write_source(
+            &root.join("lib/lib.yar"),
+            r#"package lib
+
+error PrivateFailure
+pub error PublicFailure
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(messages.contains(&"error \"Typo\" is not declared in package \"main\""));
+        assert!(messages.contains(&"package \"lib\" does not export error \"PrivateFailure\""));
+        assert!(messages.contains(&"package \"lib\" does not declare error \"MissingFailure\""));
+        assert_eq!(messages.len(), 3, "unexpected diagnostics: {diagnostics:?}");
+    }
+
+    #[test]
     fn compile_path_rejects_spawning_embedded_resource_values() {
         let root = temp_dir("yar-rust-spawn-resource");
         write_source(

@@ -381,25 +381,29 @@ main.err:
         out.push_str("  switch i32 %main.err.code, label %main.err.unknown [\n");
         for name in &self.info.ordered_errors {
             let code = self.error_code(name)?;
-            writeln!(
-                &mut out,
-                "    i32 {code}, label %main.err.{}",
-                sanitize_label(name)
-            )
-            .unwrap();
+            writeln!(&mut out, "    i32 {code}, label %main.err.{code}",).unwrap();
         }
         out.push_str("  ]\n\n");
 
         let errors = self.info.ordered_errors.clone();
         for name in errors {
-            let label = sanitize_label(&name);
+            let code = self.error_code(&name)?;
+            let display_name = self
+                .info
+                .error_display_names
+                .get(&name)
+                .ok_or_else(|| {
+                    CodegenError::unsupported(format!("missing error display name {name:?}"))
+                })?
+                .clone();
+            let label = code.to_string();
             writeln!(&mut out, "main.err.{label}:").unwrap();
             self.emit_print_literal(
                 &mut out,
                 "unhandled error: ",
                 &format!("main.err.prefix.{label}"),
             );
-            self.emit_print_literal(&mut out, &name, &format!("main.err.name.{label}"));
+            self.emit_print_literal(&mut out, &display_name, &format!("main.err.name.{label}"));
             self.emit_print_literal(&mut out, "\n", &format!("main.err.newline.{label}"));
             out.push_str("  ret i32 1\n\n");
         }
@@ -769,7 +773,7 @@ main.err:
         out: &mut String,
         status: &str,
     ) -> Result<String, CodegenError> {
-        let mut code = self.error_code("IO")?.to_string();
+        let mut code = self.error_code("fs.IO")?.to_string();
         for (idx, (status_code, name)) in [
             (7, "Closed"),
             (6, "InvalidArgument"),
@@ -781,6 +785,7 @@ main.err:
         .into_iter()
         .enumerate()
         {
+            let identity = host_error_identity("fs", name);
             writeln!(
                 out,
                 "  %host.err.match.{idx} = icmp eq i32 {status}, {status_code}"
@@ -789,7 +794,7 @@ main.err:
             writeln!(
                 out,
                 "  %host.err.code.{idx} = select i1 %host.err.match.{idx}, i32 {}, i32 {code}",
-                self.error_code(name)?
+                self.error_code(&identity)?
             )
             .unwrap();
             code = format!("%host.err.code.{idx}");
@@ -3694,7 +3699,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let ok_block = self.current_block.clone();
 
         self.start_block(&miss_label);
-        let code = self.generator.error_code("MissingKey")?;
+        let code = self.generator.error_code("error.MissingKey")?;
         let miss_result = self.emit_error_code_result(value_type, &code.to_string())?;
         self.body.push_str(&format!("  br label %{end_label}\n"));
         let miss_block = self.current_block.clone();
@@ -3914,8 +3919,12 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             .info
             .ordered_errors
             .iter()
-            .map(|name| self.label(&format!("to_str.err.{}", sanitize_label(name))))
-            .collect::<Vec<_>>();
+            .map(|name| {
+                self.generator
+                    .error_code(name)
+                    .map(|code| self.label(&format!("to_str.err.{code}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         self.body
             .push_str(&format!("  switch i32 {code}, label %{default_label} [\n"));
@@ -3936,7 +3945,15 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         {
             self.start_block(&labels[idx]);
             self.terminated = false;
-            let value = self.emit_string_literal(&format!("error.{name}"))?;
+            let display_name = self
+                .generator
+                .info
+                .error_display_names
+                .get(name)
+                .ok_or_else(|| {
+                    CodegenError::unsupported(format!("missing error display name {name:?}"))
+                })?;
+            let value = self.emit_string_literal(&format!("error.{display_name}"))?;
             self.body.push_str(&format!(
                 "  store %yar.str {}, ptr %{result_ptr}\n",
                 value.repr
@@ -4830,7 +4847,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
 
         self.start_block(&err_label);
         self.terminated = false;
-        let closed_code = self.generator.error_code("Closed")?;
+        let closed_code = self.generator.error_code("error.Closed")?;
         let err_result = self.emit_error_code_result(type_, &closed_code.to_string())?;
         self.body.push_str(&format!("  br label %{end_label}\n"));
 
@@ -4903,7 +4920,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         full_name: &str,
         status: &str,
     ) -> Result<String, CodegenError> {
-        let mut code = self.generator.error_code("IO")?.to_string();
+        let owner = host_error_owner(full_name).ok_or_else(|| {
+            CodegenError::unsupported(format!("host error mapping for {full_name:?}"))
+        })?;
+        let mut code = self
+            .generator
+            .error_code(&format!("{owner}.IO"))?
+            .to_string();
         let mappings = if is_fs_host_intrinsic(full_name) {
             &[
                 (7, "Closed"),
@@ -4946,6 +4969,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         };
 
         for (status_code, name) in mappings {
+            let identity = host_error_identity(owner, name);
             let matched = self.temp("host.err.match");
             let next = self.temp("host.err.code");
             self.body.push_str(&format!(
@@ -4953,7 +4977,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             ));
             self.body.push_str(&format!(
                 "  %{next} = select i1 %{matched}, i32 {}, i32 {code}\n",
-                self.generator.error_code(name)?
+                self.generator.error_code(&identity)?
             ));
             code = format!("%{next}");
         }
@@ -6111,6 +6135,28 @@ fn function_symbol(name: &str) -> String {
     format!("yar.{}", sanitize_label(name))
 }
 
+fn host_error_owner(name: &str) -> Option<&'static str> {
+    if is_fs_host_intrinsic(name) {
+        Some("fs")
+    } else if is_process_host_intrinsic(name) {
+        Some("process")
+    } else if is_env_host_intrinsic(name) {
+        Some("env")
+    } else if is_net_host_intrinsic(name) {
+        Some("net")
+    } else {
+        None
+    }
+}
+
+fn host_error_identity(owner: &str, name: &str) -> String {
+    if name == "Closed" {
+        "error.Closed".to_string()
+    } else {
+        format!("{owner}.{name}")
+    }
+}
+
 fn is_fs_host_intrinsic(name: &str) -> bool {
     matches!(
         name,
@@ -6294,6 +6340,7 @@ mod tests {
         "testdata/divide/main.yar",
         "testdata/enum_positional/main.yar",
         "testdata/enums/main.yar",
+        "testdata/error_identity/main.yar",
         "testdata/field_visibility/main.yar",
         "testdata/garbage_collection/main.yar",
         "testdata/generics/main.yar",
@@ -6614,6 +6661,9 @@ fn main() i32 {
         let ir = emit_source(
             r#"
 package main
+
+error Boom
+error Unexpected
 
 struct Record {
     value i32

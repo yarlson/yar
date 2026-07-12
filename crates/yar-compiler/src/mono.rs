@@ -57,6 +57,7 @@ impl Monomorphizer {
                 package_name: program.package_name.clone(),
                 imports: program.imports.clone(),
                 enums: program.enums.clone(),
+                errors: program.errors.clone(),
                 ..Program::default()
             },
         }
@@ -738,9 +739,31 @@ fn is_builtin_function(name: &str) -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::{lower::lower_package_graph, package::load_package_graph, parser::parse_file};
+    use crate::{
+        lower::lower_package_graph, package::load_package_graph, parser::parse_file,
+        token::Position,
+    };
 
     use super::*;
+
+    #[test]
+    fn preserves_error_declarations() {
+        let program = Program {
+            package_name: "main".to_owned(),
+            errors: vec![ErrorDecl {
+                error_pos: Position::default(),
+                exported: true,
+                name: "main.Failure".to_owned(),
+                name_pos: Position::default(),
+            }],
+            ..Program::default()
+        };
+
+        let (output, diagnostics) = monomorphize_program(&program);
+
+        assert_eq!(diagnostics, Vec::new());
+        assert_eq!(output.errors, program.errors);
+    }
 
     #[test]
     fn monomorphizes_local_generic_fixture() {

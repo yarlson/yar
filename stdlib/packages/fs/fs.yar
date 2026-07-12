@@ -1,5 +1,12 @@
 package fs
 
+pub error AlreadyExists
+pub error IO
+pub error InvalidArgument
+pub error InvalidPath
+pub error NotFound
+pub error PermissionDenied
+
 pub struct DirEntry {
     pub name str
     pub is_dir bool

@@ -2,6 +2,9 @@ package main
 
 import "support"
 
+error Negative
+error SyntaxSurface
+
 // This fixture is the compact compatibility surface for syntax tooling.
 pub struct Point[T] {
     pub x T
@@ -188,8 +191,11 @@ fn main() i32 {
     if named_error() != error.SyntaxSurface {
         return 7
     }
-    if nil == &cafe {
+    if support.named_error() != support.SupportFailure {
         return 8
+    }
+    if nil == &cafe {
+        return 9
     }
     print(" surface ok\n")
     return 0

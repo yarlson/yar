@@ -1,5 +1,8 @@
 package utf8
 
+pub error InvalidUTF8
+pub error OutOfRange
+
 pub fn decode(s str, off i32) !i32 {
     if off < 0 || off >= len(s) {
         return error.OutOfRange

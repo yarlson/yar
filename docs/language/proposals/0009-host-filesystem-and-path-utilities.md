@@ -171,14 +171,14 @@ The intended design is:
 - allow `fs.mkdir_all` and `fs.remove_all` to be ordinary Yar functions layered
   over smaller host primitives if that keeps the runtime smaller
 
-All host failures are explicit errors. Expected error names in the initial
-surface are:
+All host failures are explicit package-owned errors. Expected public names in
+the initial surface are:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.AlreadyExists`
-- `error.InvalidPath`
-- `error.IO`
+- `fs.NotFound`
+- `fs.PermissionDenied`
+- `fs.AlreadyExists`
+- `fs.InvalidPath`
+- `fs.IO`
 
 The exact mapping from host errors to YAR error names is implementation-defined,
 but the language/runtime contract must preserve these stable user-visible names.

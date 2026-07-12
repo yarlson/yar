@@ -10,6 +10,7 @@ pub struct Program {
     pub structs: Vec<StructDecl>,
     pub interfaces: Vec<InterfaceDecl>,
     pub enums: Vec<EnumDecl>,
+    pub errors: Vec<ErrorDecl>,
     pub functions: Vec<FunctionDecl>,
 }
 
@@ -55,6 +56,7 @@ pub struct Package {
     pub structs: Vec<StructDecl>,
     pub interfaces: Vec<InterfaceDecl>,
     pub enums: Vec<EnumDecl>,
+    pub errors: Vec<ErrorDecl>,
     pub functions: Vec<FunctionDecl>,
 }
 
@@ -189,6 +191,14 @@ pub struct ImportDecl {
     pub import_pos: Position,
     pub path: String,
     pub path_pos: Position,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorDecl {
+    pub error_pos: Position,
+    pub exported: bool,
+    pub name: String,
+    pub name_pos: Position,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

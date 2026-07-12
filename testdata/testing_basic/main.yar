@@ -2,6 +2,8 @@ package main
 
 import "helper"
 
+error DivideByZero
+
 fn add(a i32, b i32) i32 {
     return helper.identity(a + b)
 }

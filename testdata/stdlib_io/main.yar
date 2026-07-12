@@ -4,6 +4,8 @@ import "std/fs"
 import "std/io"
 import "std/path"
 
+error IO
+
 fn main() !i32 {
     dir := fs.temp_dir("yar-io")?
     src_path := path.join([]str{dir, "src.txt"})
@@ -64,7 +66,7 @@ fn expect_closed_read(f fs.File) !void {
 
 fn expect_invalid_copy(dst io.Writer, src io.Reader) !void {
     copied := io.copy(dst, src, 0) or |err| {
-        if err == error.InvalidArgument {
+        if err == io.InvalidArgument {
             return
         }
         return error.IO
@@ -77,7 +79,7 @@ fn expect_invalid_copy(dst io.Writer, src io.Reader) !void {
 
 fn expect_limit_exceeded(src io.Reader) !void {
     data := io.read_all(src, 4, 3) or |err| {
-        if err == error.LimitExceeded {
+        if err == io.LimitExceeded {
             return
         }
         return error.IO

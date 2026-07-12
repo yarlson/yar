@@ -36,6 +36,8 @@ output becomes `print(to_str(n))`.
 ### Valid examples
 
 ```
+error NotFound
+
 print(to_str(42))          // "42"
 print(to_str(true))        // "true"
 print(to_str("hello"))     // "hello"
@@ -82,6 +84,8 @@ unwrap or handle the error first.
 - `to_str` on `bool` produces `"true"` or `"false"`
 - `to_str` on `error` produces `"error.<Name>"` for known errors and
   `"error.unknown"` for unrecognized codes
+- package ownership is deliberately omitted from this legacy display; equal
+  strings do not imply equal error identities
 
 ## 5. Type Rules
 
@@ -109,8 +113,9 @@ syntax. The name is resolved during checking as a known builtin, same as
   - `bool`: emits `select i1` choosing between `"true"` and `"false"` string
     constants
   - `str`: returns the argument unchanged
-  - `error`: emits a `switch` on the error code mapping each known error name
-    to its `"error.<Name>"` string constant, with `"error.unknown"` as default
+  - `error`: emits a `switch` on the error code mapping each known declaration
+    identity to its legacy `"error.<Name>"` leaf-name string, with
+    `"error.unknown"` as default
 - runtime impact: requires `yar_to_str_i32` and `yar_to_str_i64` runtime ABI
   functions that allocate and format integer strings through output pointers
 

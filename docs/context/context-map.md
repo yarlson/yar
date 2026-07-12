@@ -22,8 +22,9 @@ decisions, future planning, and the proposal registry, use the
   channel operations, runtime behavior, and current platform limits.
 - [domains/language-slice.md](domains/language-slice.md) — Supported
   source-level constructs, types, and semantic limits.
-- [domains/error-model.md](domains/error-model.md) — Error values, propagation
-  sugar, host-backed error names, and unhandled-error behavior.
+- [domains/error-model.md](domains/error-model.md) — Package-owned error
+  declarations and identity, propagation sugar, host mappings, and
+  unhandled-error behavior.
 - [domains/stdlib.md](domains/stdlib.md) — Embedded standard library design,
   package surfaces, and host-intrinsic boundary.
 - [domains/dependency-management.md](domains/dependency-management.md) —

@@ -478,8 +478,8 @@ No ambiguity with existing syntax:
 - Register `chan_send`, `chan_recv`, `chan_close` with appropriate type
   inference from the channel argument.
 - Register `chan_new` as a generic builtin requiring explicit type argument.
-- Register `error.Closed` if not already registered (already exists from `net`
-  package).
+- Use the compiler-owned `error.Closed` declaration shared by closed channels
+  and closed or invalid resource handles.
 
 ### Codegen impact
 
@@ -625,7 +625,7 @@ and assembly code in the runtime.
 Composes naturally. When `R` is `!T`, the taskgroup produces `[]!T`. Each
 element is handled with standard `or |err|`, `?`, or `return`. No new error
 handling mechanism is needed. `chan_send` returns `!void` and `chan_recv`
-returns `!T`, using the existing `error.Closed` name from the `net` package.
+returns `!T`, using the compiler-owned shared `error.Closed` declaration.
 
 ### Structs
 

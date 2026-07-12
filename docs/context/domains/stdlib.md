@@ -60,7 +60,7 @@ Functions:
 - `join(parts []str, sep str) str` — join slice of strings
 - `from_byte(i32) str` — construct a single-byte string
 - `parse_i64(str) !i64` — parse a base-10 signed integer; returns
-  `error.InvalidInteger` or `error.IntegerOverflow`
+  `strings.InvalidInteger` or `strings.IntegerOverflow`
 
 Internal helpers `contains_byte` and `parse_positive` are not exported.
 
@@ -78,8 +78,8 @@ Functions:
 
 Errors:
 
-- `error.InvalidUTF8`
-- `error.OutOfRange`
+- `utf8.InvalidUTF8`
+- `utf8.OutOfRange`
 
 ### `conv`
 
@@ -159,13 +159,13 @@ produce `error.Closed`.
 
 Errors:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.AlreadyExists`
-- `error.InvalidPath`
-- `error.InvalidArgument`
+- `fs.NotFound`
+- `fs.PermissionDenied`
+- `fs.AlreadyExists`
+- `fs.InvalidPath`
+- `fs.InvalidArgument`
 - `error.Closed`
-- `error.IO`
+- `fs.IO`
 
 ### `io`
 
@@ -190,9 +190,12 @@ Functions:
 
 Errors:
 
-- `error.InvalidArgument`
-- `error.LimitExceeded`
-- `error.IO`
+- `io.InvalidArgument`
+- `io.LimitExceeded`
+- `io.IO`
+
+Errors propagated from supplied stream implementations retain their original
+package-owned identity.
 
 ### `process`
 
@@ -217,18 +220,18 @@ Functions:
 
 Errors:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.InvalidArgument`
-- `error.Timeout`
-- `error.LimitExceeded`
-- `error.Cancelled`
-- `error.IO`
+- `process.NotFound`
+- `process.PermissionDenied`
+- `process.InvalidArgument`
+- `process.Timeout`
+- `process.LimitExceeded`
+- `process.Cancelled`
+- `process.IO`
 
 Timeouts range from 1 millisecond through 24 hours. Capture caps range from 0
 through 64 MiB per stream, with the exact cap allowed. Timeout, cancellation,
 or a cap breach terminates and reaps ordinary descendants before returning;
-partial capture is discarded and cleanup failure becomes `error.IO`. Unix
+partial capture is discarded and cleanup failure becomes `process.IO`. Unix
 descendants that create a new session may escape containment. Calls block only
 their calling native task thread and provide no CPU, address-space, file,
 network, or process-count sandbox.
@@ -240,11 +243,12 @@ Host-backed environment lookup.
 Functions:
 
 - `lookup(name str) !str` — return one environment variable value, or
-  `error.NotFound` when absent
+  `env.NotFound` when absent
 
 Additional current failure mode:
 
-- `error.InvalidArgument` for names that cannot cross the host boundary
+- `env.InvalidArgument` for names that cannot cross the host boundary
+- `env.PermissionDenied` and `env.IO` for other host failures
 
 ### `stdio`
 
@@ -293,14 +297,14 @@ Methods on `Conn`:
 
 Errors:
 
-- `error.ConnectionRefused`
-- `error.Timeout`
-- `error.AddrInUse`
-- `error.ConnectionReset`
-- `error.NotFound` (DNS failure)
-- `error.PermissionDenied`
-- `error.InvalidArgument`
-- `error.IO`
+- `net.ConnectionRefused`
+- `net.Timeout`
+- `net.AddrInUse`
+- `net.ConnectionReset`
+- `net.NotFound` (DNS failure)
+- `net.PermissionDenied`
+- `net.InvalidArgument`
+- `net.IO`
 - `error.Closed`
 
 `read` accepts 1 through 67,108,864 bytes inclusive and returns an empty string
@@ -312,7 +316,7 @@ and resource release. Raw `i64` network intrinsics are internal.
 Read and write deadlines are relative per-operation socket timeouts. Zero
 disables a timeout; changing it is not promised to interrupt a syscall already
 in progress. Synchronous DNS and connect cannot be interrupted before a handle
-exists. Resolver failure is `error.NotFound`.
+exists. Resolver failure is `net.NotFound`.
 
 ### `testing`
 
@@ -362,7 +366,7 @@ Functions:
   not a high-scale readiness poller.
 - Process execution requires at least one argv element. Empty command vectors,
   invalid host strings, invalid timeouts, and invalid capture caps surface
-  `error.InvalidArgument`.
+  `process.InvalidArgument`.
 - `fs.temp_dir` rejects prefixes containing path separators or embedded NUL
   bytes and creates directories under `TMPDIR` or `/tmp` on POSIX, or under
   the system temporary directory on Windows.
