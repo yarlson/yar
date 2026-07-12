@@ -594,15 +594,33 @@ io.close_quiet(c io.Closer) void
 
 ### process
 
-Type: `process.Result { exit_code i32, stdout str, stderr str }`
+Types:
+
+```
+process.Result { exit_code i32, stdout str, stderr str }
+process.Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }
+process.Cancellation { signal chan[bool] }
+```
 
 ```
 process.args() []str
-process.run(argv []str) !process.Result
-process.run_inherit(argv []str) !i32
+process.limits(timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64) !process.Limits
+process.cancellation() process.Cancellation
+process.cancel(value process.Cancellation) void
+process.run(argv []str, limits process.Limits, cancellation process.Cancellation) !process.Result
+process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.Cancellation) !i32
 ```
 
-Errors: `error.NotFound`, `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`
+Timeout range: 1..86,400,000 ms. Capture caps: 0..67,108,864 bytes each;
+the exact cap is allowed and zero allows no output. Timeout, cancellation, or
+cap breach terminates and reaps ordinary descendants; partial output is
+discarded. Cleanup failure is `error.IO`. `run_inherit` inherits stdio and has
+no capture caps. Unix descendants that create a new session may escape. These
+controls are not CPU, address-space, file, network, or process-count quotas.
+Only the calling native task thread blocks.
+
+Errors: `error.NotFound`, `error.PermissionDenied`, `error.InvalidArgument`,
+`error.Timeout`, `error.LimitExceeded`, `error.Cancelled`, `error.IO`
 
 ### env
 
@@ -806,6 +824,8 @@ External subprocess limits:
   their ordinary descendants through a Unix process group or Windows Job
   Object; a Unix descendant that deliberately creates a new session can escape
   that boundary.
+- These variables configure CLI-owned subprocesses only. They do not configure
+  or override explicit `std/process` timeout, capture, or cancellation values.
 
 ## Complete TDD Example
 

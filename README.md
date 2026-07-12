@@ -180,6 +180,13 @@ HTTP serving is not part of the standard library. The earlier
 `std/http` experiment was withdrawn until bounded framing, deadlines, and
 resource lifecycle rules are specified and tested.
 
+Source programs launch bounded child processes explicitly. `process.run`
+takes validated timeout and stdout/stderr byte limits plus a share-safe
+cancellation signal; `process.run_inherit` takes a timeout and the same
+cancellation signal. Timeouts, cancellation, and capture-limit breaches
+terminate and reap ordinary descendants before returning. These source-level
+arguments are independent of the CLI timeout environment variables below.
+
 ## Install
 
 Requirements: Rust 2024 toolchain and `clang`.
@@ -246,6 +253,9 @@ deadline; only its build phase uses `YAR_BUILD_TIMEOUT_SECS`. Timed subprocesses
 are contained as a Unix process group or Windows Job Object so a timeout also
 terminates ordinary descendants. A Unix descendant that deliberately creates a
 new session is outside that containment boundary.
+
+Those variables configure subprocesses owned by the Rust CLI only. They do not
+configure or override `std/process` calls made by the compiled program.
 
 <details>
 <summary>Installing clang</summary>

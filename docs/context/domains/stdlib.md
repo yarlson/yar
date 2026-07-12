@@ -200,21 +200,36 @@ Host-backed process and argv helpers.
 Types:
 
 - `Result { exit_code i32, stdout str, stderr str }`
+- `Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }`
+- `Cancellation { signal chan[bool] }` — share-safe close-only signal
 
 Functions:
 
 - `args() []str` — return the host-provided argument vector, including `argv[0]`
-- `run(argv []str) !Result` — launch one child process, capture stdout/stderr,
-  and return the child exit code plus captured output
-- `run_inherit(argv []str) !i32` — launch one child process with inherited
-  stdin/stdout/stderr and return the child exit code
+- `limits(timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64) !Limits`
+- `cancellation() Cancellation` and `cancel(Cancellation) void`
+- `run(argv []str, limits Limits, cancellation Cancellation) !Result` — run
+  with a deadline and independent stdout/stderr caps
+- `run_inherit(argv []str, timeout_milliseconds i64, cancellation Cancellation) !i32` —
+  run with inherited stdio under a deadline and cancellation signal
 
 Errors:
 
 - `error.NotFound`
 - `error.PermissionDenied`
 - `error.InvalidArgument`
+- `error.Timeout`
+- `error.LimitExceeded`
+- `error.Cancelled`
 - `error.IO`
+
+Timeouts range from 1 millisecond through 24 hours. Capture caps range from 0
+through 64 MiB per stream, with the exact cap allowed. Timeout, cancellation,
+or a cap breach terminates and reaps ordinary descendants before returning;
+partial capture is discarded and cleanup failure becomes `error.IO`. Unix
+descendants that create a new session may escape containment. Calls block only
+their calling native task thread and provide no CPU, address-space, file,
+network, or process-count sandbox.
 
 ### `env`
 
@@ -347,8 +362,8 @@ Functions:
   `error.Closed`. All networking calls are blocking. Timeouts are set
   per-connection via `SO_RCVTIMEO`/`SO_SNDTIMEO`. SIGPIPE is suppressed on POSIX
   (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
-- `process.run` and `process.run_inherit` require at least one argv element.
-  Empty command vectors and strings that cannot cross the host boundary surface
+- Process execution requires at least one argv element. Empty command vectors,
+  invalid host strings, invalid timeouts, and invalid capture caps surface
   `error.InvalidArgument`.
 - `fs.temp_dir` rejects prefixes containing path separators or embedded NUL
   bytes and creates directories under `TMPDIR` or `/tmp` on POSIX, or under

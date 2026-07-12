@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 pub const MANIFEST_FILE: &str = "yar-runtime.toml";
 pub const FORMAT_VERSION: u32 = 1;
-pub const RUNTIME_ABI: u32 = 2;
+pub const RUNTIME_ABI: u32 = 3;
 pub const COMPILER_COMPATIBILITY: u32 = 1;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -209,7 +209,7 @@ mod tests {
             &dir,
             r#"format = 1
 target = "x86_64-unknown-linux-gnu"
-runtime_abi = 2
+runtime_abi = 3
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 
@@ -248,7 +248,7 @@ system_libraries = ["m", "m", "dl"]
             ),
             (
                 "abi",
-                manifest_with("runtime_abi = 3"),
+                manifest_with("runtime_abi = 4"),
                 "incompatible with compiler ABI",
             ),
             (
@@ -364,7 +364,7 @@ system_libraries = ["m", "m", "dl"]
     fn manifest_with(replacement: &str) -> String {
         let base = r#"format = 1
 target = "x86_64-unknown-linux-gnu"
-runtime_abi = 2
+runtime_abi = 3
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 

@@ -3452,7 +3452,22 @@ impl Checker {
             return;
         }
 
-        if is_process_env_host_intrinsic(&signature.full_name) {
+        if is_process_host_intrinsic(&signature.full_name) {
+            for name in [
+                "IO",
+                "InvalidArgument",
+                "LimitExceeded",
+                "NotFound",
+                "PermissionDenied",
+                "Timeout",
+                "Cancelled",
+            ] {
+                self.record_error(name);
+            }
+            return;
+        }
+
+        if is_env_host_intrinsic(&signature.full_name) {
             for name in ["IO", "InvalidArgument", "NotFound", "PermissionDenied"] {
                 self.record_error(name);
             }
@@ -3882,8 +3897,12 @@ fn is_fs_host_intrinsic(name: &str) -> bool {
     )
 }
 
-fn is_process_env_host_intrinsic(name: &str) -> bool {
-    matches!(name, "process.run" | "process.run_inherit" | "env.lookup")
+fn is_process_host_intrinsic(name: &str) -> bool {
+    matches!(name, "process.run" | "process.run_inherit")
+}
+
+fn is_env_host_intrinsic(name: &str) -> bool {
+    name == "env.lookup"
 }
 
 fn is_net_host_intrinsic(name: &str) -> bool {
@@ -4291,6 +4310,57 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn keeps_process_limit_errors_separate_from_environment_errors() {
+        let mut checker = Checker::new();
+        checker.register_host_error_names(&test_host_signature("process.run"));
+        for name in [
+            "Cancelled",
+            "IO",
+            "InvalidArgument",
+            "LimitExceeded",
+            "NotFound",
+            "PermissionDenied",
+            "Timeout",
+        ] {
+            assert!(
+                checker.info.error_codes.contains_key(name),
+                "missing {name}"
+            );
+        }
+
+        let mut checker = Checker::new();
+        checker.register_host_error_names(&test_host_signature("env.lookup"));
+        for name in ["IO", "InvalidArgument", "NotFound", "PermissionDenied"] {
+            assert!(
+                checker.info.error_codes.contains_key(name),
+                "missing {name}"
+            );
+        }
+        for name in ["Cancelled", "LimitExceeded", "Timeout"] {
+            assert!(
+                !checker.info.error_codes.contains_key(name),
+                "environment lookup registered process-only error {name}"
+            );
+        }
+    }
+
+    fn test_host_signature(full_name: &str) -> Signature {
+        Signature {
+            name: full_name.to_string(),
+            package: full_name.split_once('.').unwrap().0.to_string(),
+            full_name: full_name.to_string(),
+            method: false,
+            receiver: String::new(),
+            params: Vec::new(),
+            return_type: TYPE_VOID.to_string(),
+            errorable: true,
+            builtin: false,
+            host_intrinsic: true,
+            exported: true,
+        }
+    }
 
     #[test]
     fn checks_declarations_for_every_testdata_entry_without_diagnostics() {

@@ -263,6 +263,15 @@ pub(crate) fn chan_close(handle: *mut u8) {
     channel.can_recv.notify_all();
 }
 
+/// Returns whether a validated boolean channel has been closed without
+/// consuming a buffered value. Process cancellation uses channel closure as a
+/// level-triggered signal so every observer sees the same state.
+pub(crate) fn cancellation_requested(handle: *mut u8) -> Option<bool> {
+    let channel = channel_from_ptr(handle)?;
+    let state = channel.state.lock().unwrap_or_else(|err| err.into_inner());
+    (state.elem_size == size_of::<bool>()).then_some(state.closed)
+}
+
 fn taskgroup_from_ptr<'a>(group: *mut u8) -> &'a TaskgroupHandle {
     let ptr = group.cast::<TaskgroupHandle>();
     if ptr.is_null() {
@@ -460,6 +469,36 @@ mod tests {
 
         assert_eq!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
         sender.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_probe_validates_and_does_not_consume_the_channel() {
+        let handle = chan_new(size_of::<bool>() as i64, 1);
+        assert_eq!(cancellation_requested(handle), Some(false));
+
+        let signal = true;
+        assert_eq!(chan_send(handle, (&signal as *const bool).cast()), 0);
+        assert_eq!(cancellation_requested(handle), Some(false));
+
+        let channel = channel_from_ptr(handle).unwrap();
+        assert_eq!(
+            channel
+                .state
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .count,
+            1
+        );
+
+        chan_close(handle);
+        assert_eq!(cancellation_requested(handle), Some(true));
+        assert_eq!(cancellation_requested(ptr::null_mut()), None);
+
+        let wrong_element_type = chan_new(size_of::<i64>() as i64, 1);
+        assert_eq!(cancellation_requested(wrong_element_type), None);
+
+        finalize_channel(handle);
+        assert_eq!(cancellation_requested(handle), None);
     }
 
     #[test]

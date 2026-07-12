@@ -1114,23 +1114,45 @@ import "std/process"
 Types:
 
 - `process.Result { exit_code i32, stdout str, stderr str }`
+- `process.Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }`
+- `process.Cancellation { signal chan[bool] }`
 
 Available functions:
 
 - `process.args() []str`
-- `process.run(argv []str) !process.Result`
-- `process.run_inherit(argv []str) !i32`
+- `process.limits(timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64) !process.Limits`
+- `process.cancellation() process.Cancellation`
+- `process.cancel(value process.Cancellation) void`
+- `process.run(argv []str, limits process.Limits, cancellation process.Cancellation) !process.Result`
+- `process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.Cancellation) !i32`
 
 Host-process launch failures surface through ordinary YAR errors using the names:
 
 - `error.NotFound`
 - `error.PermissionDenied`
 - `error.InvalidArgument`
+- `error.Timeout`
+- `error.LimitExceeded`
+- `error.Cancelled`
 - `error.IO`
 
 If a child process launches successfully, a non-zero child exit code is reported
 as data in `process.Result.exit_code` or the returned `i32`, not as a YAR
 `error`.
+
+Timeouts must be between 1 millisecond and 24 hours. Each capture cap must be
+between 0 and 64 MiB; zero permits no bytes, and the exact cap is allowed.
+`run` drains stdout and stderr concurrently. A timeout, cancellation, or the
+first byte beyond either cap terminates and reaps the leader and ordinary
+descendants before returning, and partial output is discarded. Cleanup failure
+returns `error.IO`. `run_inherit` has the same timeout and cancellation
+semantics but no capture limits because it inherits stdio.
+
+On Unix, a descendant that deliberately starts a new session may escape the
+process-group boundary. Process controls are not a sandbox and impose no CPU,
+address-space, file, network, or process-count quotas. A blocking call consumes
+only its calling native task thread; sibling tasks continue and can close the
+share-safe cancellation signal.
 
 ### `env`
 
@@ -1365,6 +1387,10 @@ shared by all Git subprocesses in a dependency command. The program launched by
 Windows Job Object containment so timeouts terminate ordinary descendants; a
 Unix descendant that deliberately creates a new session is outside that
 containment boundary.
+
+These settings belong to the Rust CLI. Source-level `std/process` timeouts,
+capture caps, and cancellation are explicit function arguments and are not
+configured or overridden by the CLI environment variables.
 
 ## Dependencies
 

@@ -308,8 +308,9 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 - `io` defines stream interfaces (`Reader`, `Writer`, `Closer`,
   `ReadCloser`, `WriteCloser`, and `ReadWriter`) plus `copy`, `read_all`, and
   `close_quiet`.
-- `process.args()` returns `[]str`, `process.run([]str)` returns
-  `!process.Result`, and `process.run_inherit([]str)` returns `!i32`.
+- `process.args()` returns `[]str`. Child execution requires explicit
+  source-level timeouts and a share-safe cancellation signal; captured runs
+  also require independent bounded stdout/stderr caps.
 - `process.Result` has `exit_code i32`, `stdout str`, and `stderr str`.
 - `env.lookup(str)` returns `!str`.
 - `stdio.eprint(str)` writes to stderr and returns `void`.

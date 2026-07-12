@@ -1,6 +1,6 @@
 format = 1
 target = "x86_64-unknown-linux-gnu"
-runtime_abi = 2
+runtime_abi = 3
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 

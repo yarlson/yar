@@ -965,6 +965,9 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
     let dir = temp_dir("yar-cli-process-env");
     let capture_script = dir.join("capture.sh");
     let inherit_script = dir.join("inherit.sh");
+    let timeout_script = dir.join("timeout.sh");
+    let limit_script = dir.join("limit.sh");
+    let cancel_script = dir.join("cancel.sh");
     write_executable(
         &capture_script,
         "#!/bin/sh\nprintf 'captured stdout\\n'\nprintf 'captured stderr\\n' >&2\nexit 7\n",
@@ -973,6 +976,9 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
         &inherit_script,
         "#!/bin/sh\nprintf 'inherit stdout\\n'\nprintf 'inherit stderr\\n' >&2\nexit 3\n",
     );
+    write_executable(&timeout_script, "#!/bin/sh\nsleep 1\n");
+    write_executable(&limit_script, "#!/bin/sh\nprintf 'four'\n");
+    write_executable(&cancel_script, "#!/bin/sh\nsleep 1\n");
     let runtime_bundle = build_runtime_bundle(&dir);
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
@@ -981,7 +987,11 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
         .arg("--")
         .arg(&capture_script)
         .arg(&inherit_script)
+        .arg(&timeout_script)
+        .arg(&limit_script)
+        .arg(&cancel_script)
         .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
+        .env("YAR_GC_HEAP_TARGET_BYTES", "1024")
         .env("YAR_PROCESS_ENV_TEST", "env ok")
         .output()
         .unwrap();

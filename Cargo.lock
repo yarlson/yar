@@ -465,4 +465,5 @@ name = "yar-runtime"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "yar-process-control",
 ]
