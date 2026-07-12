@@ -912,10 +912,15 @@ Builtins are fixed by the compiler:
 
 They are not user-overridable.
 
-String-builder handles are positive, process-local registry IDs. Their mutable
-state is synchronized and IDs are never reused. Passing an unknown or
-wrong-kind ID to a string-builder operation terminates with
-`runtime failure: invalid string builder`.
+String-builder handles are positive, process-local opaque `i64` tokens backed by
+generation-tagged registry slots. Their mutable state is synchronized. Passing
+an unknown, stale-generation, or wrong-kind token to a string-builder operation
+terminates with `runtime failure: invalid string builder`.
+
+Across runtime handle kinds, removing an entry advances its slot generation and
+changes the full token before that slot can be reused. Stale-generation and
+wrong-kind access does not consume the current entry. A slot whose maximum
+generation has been removed is retired rather than wrapped.
 
 ## Runtime Behavior
 
@@ -1045,12 +1050,12 @@ Types:
 `fs.File` is a resource struct and cannot be passed to or captured by a
 spawned task.
 
-Its `handle` is a kind-checked, non-reused process-local registry ID, not a
-native address. File operations synchronize access to the underlying file.
-Closing removes the ID so new lookups fail, then waits for an operation holding
-the file lock before releasing the host file; it does not interrupt blocking
-I/O. Close does not call an implicit durability sync. Unknown, stale, and
-wrong-kind IDs produce `error.Closed`.
+Its `handle` is a kind-checked, generation-tagged process-local opaque `i64`
+token, not a native address. File operations synchronize access to the
+underlying file. Closing removes the token so new lookups fail, then waits for
+an operation holding the file lock before releasing the host file; it does not
+interrupt blocking I/O. Close does not call an implicit durability sync.
+Unknown, stale-generation, and wrong-kind tokens produce `error.Closed`.
 
 Available functions:
 
@@ -1190,9 +1195,9 @@ Types:
 - `net.Listener` — opaque listener reference
 
 `net.Conn` and `net.Listener` are typed, share-safe references backed by
-kind-checked, non-reused process-local registry IDs. They may be passed to or
-captured by spawned tasks. Raw `i64` network intrinsics are compiler/runtime
-implementation details rather than public stdlib API.
+kind-checked, generation-tagged process-local opaque `i64` tokens. They may be
+passed to or captured by spawned tasks. Raw `i64` network intrinsics are
+compiler/runtime implementation details rather than public stdlib API.
 
 A connection permits one reader and one writer at the same time. Concurrent
 reads serialize with reads, and concurrent writes serialize with writes.

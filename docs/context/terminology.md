@@ -76,9 +76,11 @@ builtin — A compiler-owned operation with checker-defined behavior: `print`,
 host intrinsic — A stdlib declaration whose checker/codegen wiring calls a
 runtime helper directly instead of emitted Yar code.
 
-runtime registry handle — A positive, process-local `i64` registry ID for a
+runtime registry handle — A positive, process-local opaque `i64` token for a
 runtime-owned string builder, streaming file, TCP listener, or TCP connection.
-IDs are kind-checked and never reused within the process.
+The token identifies a kind-checked registry slot and its generation. Vacant
+slots may be reused, but reuse advances the generation and changes the full
+token, so stale generations remain invalid.
 
 enum — A user-defined closed variant type with named cases, each case
 optionally carrying a payload of named fields.

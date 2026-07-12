@@ -66,8 +66,11 @@ host-intrinsic spawns additionally require a task wrapper; currently only
 Status: accepted
 
 User-visible file handles and compiler-internal network handles are positive
-process-local registry IDs rather than native addresses. IDs are kind-checked,
-never reused within a process, and resolve to synchronized mutable state.
+process-local opaque `i64` tokens rather than native addresses. Tokens identify
+a kind-checked registry slot and generation and resolve to synchronized mutable
+state. Vacant slots may be reused only after advancing the generation, which
+changes the full token; stale generations remain invalid, and exhausted
+generations retire their slots rather than wrapping.
 `net.Conn` and `net.Listener` are typed, opaque, share-safe references; raw
 network IDs are not public stdlib surface.
 

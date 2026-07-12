@@ -9,8 +9,12 @@ Add a `net` stdlib package providing TCP client/server primitives: listen,
 accept, connect, read, write, close, address inspection, timeouts, and DNS
 resolution. Connections and listeners are public typed, opaque, share-safe
 `Conn` and `Listener` references. The runtime backs them with kind-checked,
-non-reused process-local `i64` registry IDs; raw IDs exist only at the internal
-compiler/runtime ABI. Calls block only their calling native task thread.
+generation-tagged process-local opaque `i64` tokens. Vacant registry slots may
+be reused, but reuse changes the full token and leaves stale generations
+invalid. Stale-generation and wrong-kind access does not consume a current
+entry, and maximum-generation slots are retired rather than wrapped. Raw IDs
+exist only at the internal compiler/runtime ABI. Calls block only their calling
+native task thread.
 
 ## 2. Motivation
 

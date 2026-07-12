@@ -266,11 +266,13 @@ complete.
   results only after every spawned thread has joined.
 - Bare `i64` values remain scalar. The checker cannot distinguish ordinary
   integers from runtime or OS handles represented as raw `i64` values.
-- Runtime-backed raw handles are kind-checked, non-reused registry IDs whose
-  mutable state is synchronized. That makes invalid-handle failure deterministic
-  and serializes registered state access, but does not define concurrent
-  operation order, provide compiler-visible handle provenance, or make raw
-  handles valid share-safe inputs by design.
+- Runtime-backed raw handles are kind-checked, generation-tagged registry tokens
+  whose mutable state is synchronized. Vacant slots may be reused with a new
+  full token, while stale generations remain invalid. Stale-generation and
+  wrong-kind access does not consume the current entry. That makes
+  invalid-handle failure deterministic and serializes registered state access,
+  but does not define concurrent operation order, provide compiler-visible
+  handle provenance, or make raw handles valid share-safe inputs by design.
 
 ### Task scheduling
 
