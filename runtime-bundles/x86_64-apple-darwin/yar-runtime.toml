@@ -5,4 +5,4 @@ compiler_compatibility = 1
 archive = "libyar_runtime.a"
 
 [link]
-system_libraries = ["System", "c", "m"]
+system_libraries = ["iconv", "System", "c", "m"]

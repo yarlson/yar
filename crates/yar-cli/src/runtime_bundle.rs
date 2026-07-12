@@ -283,8 +283,8 @@ system_libraries = ["m", "m", "dl"]
     #[test]
     fn checked_in_target_manifests_match_the_compiler_contract() {
         for (target, libraries) in [
-            ("x86_64-apple-darwin", &["System", "c", "m"][..]),
-            ("aarch64-apple-darwin", &["System", "c", "m"][..]),
+            ("x86_64-apple-darwin", &["iconv", "System", "c", "m"][..]),
+            ("aarch64-apple-darwin", &["iconv", "System", "c", "m"][..]),
             (
                 "x86_64-unknown-linux-gnu",
                 &["gcc_s", "util", "rt", "pthread", "m", "dl", "c"][..],

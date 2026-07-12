@@ -107,6 +107,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
 
