@@ -1,7 +1,9 @@
 package main
 
+import "helper"
+
 fn add(a i32, b i32) i32 {
-    return a + b
+    return helper.identity(a + b)
 }
 
 fn greet(name str) str {

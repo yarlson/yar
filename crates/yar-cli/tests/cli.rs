@@ -1076,6 +1076,44 @@ fn test_reports_failing_tests() {
 }
 
 #[test]
+fn test_reports_malformed_test_declarations_before_building() {
+    let dir = temp_dir("yar-cli-malformed-test");
+    fs::write(
+        dir.join("main.yar"),
+        "package main\n\nfn main() i32 { return 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main_test.yar"),
+        r#"package main
+
+import "std/testing"
+
+fn test_bad() void { return }
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["test", dir.to_str().unwrap()])
+        .env("YAR_CC", dir.join("compiler-must-not-run"))
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("main_test.yar:5:4:"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("test function \"test_bad\" must have exactly one parameter"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("compiler-must-not-run"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn init_creates_manifest() {
     let dir = temp_dir("yar-cli-init");
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))

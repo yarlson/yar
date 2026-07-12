@@ -317,8 +317,9 @@ substitution. Stdlib's own imports never consult external aliases.
 
 ### Testing
 
-`yar test` works with dependencies. Test files in dependency packages are
-excluded (only the root project's test files are included).
+`yar test` works with dependencies. Test files in imported and dependency
+packages are excluded; only the selected entry package's test files are
+included.
 
 ### Future modules/imports
 

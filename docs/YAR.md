@@ -1307,23 +1307,27 @@ The `yar test` command discovers, compiles, and runs test functions.
 ### Test Files
 
 Test files use the `_test.yar` suffix (e.g., `math_test.yar`). They belong to the
-same package as the code under test. During normal compilation (`build`, `run`,
-`check`), test files are excluded.
+same package as the code under test. During normal compilation (`check`,
+`emit-ir`, `build`, `run`), test files are excluded. `yar test` includes test
+files only from the selected entry package. Imported packages and dependencies
+are always loaded without their test files.
 
 ### Test Functions
 
-Test functions start with `test_`, take a single `*testing.T` parameter, and
-return `void`:
+Every function in an entry-package test file whose name starts with `test_`
+must take one `*testing.T` parameter, return non-errorable `void`, and have no
+receiver or type parameters. Invalid declarations produce source diagnostics
+instead of being skipped.
 
 ```
 import "std/testing"
 
 fn test_addition(t *testing.T) void {
-    testing.equal_i32(t, add(2, 3), 5)
+    testing.equal[i32](t, add(2, 3), 5)
 }
 
 fn test_greeting(t *testing.T) void {
-    testing.equal_str(t, greet("world"), "hello world")
+    testing.equal[str](t, greet("world"), "hello world")
 }
 ```
 

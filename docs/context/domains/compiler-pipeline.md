@@ -21,7 +21,8 @@
   package-graph compilation.
 - `crates/yar-compiler/src/compile.rs` is the orchestration boundary. It
   exposes `check_path`, the full-pipeline `compile_path` and
-  `compile_test_path` wrappers, test discovery, and test runner generation.
+  `compile_test_path` wrappers, entry-only test discovery, test declaration
+  validation, and test runner generation.
 - `crates/yar-compiler/src/lexer.rs` tokenizes source text, including control-flow, aggregate,
   pointer, and punctuation tokens, handles `//` comments and string escapes,
   and produces lexical diagnostics.

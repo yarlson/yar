@@ -99,11 +99,16 @@ Invalid because test functions must not have type parameters.
 ## 4. Semantics
 
 - test files are files whose name ends with `_test.yar`
-- test files are excluded from normal `build` and `run` compilations
+- test files are excluded from normal `check`, `emit-ir`, `build`, and `run`
+  compilations
+- `yar test` includes test files only from its selected entry package; imported
+  packages and dependencies remain production-only
 - test functions are functions in test files whose name starts with `test_`
 - test functions must have exactly one parameter of type `*testing.T` and
   return `void`
 - test functions must not have receivers or type parameters
+- every malformed `test_*` declaration produces source-positioned diagnostics;
+  invalid candidates are never silently skipped
 - the `yar test` command discovers all test functions in the target package,
   generates a synthetic `main()` that calls each one, and replaces any
   user-defined `main()`
@@ -147,8 +152,9 @@ package before compilation.
 
 The synthetic runner generation:
 
-1. loads the package graph with test files included
-2. discovers test functions by scanning for `test_*` with correct signature
+1. loads the package graph with test files included only for the entry package
+2. validates every entry test-file `test_*` declaration and discovers valid
+   functions
 3. generates a Yar source string containing a `main()` that creates a
    `testing.T` for each test, calls the test function, checks the `failed`
    flag, and prints results
@@ -215,9 +221,11 @@ self-hosting.
 ## 13. Decision
 
 Accepted and implemented. The `yar test` command discovers `test_*` functions
-in `_test.yar` files, generates a synthetic runner, and reports pass/fail
-results. The `testing` stdlib package provides `T` with failure tracking and
-generic assertion helpers.
+in the selected entry package's `_test.yar` files, diagnoses malformed
+candidates, generates a synthetic runner, and reports pass/fail results.
+Imported packages and dependencies are loaded without test files. The
+`testing` stdlib package provides `T` with failure tracking and generic
+assertion helpers.
 
 ## 14. Implementation Checklist
 

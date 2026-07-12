@@ -154,9 +154,11 @@
   wrong-kind file or network IDs produce `error.Closed`; invalid string-builder
   IDs terminate with the string-builder runtime failure.
 - Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
-  and `run` commands. They are included only during `yar test`.
-- Test functions follow the convention `fn test_*(t *testing.T) void` and are
-  discovered at compile time by scanning test file ASTs.
+  and `run` commands. `yar test` includes them only for its exact entry package;
+  imported packages and dependencies remain production-only.
+- Every entry test-file `test_*` declaration is validated during discovery.
+  Tests require one `*testing.T` parameter, non-errorable `void`, no receiver,
+  no type parameters, and the resolved `std/testing` import.
 - The `yar test` command generates a synthetic test runner `main()` that
   replaces the user `main()`, compiles the result, and executes it.
 - `error.Name` expressions are valid both in return statements and as general
