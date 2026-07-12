@@ -224,8 +224,9 @@
 - Spawn arguments and inline-literal captures must be recursively share-safe.
   Scalars, `str`, `error`, fixed arrays, enums, non-resource structs, `!T`,
   and `chan[T]` compose when their contained types are share-safe; `!void` is
-  also share-safe. Pointers, slices, maps, interfaces, function values, and
-  resource structs do not.
+  also share-safe. Pointers, slices, maps, interfaces, function values, and file
+  resource structs do not. Typed `net.Conn` and `net.Listener` values are
+  share-safe references.
 - Spawn results do not need to be share-safe because the taskgroup exposes
   them only after joining every task.
 - Taskgroup results preserve spawn order.

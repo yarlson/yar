@@ -416,6 +416,7 @@ impl<'a> PackageLowerer<'a> {
                 StructDecl {
                     struct_pos: decl.struct_pos.clone(),
                     exported: decl.exported,
+                    opaque: decl.opaque,
                     resource: decl.resource,
                     name: canonical_decl_name(&self.graph.entry, package, &decl.name),
                     name_pos: decl.name_pos.clone(),

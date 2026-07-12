@@ -558,7 +558,7 @@ mod tests {
     use super::*;
     use std::ffi::CString;
     use std::process::{Command, Output, Stdio};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex, TryLockError, mpsc};
     use std::time::{Duration, Instant};
 
     fn abi_out<T>(call: impl FnOnce(*mut T)) -> T {
@@ -1261,6 +1261,10 @@ mod tests {
             len: 0,
         };
         assert_eq!(yar_net_read(server, 0, &mut invalid_read), 7);
+        assert_eq!(
+            yar_net_read(server, 64 * 1024 * 1024 + 1, &mut invalid_read),
+            7
+        );
         assert_eq!(yar_net_write(client, invalid_data, &mut written), 7);
         assert_eq!(written, 0);
         assert_eq!(yar_net_write(client, empty_data, &mut written), 0);
@@ -1323,11 +1327,267 @@ mod tests {
         assert_eq!(str_from_runtime(resolved.host), "127.0.0.1");
         assert_eq!(resolved.port, 80);
 
+        assert_eq!(
+            yar_net_resolve(string::from_owned("::1".to_owned()), 80, &mut resolved),
+            0
+        );
+        assert_eq!(str_from_runtime(resolved.host), "::1");
+        assert_eq!(resolved.port, 80);
+
         assert_eq!(yar_net_close(client), 0);
         assert_eq!(yar_net_close(client), 9);
         assert_eq!(yar_net_close(server), 0);
         assert_eq!(yar_net_close_listener(listener), 0);
         assert_eq!(yar_net_close_listener(listener), 9);
+    }
+
+    #[test]
+    fn networking_close_wakes_blocked_read() {
+        let (listener, client, server) = loopback_connection_handles();
+        let state = handle_registry::connection(client).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (read_tx, read_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let mut out = YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            };
+            read_tx.send(yar_net_read(client, 1, &mut out)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wait_for_locked(&state.read);
+        drop(state);
+
+        let (close_tx, close_rx) = mpsc::channel();
+        std::thread::spawn(move || close_tx.send(yar_net_close(client)).unwrap());
+        assert_eq!(close_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        assert_eq!(read_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 9);
+
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_close_wakes_blocked_accept() {
+        let mut listener = 0_i64;
+        assert_eq!(
+            yar_net_listen(string::from_owned("127.0.0.1".to_owned()), 0, &mut listener),
+            0
+        );
+        let state = handle_registry::listener(listener).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (accept_tx, accept_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let mut conn = 0_i64;
+            accept_tx.send(yar_net_accept(listener, &mut conn)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wait_for_locked(&state.accept);
+        drop(state);
+
+        let (close_tx, close_rx) = mpsc::channel();
+        std::thread::spawn(move || close_tx.send(yar_net_close_listener(listener)).unwrap());
+        assert_eq!(close_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        assert_eq!(accept_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 9);
+    }
+
+    #[test]
+    fn networking_close_waits_for_preexisting_operation_lease() {
+        let mut listener = 0_i64;
+        assert_eq!(
+            yar_net_listen(string::from_owned("127.0.0.1".to_owned()), 0, &mut listener),
+            0
+        );
+        let lease = handle_registry::listener(listener).unwrap();
+        let addr = lease.listener.local_addr().unwrap();
+
+        let (close_tx, close_rx) = mpsc::channel();
+        std::thread::spawn(move || close_tx.send(yar_net_close_listener(listener)).unwrap());
+        assert!(
+            close_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "close returned before its preexisting operation lease ended"
+        );
+
+        drop(lease);
+        assert_eq!(close_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        let rebound = std::net::TcpListener::bind(addr).unwrap();
+        drop(rebound);
+    }
+
+    #[test]
+    fn networking_connection_is_full_duplex() {
+        let (listener, client, server) = loopback_connection_handles();
+        let state = handle_registry::connection(client).unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (client_read_tx, client_read_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let mut out = YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            };
+            let status = yar_net_read(client, 4, &mut out);
+            client_read_tx
+                .send((status, (status == 0).then(|| str_from_runtime(out))))
+                .unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wait_for_locked(&state.read);
+        drop(state);
+
+        let (write_tx, write_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let data = YarStr {
+                ptr: b"ping".as_ptr().cast_mut(),
+                len: 4,
+            };
+            let mut written = 0;
+            write_tx
+                .send((yar_net_write(client, data, &mut written), written))
+                .unwrap();
+        });
+        assert_eq!(
+            write_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            (0, 4)
+        );
+
+        let mut request = YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(server, 4, &mut request), 0);
+        assert_eq!(str_from_runtime(request), "ping");
+        let mut written = 0;
+        assert_eq!(
+            yar_net_write(
+                server,
+                YarStr {
+                    ptr: b"pong".as_ptr().cast_mut(),
+                    len: 4,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(written, 4);
+        assert_eq!(
+            client_read_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            (0, Some("pong".to_owned()))
+        );
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_read_deadline_returns_timeout() {
+        let (listener, client, server) = loopback_connection_handles();
+        assert_eq!(yar_net_set_read_deadline(server, 50), 0);
+
+        let mut out = YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(server, 1, &mut out), 2);
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_close_wakes_a_backpressured_write() {
+        let (listener, client, server) = loopback_connection_handles();
+        assert_eq!(yar_net_set_write_deadline(client, 20), 0);
+        let payload = vec![b'x'; 1024 * 1024];
+        let data = YarStr {
+            ptr: payload.as_ptr().cast_mut(),
+            len: payload.len() as i64,
+        };
+        let mut filled = false;
+        for _ in 0..256 {
+            let mut written = 0;
+            let status = yar_net_write(client, data, &mut written);
+            if status == 2 {
+                filled = true;
+                break;
+            }
+            assert_eq!(status, 0);
+            assert!(written > 0);
+        }
+        assert!(filled, "socket send buffer did not become backpressured");
+        assert_eq!(yar_net_set_write_deadline(client, 0), 0);
+
+        let state = handle_registry::connection(client).unwrap();
+        let (write_tx, write_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let payload = vec![b'y'; 1024 * 1024];
+            let data = YarStr {
+                ptr: payload.as_ptr().cast_mut(),
+                len: payload.len() as i64,
+            };
+            let mut written = 0;
+            write_tx
+                .send(yar_net_write(client, data, &mut written))
+                .unwrap();
+        });
+        wait_for_locked(&state.write);
+        drop(state);
+
+        let (close_tx, close_rx) = mpsc::channel();
+        std::thread::spawn(move || close_tx.send(yar_net_close(client)).unwrap());
+        assert_eq!(close_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        assert_eq!(write_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 9);
+
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    fn loopback_connection_handles() -> (i64, i64, i64) {
+        let mut listener = 0_i64;
+        assert_eq!(
+            yar_net_listen(string::from_owned("127.0.0.1".to_owned()), 0, &mut listener),
+            0
+        );
+        let mut addr = YarNetAddr {
+            host: YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            },
+            port: 0,
+        };
+        assert_eq!(yar_net_listener_addr(listener, &mut addr), 0);
+        let mut client = 0_i64;
+        assert_eq!(
+            yar_net_connect(
+                string::from_owned("127.0.0.1".to_owned()),
+                addr.port,
+                &mut client,
+            ),
+            0
+        );
+        let mut server = 0_i64;
+        assert_eq!(yar_net_accept(listener, &mut server), 0);
+        (listener, client, server)
+    }
+
+    fn wait_for_locked(lock: &Mutex<()>) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match lock.try_lock() {
+                Err(TryLockError::WouldBlock) => return,
+                Err(TryLockError::Poisoned(_)) => panic!("network operation lock was poisoned"),
+                Ok(guard) => drop(guard),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "network operation did not reach its blocking syscall"
+            );
+            std::thread::yield_now();
+        }
     }
 
     #[test]

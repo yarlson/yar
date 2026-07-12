@@ -743,6 +743,153 @@ fn main() i32 {
     }
 
     #[test]
+    fn compile_path_rejects_raw_stdlib_network_handles() {
+        let root = temp_dir("yar-rust-private-net-handles");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "std/net"
+
+fn main() !i32 {
+    listener := net.listen("127.0.0.1", 0)?
+    net.close_listener(listener)?
+    return 0
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "package \"net\" does not export function \"listen\"",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "package \"net\" does not export function \"close_listener\"",
+        );
+    }
+
+    #[test]
+    fn compile_path_allows_typed_network_handles_across_task_boundaries() {
+        let root = temp_dir("yar-rust-share-safe-net-handles");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "std/net"
+
+fn inspect_listener(listener net.Listener) i32 {
+    return 0
+}
+
+fn inspect_conn(conn net.Conn) i32 {
+    return 0
+}
+
+fn main() !i32 {
+    listener := net.listen_stream("127.0.0.1", 0)?
+    conn := net.connect_stream("127.0.0.1", 1) or |_| {
+        return 0
+    }
+    taskgroup []i32 {
+        spawn inspect_listener(listener)
+        spawn inspect_conn(conn)
+    }
+    return 0
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_some(), "unexpected diagnostics: {diagnostics:?}");
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn compile_path_rejects_external_opaque_resource_fields_and_literals() {
+        let root = temp_dir("yar-rust-opaque-resource-handles");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "std/fs"
+
+fn main() i32 {
+    file := fs.open_read("missing") or |_| {
+        return 0
+    }
+    raw := file.handle
+    file.handle = 1
+    file.handle += 1
+    ptr := &file.handle
+    forged := fs.File{handle: raw}
+    return 0
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_diag_contains(
+            &diagnostics,
+            "field \"handle\" of opaque type \"fs.File\" is not accessible outside package \"fs\"",
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.message.contains(
+                    "field \"handle\" of opaque type \"fs.File\" is not accessible outside package \"fs\""
+                ))
+                .count(),
+            4,
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "opaque type \"fs.File\" cannot be constructed outside package \"fs\"",
+        );
+    }
+
+    #[test]
+    fn compile_path_keeps_ordinary_imported_struct_fields_transparent() {
+        let root = temp_dir("yar-rust-transparent-imported-struct");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "model"
+
+fn main() i32 {
+    value := model.Value{number: 7}
+    return value.number
+}
+"#,
+        );
+        write_source(
+            &root.join("model/model.yar"),
+            r#"package model
+
+pub struct Value {
+    number i32
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_some(), "unexpected diagnostics: {diagnostics:?}");
+        assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
     fn compile_path_allows_share_safe_local_stdlib_shadows() {
         let root = temp_dir("yar-rust-spawn-local-stdlib-shadow");
         write_source(

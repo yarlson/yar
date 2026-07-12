@@ -28,8 +28,9 @@
   structs are share-safe only when every contained value is share-safe.
   `!T` and `chan[T]` are share-safe only when `T` is share-safe; `!void` is
   also share-safe.
-- Pointers, slices, maps, interfaces, function values, resource structs, and
-  aggregates containing any of them cannot cross a spawn boundary.
+- Pointers, slices, maps, interfaces, function values, file resource structs,
+  and aggregates containing any of them cannot cross a spawn boundary. Typed
+  `net.Conn` and `net.Listener` values are share-safe resource references.
 - Spawn result types are unrestricted by share-safety because results become
   visible to the parent only after the taskgroup joins.
 - `spawn` is rejected outside a taskgroup body.
@@ -118,6 +119,8 @@
   whole process without waiting for output, shutdown handlers, or other tasks.
   A single-threaded fatal path still writes its diagnostic when the stderr lock
   is immediately available.
-- Explicit file and network close removes the handle from the runtime registry;
-  string-builder handles have no close operation and remain registered for the
-  process lifetime.
+- Network close removes the handle from the runtime registry, wakes blocked
+  accept/read/write operations with `error.Closed`, and waits for cleanup. File
+  close is non-interrupting and has no implicit durability sync. String-builder
+  handles have no close operation and remain registered for the process
+  lifetime.

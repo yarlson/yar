@@ -18,7 +18,7 @@ cargo build -p yar-runtime --release
 if ($LASTEXITCODE -ne 0) {
     throw "failed to build the Yar runtime"
 }
-foreach ($filter in @("concurrency::", "memory::", "taskgroup_helpers", "fatal_worker", "output_lock")) {
+foreach ($filter in @("concurrency::", "memory::", "taskgroup_helpers", "fatal_worker", "output_lock", "networking_")) {
     cargo test -p yar-runtime --release $filter
     if ($LASTEXITCODE -ne 0) {
         throw "failed to run Yar runtime tests matching $filter"
@@ -39,7 +39,8 @@ $fixtures = @(
     @{ Name = "concurrency_fs"; Expected = "hello`nhello" },
     @{ Name = "concurrency_lifecycle"; Expected = "251000" },
     @{ Name = "concurrency_share_safe"; Expected = "" },
-    @{ Name = "garbage_collection"; Expected = "142000" }
+    @{ Name = "garbage_collection"; Expected = "142000" },
+    @{ Name = "stdlib_net"; Expected = "net ok" }
 )
 
 foreach ($fixture in $fixtures) {
@@ -59,4 +60,4 @@ foreach ($fixture in $fixtures) {
     }
 }
 
-Write-Output "ran $($fixtures.Count) concurrency and collection fixtures on Windows"
+Write-Output "ran $($fixtures.Count) concurrency, networking, and collection fixtures on Windows"

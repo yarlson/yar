@@ -94,6 +94,7 @@ impl Monomorphizer {
         StructDecl {
             struct_pos: decl.struct_pos.clone(),
             exported: decl.exported,
+            opaque: decl.opaque,
             resource: decl.resource,
             name: decl.name.clone(),
             name_pos: decl.name_pos.clone(),

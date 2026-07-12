@@ -144,15 +144,18 @@
   storage, and other heap-backed features. The Rust runtime reclaims unreachable
   blocks with a conservative non-moving collector. Allocation failure remains
   an unrecoverable runtime failure rather than a YAR `error`.
-- User-visible `i64` handles for string builders, streaming files, TCP
-  listeners, and TCP connections are process-local registry IDs, never native
-  addresses. The registry validates both ID and resource kind before access,
-  never reuses an issued ID, and synchronizes mutable per-handle state.
-- Explicit file and network close first removes the ID so new lookups fail,
-  then waits for any operation holding the per-resource lock before releasing
-  the host resource. Close does not interrupt blocking I/O. Unknown, stale, and
-  wrong-kind file or network IDs produce `error.Closed`; invalid string-builder
-  IDs terminate with the string-builder runtime failure.
+- String-builder and streaming-file handles plus compiler-internal network IDs
+  are process-local registry IDs, never native addresses. The registry validates
+  ID and resource kind and never reuses an issued ID. Typed opaque `net.Conn`
+  and `net.Listener` values are share-safe references; raw network IDs are
+  internal.
+- Network close linearizes at registry removal, wakes blocked accept/read/write
+  operations with `error.Closed`, and waits for operation and resource release.
+  Connections permit one concurrent reader and writer and serialize calls in
+  the same direction. File close remains non-interrupting and performs no
+  implicit durability sync. Unknown, stale, and wrong-kind IDs produce
+  `error.Closed`; invalid string-builder IDs terminate with the string-builder
+  runtime failure.
 - Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
   and `run` commands. `yar test` includes them only for its exact entry package;
   imported packages and dependencies remain production-only.

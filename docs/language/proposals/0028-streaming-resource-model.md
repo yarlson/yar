@@ -12,8 +12,8 @@ The model starts in the standard library rather than as new syntax:
 - `io.copy` copies between streams in bounded chunks.
 - `io.read_all` reads a stream with an explicit byte limit.
 - `fs.File` exposes streaming file reads, writes, and close.
-- `net.Conn` and `net.Listener` wrap the existing TCP handles with methods that
-  fit the same stream interfaces.
+- `net.Conn` and `net.Listener` are typed, share-safe registry references with
+  methods that fit the same stream interfaces. Raw network IDs are internal.
 
 This is the foundation needed before HTTP grows beyond whole-request and
 whole-response strings. It gives Yar a common stream vocabulary without adding
@@ -94,21 +94,13 @@ Filesystem stream failures use ordinary errors:
 
 ### `net`
 
-The existing low-level `i64` functions stay available.
-
-New wrappers:
+`Conn` and `Listener` are public opaque named types whose registry fields remain
+package-private.
 
 ```yar
-pub struct Conn {
-    handle i64
-}
-
-pub struct Listener {
-    handle i64
-}
-
 pub fn listen_stream(host str, port i32) !Listener
 pub fn connect_stream(host str, port i32) !Conn
+pub fn resolve(host str, port i32) !Addr
 
 pub fn (l Listener) accept() !Conn
 pub fn (l Listener) addr() !Addr
@@ -125,6 +117,10 @@ pub fn (c Conn) set_write_deadline(millis i32) !void
 
 `net.Conn` satisfies `io.Reader`, `io.Writer`, `io.Closer`,
 `io.ReadCloser`, `io.WriteCloser`, and `io.ReadWriter`.
+
+Connections allow one reader and one writer concurrently; calls in the same
+direction serialize. `read` accepts at most 64 MiB, inclusive. `write` performs
+one host write and returns its exact count, which may be short.
 
 ## 3. Example
 
@@ -158,12 +154,13 @@ fn main() !i32 {
 - File stream handles are opaque `i64` values backed by runtime-managed host
   resources. They are kind-checked, non-reused process-local registry IDs, and
   their mutable state is synchronized.
-- Explicit file and network close removes the registry ID so new lookups fail,
-  then waits for any operation holding the per-resource lock before releasing
-  the host resource; close does not interrupt blocking I/O. Unknown, stale, and
-  wrong-kind IDs produce `error.Closed`.
-- Registry validation is a runtime safety boundary. Raw `i64` handles still
-  have no compiler-visible nominal type or provenance.
+- File close removes the registry ID, waits for an operation holding its lock,
+  and releases the host file without an implicit durability sync. It does not
+  interrupt blocking file I/O.
+- Network close linearizes at registry removal, wakes blocked accept/read/write
+  operations with `error.Closed`, and waits for operation and resource release.
+- Typed network resources are share-safe. Raw network IDs are compiler/runtime
+  implementation details, not public stdlib values.
 
 This proposal does not introduce automatic cleanup. Programs are responsible
 for calling `close`.
@@ -185,7 +182,10 @@ removes the ID; later lookup of that stale ID reports `error.Closed`. IDs are
 never reused within the process, so a stale handle cannot resolve to a newer
 resource.
 
-The `net` additions are pure Yar wrappers around existing networking intrinsics.
+The `net` methods lower through compiler-internal networking intrinsics. Socket
+timeouts are relative per-operation timeouts; changing one need not interrupt
+an already-running syscall. DNS and connect are synchronous and cannot be
+interrupted before a connection handle exists.
 
 ## 6. Tests
 
@@ -205,7 +205,7 @@ compiler/runtime boundary.
 
 - no `defer`
 - no RAII/destructors
-- no ownership or linear types
+- no linear types
 - no async/await
 - no nonblocking descriptor API
 - no file descriptor inheritance model

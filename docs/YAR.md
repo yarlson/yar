@@ -642,11 +642,11 @@ Taskgroup rules:
   inline function literal
 - the spawned call must return the taskgroup element type exactly
 - spawn arguments and inline-literal captures must be share-safe: scalars,
-  `str`, `error`, fixed arrays, enums, non-resource structs, `!T`, and
-  `chan[T]` compose only from other share-safe types; `!void` is also
-  share-safe
-- pointers, slices, maps, interfaces, function values, resource structs, and
-  values that contain them cannot cross the spawn boundary
+  `str`, `error`, fixed arrays, enums, non-resource structs, typed `net.Conn`
+  and `net.Listener` references, `!T`, and `chan[T]` compose only from other
+  share-safe types; `!void` is also share-safe
+- pointers, slices, maps, interfaces, function values, file resource structs,
+  and values that contain them cannot cross the spawn boundary
 - the share-safety restriction does not apply to results because the parent
   observes them only after the taskgroup joins
 - `spawn` is only valid inside the taskgroup body
@@ -1049,7 +1049,8 @@ Its `handle` is a kind-checked, non-reused process-local registry ID, not a
 native address. File operations synchronize access to the underlying file.
 Closing removes the ID so new lookups fail, then waits for an operation holding
 the file lock before releasing the host file; it does not interrupt blocking
-I/O. Unknown, stale, and wrong-kind IDs produce `error.Closed`.
+I/O. Close does not call an implicit durability sync. Unknown, stale, and
+wrong-kind IDs produce `error.Closed`.
 
 Available functions:
 
@@ -1186,42 +1187,27 @@ import "std/net"
 Types:
 
 - `net.Addr { host str, port i32 }`
-- `net.Conn { handle i64 }`
-- `net.Listener { handle i64 }`
+- `net.Conn` — opaque connection reference
+- `net.Listener` — opaque listener reference
 
-`net.Conn` and `net.Listener` are resource structs and cannot be passed to or
-captured by spawned tasks. The lower-level raw `i64` handle functions remain
-available; those handles are indistinguishable from ordinary integers to the
-spawn checker. At runtime they are kind-checked, non-reused process-local
-registry IDs with synchronized state. Unknown, stale, and wrong-kind IDs
-produce `error.Closed`. Explicit close removes the ID so new lookups fail, then
-waits for an operation holding the socket lock before releasing it; close does
-not interrupt blocking I/O. Registry validation prevents invalid dereferences
-but does not provide compile-time nominal or provenance safety.
+`net.Conn` and `net.Listener` are typed, share-safe references backed by
+kind-checked, non-reused process-local registry IDs. They may be passed to or
+captured by spawned tasks. Raw `i64` network intrinsics are compiler/runtime
+implementation details rather than public stdlib API.
+
+A connection permits one reader and one writer at the same time. Concurrent
+reads serialize with reads, and concurrent writes serialize with writes.
+Closing linearizes when the registry entry is removed: new operations fail,
+blocked accept/read/write calls wake with `error.Closed`, and close waits until
+in-flight operations and the host resource have finished releasing.
 
 Available functions:
 
-- `net.listen(host str, port i32) !i64` — bind and listen on a TCP address;
-  empty host means all interfaces
-- `net.accept(listener i64) !i64` — block until a connection arrives
-- `net.listener_addr(listener i64) !net.Addr` — return bound address of a
-  listener
-- `net.close_listener(listener i64) !void` — close a listener socket
-- `net.connect(host str, port i32) !i64` — TCP connect with DNS resolution
-- `net.read(conn i64, max_bytes i32) !str` — read up to `max_bytes`; returns
-  empty string on EOF
-- `net.write(conn i64, data str) !i32` — write all data; returns bytes written
-- `net.close(conn i64) !void` — close a connection
-- `net.local_addr(conn i64) !net.Addr` — local address of a connection
-- `net.remote_addr(conn i64) !net.Addr` — remote address of a connection
-- `net.set_read_deadline(conn i64, millis i32) !void` — set read timeout in
-  milliseconds; 0 disables
-- `net.set_write_deadline(conn i64, millis i32) !void` — set write timeout in
-  milliseconds; 0 disables
+- `net.listen_stream(host str, port i32) !net.Listener` — bind and listen on a
+  TCP address; empty host means the IPv4 wildcard address
+- `net.connect_stream(host str, port i32) !net.Conn` — resolve and connect
 - `net.resolve(host str, port i32) !net.Addr` — DNS resolution; returns first
-  result
-- `net.listen_stream(host str, port i32) !net.Listener`
-- `net.connect_stream(host str, port i32) !net.Conn`
+  IPv4 or IPv6 result
 
 Methods on `net.Listener`:
 
@@ -1232,15 +1218,21 @@ Methods on `net.Listener`:
 Methods on `net.Conn`:
 
 - `read(max_bytes i32) !str`
-- `write(data str) !i32`
+- `write(data str) !i32` — perform one host write and return its exact byte
+  count, which may be shorter than `len(data)`
 - `close() !void`
 - `local_addr() !net.Addr`
 - `remote_addr() !net.Addr`
 - `set_read_deadline(millis i32) !void`
 - `set_write_deadline(millis i32) !void`
 
-Listeners and connections use opaque registry-backed `i64` handles. All calls
-are blocking.
+`read(max_bytes)` accepts 1 through 67,108,864 bytes inclusive and returns an
+empty string only on EOF. Read and write deadlines are relative, per-operation
+socket timeouts; zero disables the timeout. Changing a timeout is not promised
+to interrupt a syscall that is already running. DNS resolution and connection
+creation are synchronous host calls and cannot be interrupted before a
+connection handle exists. A sibling task can end blocked accept, read, or write
+by closing the typed listener or connection.
 
 Networking errors surface through ordinary YAR errors using the names:
 

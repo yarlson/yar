@@ -2,45 +2,70 @@ package main
 
 import "std/net"
 
+fn write_all(conn net.Conn, data str) !void {
+    off := 0
+    for off < len(data) {
+        written := conn.write(data[off:])?
+        if written <= 0 {
+            return error.IO
+        }
+        off += written
+    }
+    return
+}
+
 fn main() !i32 {
-    ln := net.listen("127.0.0.1", 0)?
-    addr := net.listener_addr(ln)?
+    listener := net.listen_stream("127.0.0.1", 0)?
+    addr := listener.addr()?
 
-    client := net.connect("127.0.0.1", addr.port)?
-    server := net.accept(ln)?
-
-    net.write(client, "hello")?
-
-    data := net.read(server, 4096)?
-    if data != "hello" {
-        print("read mismatch\n")
-        return 1
+    results := taskgroup []!i32 {
+        spawn serve(listener)
+        spawn exchange(addr.port)
     }
-
-    net.write(server, "world")?
-    reply := net.read(client, 4096)?
-    if reply != "world" {
-        print("reply mismatch\n")
-        return 1
-    }
-
-    ra := net.remote_addr(server)?
-    la := net.local_addr(client)?
-    if ra.port != la.port {
-        print("addr mismatch\n")
+    if results[0]? != 0 || results[1]? != 0 {
+        listener.close()?
         return 1
     }
 
     resolved := net.resolve("127.0.0.1", 80)?
     if resolved.host != "127.0.0.1" {
-        print("resolve mismatch\n")
+        listener.close()?
         return 1
     }
 
-    net.close(client)?
-    net.close(server)?
-    net.close_listener(ln)?
-
+    listener.close()?
     print("net ok\n")
+    return 0
+}
+
+fn serve(listener net.Listener) !i32 {
+    conn := listener.accept()?
+    data := conn.read(4096)?
+    if data != "hello" {
+        conn.close()?
+        return 1
+    }
+    write_all(conn, "world")?
+    conn.close()?
+    return 0
+}
+
+fn exchange(port i32) !i32 {
+    conn := net.connect_stream("127.0.0.1", port)?
+    write_all(conn, "hello")?
+    reply := conn.read(4096)?
+    if reply != "world" {
+        conn.close()?
+        return 1
+    }
+
+    remote := conn.remote_addr()?
+    local := conn.local_addr()?
+    if remote.port != port || local.port <= 0 {
+        conn.close()?
+        return 1
+    }
+
+    conn.close()?
     return 0
 }
