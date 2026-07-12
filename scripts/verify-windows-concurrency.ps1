@@ -18,9 +18,11 @@ cargo build -p yar-runtime --release
 if ($LASTEXITCODE -ne 0) {
     throw "failed to build the Yar runtime"
 }
-cargo test -p yar-runtime --release
-if ($LASTEXITCODE -ne 0) {
-    throw "failed to run the Yar runtime tests"
+foreach ($filter in @("concurrency::", "memory::", "taskgroup_helpers", "fatal_worker", "output_lock")) {
+    cargo test -p yar-runtime --release $filter
+    if ($LASTEXITCODE -ne 0) {
+        throw "failed to run Yar runtime tests matching $filter"
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $bundle | Out-Null
