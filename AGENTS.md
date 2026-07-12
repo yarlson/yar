@@ -8,7 +8,7 @@ For implementation work in this repository, follow this order:
 2. plan implementation and the test approach before changing code
 3. write or update tests first when practical; prefer TDD for new behavior, bug fixes, and regressions
 4. implement
-5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change
+5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change; syntax changes must keep the portable accepted-syntax fixture under `testdata/syntax_surface` aligned
 6. run `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
 7. fix issues from lint and tests
 8. update affected `docs/context/` files when internal architecture or
@@ -33,6 +33,12 @@ and do not skip the surfaces whose owned truth changed.
 Do not skip test work for implementation changes. Add or update automated tests at
 the highest-value layer for the change, and keep `testdata/` focused on
 representative, durable fixtures rather than incidental cases.
+
+The Rust frontend owns accepted YAR syntax. External Tree-sitter and JetBrains
+repositories own their grammar projections, generated artifacts, tests, and
+releases; do not copy those artifacts into this repository. Record the syntax
+change and portable fixture here, then leave projection delivery to its owning
+repository.
 
 ## Rust Code Quality Standard
 

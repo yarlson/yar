@@ -162,6 +162,16 @@
 - Every entry test-file `test_*` declaration is validated during discovery.
   Tests require one `*testing.T` parameter, non-errorable `void`, no receiver,
   no type parameters, and the resolved `std/testing` import.
+- The Rust token, lexer, and parser implementation owns lexical and syntactic
+  acceptance; `docs/YAR.md` is its public current-language reference.
+- `testdata/syntax_surface` is a portable accepted-syntax fixture. Language
+  syntax changes keep it aligned with the frontend without encoding a
+  consumer-specific syntax tree.
+- External Tree-sitter and JetBrains repositories own their grammar sources,
+  generated artifacts, editor queries, recovery behavior, tests, and releases.
+- An external syntax projection declares the YAR revision it compares against,
+  parses the portable fixture without parse-failure nodes, and validates its own
+  negative, recovery, tree-shape, and query contracts before claiming parity.
 - The `yar test` command generates a synthetic test runner `main()` that
   replaces the user `main()`, compiles the result, and executes it.
 - `error.Name` expressions are valid both in return statements and as general
