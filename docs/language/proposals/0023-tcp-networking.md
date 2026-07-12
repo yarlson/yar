@@ -223,11 +223,14 @@ Would match Go's `net.Dial("tcp", "host:port")` pattern. Rejected because
 parsing "host:port" in C is fragile (IPv6 brackets, edge cases), and separate
 parameters are more explicit, matching Yar's design philosophy.
 
-### 3. Non-blocking I/O with polling
+### 3. Public non-blocking or multiplexed I/O
 
 Would enable multiplexed servers without native task threads. Deferred because
-the shipped runtime uses one native thread per task; the blocking API still
-requires explicit close wakeups and per-operation socket timeouts.
+the shipped runtime uses one native thread per task. The blocking public API is
+implemented with internal nonblocking polling so close and operation-local
+timeouts behave consistently across host platforms. Adaptive bounded waits
+reduce idle wakeups, but each blocked call still consumes one native thread;
+high-connection-count multiplexing remains deferred.
 
 ## 10. Complexity Cost
 

@@ -5,7 +5,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -102,6 +102,8 @@ pub(crate) struct ConnectionState {
     pub(crate) stream: TcpStream,
     pub(crate) closed: AtomicBool,
     operations: Operations,
+    pub(crate) read_timeout_millis: AtomicU64,
+    pub(crate) write_timeout_millis: AtomicU64,
     pub(crate) read: Mutex<()>,
     pub(crate) write: Mutex<()>,
 }
@@ -247,6 +249,8 @@ pub(crate) fn register_connection(stream: TcpStream) -> i64 {
         stream,
         closed: AtomicBool::new(false),
         operations: Operations::new(),
+        read_timeout_millis: AtomicU64::new(0),
+        write_timeout_millis: AtomicU64::new(0),
         read: Mutex::new(()),
         write: Mutex::new(()),
     })))

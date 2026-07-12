@@ -349,8 +349,10 @@ Functions:
 - The `net` package exposes typed share-safe references backed by kind-checked,
   non-reused registry IDs. Raw IDs remain internal. Operations block only their
   native task thread. Close wakes blocked socket operations before waiting for
-  cleanup. Relative timeouts use platform socket timeout facilities. SIGPIPE is
-  suppressed on POSIX (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
+  cleanup. The runtime polls nonblocking sockets with adaptive bounded waits
+  against per-operation relative timeouts; this portable native-thread model is
+  not a high-scale readiness poller. SIGPIPE is suppressed on POSIX
+  (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
 - Process execution requires at least one argv element. Empty command vectors,
   invalid host strings, invalid timeouts, and invalid capture caps surface
   `error.InvalidArgument`.

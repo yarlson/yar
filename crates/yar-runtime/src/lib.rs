@@ -1499,6 +1499,39 @@ mod tests {
     }
 
     #[test]
+    fn networking_read_does_not_succeed_after_its_deadline() {
+        let (listener, client, server) = loopback_connection_handles();
+        assert_eq!(yar_net_set_read_deadline(server, 5), 0);
+
+        let (write_tx, write_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            let mut written = 0;
+            write_tx
+                .send(yar_net_write(
+                    client,
+                    YarStr {
+                        ptr: b"late".as_ptr().cast_mut(),
+                        len: 4,
+                    },
+                    &mut written,
+                ))
+                .unwrap();
+        });
+
+        let mut out = YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(server, 4, &mut out), 2);
+        assert_eq!(write_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 0);
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
     fn networking_close_wakes_a_backpressured_write() {
         let (listener, client, server) = loopback_connection_handles();
         assert_eq!(yar_net_set_write_deadline(client, 20), 0);

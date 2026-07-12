@@ -3,7 +3,7 @@ use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAdd
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{YarNetAddr, YarStr, handle_registry};
 
@@ -18,7 +18,8 @@ const NET_INVALID_ARG: i32 = 7;
 const NET_IO: i32 = 8;
 const NET_CLOSED: i32 = 9;
 const MAX_READ_BYTES: i32 = 64 * 1024 * 1024;
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const SOCKET_POLL_INITIAL: Duration = Duration::from_millis(1);
+const SOCKET_POLL_MAX: Duration = Duration::from_millis(64);
 
 pub(crate) fn listen(host: YarStr, port: i32, out: *mut i64) -> i32 {
     write_out_i64(out, 0);
@@ -54,13 +55,14 @@ pub(crate) fn accept(raw_listener: i64, out: *mut i64) -> i32 {
         return NET_CLOSED;
     }
 
+    let mut poll_delay = SOCKET_POLL_INITIAL;
     loop {
         match handle.listener.accept() {
             Ok((stream, _)) => {
                 if handle.closed.load(Ordering::Acquire) {
                     return NET_CLOSED;
                 }
-                if let Err(err) = stream.set_nonblocking(false) {
+                if let Err(err) = stream.set_nonblocking(true) {
                     return status_from_io(err);
                 }
                 write_out_i64(out, handle_registry::register_connection(stream));
@@ -70,7 +72,7 @@ pub(crate) fn accept(raw_listener: i64, out: *mut i64) -> i32 {
                 if handle.closed.load(Ordering::Acquire) {
                     return NET_CLOSED;
                 }
-                thread::sleep(ACCEPT_POLL_INTERVAL);
+                sleep_for_socket(None, &mut poll_delay);
             }
             Err(err) => {
                 return if handle.closed.load(Ordering::Acquire) {
@@ -122,6 +124,9 @@ pub(crate) fn connect(host: YarStr, port: i32, out: *mut i64) -> i32 {
 
     match TcpStream::connect((host.as_str(), port)) {
         Ok(stream) => {
+            if let Err(err) = stream.set_nonblocking(true) {
+                return status_from_io(err);
+            }
             write_out_i64(out, handle_registry::register_connection(stream));
             NET_OK
         }
@@ -144,15 +149,25 @@ pub(crate) fn read(raw_conn: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
 
     let mut buffer = vec![0; max_bytes as usize];
     let mut stream = &handle.stream;
-    match stream.read(&mut buffer) {
-        Ok(bytes_read) => {
-            if handle.closed.load(Ordering::Acquire) {
-                return NET_CLOSED;
-            }
-            write_out_str(out, string_from_bytes(&buffer[..bytes_read]));
-            NET_OK
+    let deadline = socket_deadline(handle.read_timeout_millis.load(Ordering::Acquire));
+    let mut poll_delay = SOCKET_POLL_INITIAL;
+    loop {
+        if let Some(status) = socket_status(&handle, deadline) {
+            return status;
         }
-        Err(err) => status_from_connection_io(&handle, err),
+        match stream.read(&mut buffer) {
+            Ok(bytes_read) => {
+                if handle.closed.load(Ordering::Acquire) {
+                    return NET_CLOSED;
+                }
+                write_out_str(out, string_from_bytes(&buffer[..bytes_read]));
+                return NET_OK;
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                sleep_for_socket(deadline, &mut poll_delay);
+            }
+            Err(err) => return status_from_connection_io(&handle, err),
+        }
     }
 }
 
@@ -177,15 +192,25 @@ pub(crate) fn write(raw_conn: i64, data: YarStr, out: *mut i32) -> i32 {
     }
 
     let mut stream = &handle.stream;
-    match write_once(&mut stream, data) {
-        Ok(bytes_written) => {
-            if handle.closed.load(Ordering::Acquire) {
-                return NET_CLOSED;
-            }
-            write_out_i32(out, bytes_written as i32);
-            NET_OK
+    let deadline = socket_deadline(handle.write_timeout_millis.load(Ordering::Acquire));
+    let mut poll_delay = SOCKET_POLL_INITIAL;
+    loop {
+        if let Some(status) = socket_status(&handle, deadline) {
+            return status;
         }
-        Err(err) => status_from_connection_io(&handle, err),
+        match write_once(&mut stream, data) {
+            Ok(bytes_written) => {
+                if handle.closed.load(Ordering::Acquire) {
+                    return NET_CLOSED;
+                }
+                write_out_i32(out, bytes_written as i32);
+                return NET_OK;
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                sleep_for_socket(deadline, &mut poll_delay);
+            }
+            Err(err) => return status_from_connection_io(&handle, err),
+        }
     }
 }
 
@@ -215,11 +240,11 @@ pub(crate) fn remote_addr(raw_conn: i64, out: *mut YarNetAddr) -> i32 {
 }
 
 pub(crate) fn set_read_deadline(raw_conn: i64, millis: i32) -> i32 {
-    set_deadline(raw_conn, millis, TcpStream::set_read_timeout)
+    set_deadline(raw_conn, millis, |handle| &handle.read_timeout_millis)
 }
 
 pub(crate) fn set_write_deadline(raw_conn: i64, millis: i32) -> i32 {
-    set_deadline(raw_conn, millis, TcpStream::set_write_timeout)
+    set_deadline(raw_conn, millis, |handle| &handle.write_timeout_millis)
 }
 
 pub(crate) fn resolve(host: YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
@@ -270,7 +295,7 @@ fn conn_addr(
 fn set_deadline(
     raw_conn: i64,
     millis: i32,
-    deadline_fn: fn(&TcpStream, Option<Duration>) -> io::Result<()>,
+    timeout_field: fn(&handle_registry::ConnectionState) -> &std::sync::atomic::AtomicU64,
 ) -> i32 {
     let Some(handle) = handle_registry::connection(raw_conn) else {
         return NET_CLOSED;
@@ -282,21 +307,39 @@ fn set_deadline(
         return NET_CLOSED;
     }
 
-    let timeout = if millis == 0 {
-        None
+    timeout_field(&handle).store(millis as u64, Ordering::Release);
+    if handle.closed.load(Ordering::Acquire) {
+        NET_CLOSED
     } else {
-        Some(Duration::from_millis(millis as u64))
-    };
-    deadline_fn(&handle.stream, timeout).map_or_else(
-        |err| status_from_connection_io(&handle, err),
-        |_| {
-            if handle.closed.load(Ordering::Acquire) {
-                NET_CLOSED
-            } else {
-                NET_OK
-            }
-        },
-    )
+        NET_OK
+    }
+}
+
+fn socket_deadline(millis: u64) -> Option<Instant> {
+    (millis != 0).then(|| Instant::now() + Duration::from_millis(millis))
+}
+
+fn socket_status(
+    handle: &handle_registry::ConnectionLease,
+    deadline: Option<Instant>,
+) -> Option<i32> {
+    if handle.closed.load(Ordering::Acquire) {
+        return Some(NET_CLOSED);
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        return Some(NET_TIMEOUT);
+    }
+    None
+}
+
+fn sleep_for_socket(deadline: Option<Instant>, poll_delay: &mut Duration) {
+    let delay = deadline.map_or(*poll_delay, |deadline| {
+        (*poll_delay).min(deadline.saturating_duration_since(Instant::now()))
+    });
+    if !delay.is_zero() {
+        thread::sleep(delay);
+    }
+    *poll_delay = poll_delay.saturating_mul(2).min(SOCKET_POLL_MAX);
 }
 
 fn status_from_connection_io(handle: &handle_registry::ConnectionLease, err: io::Error) -> i32 {

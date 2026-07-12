@@ -309,10 +309,10 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   address of a connection via `getsockname`.
 - `yar_net_remote_addr(int64_t conn, yar_net_addr *out)` returns the remote
   address of a connection via `getpeername`.
-- `yar_net_set_read_deadline(int64_t conn, int32_t millis)` sets a read
-  timeout via `SO_RCVTIMEO`. Zero disables the timeout.
-- `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets a write
-  timeout via `SO_SNDTIMEO`. Zero disables the timeout.
+- `yar_net_set_read_deadline(int64_t conn, int32_t millis)` sets the relative
+  timeout captured by the next read operation. Zero disables the timeout.
+- `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets the relative
+  timeout captured by the next write operation. Zero disables the timeout.
 - `yar_net_resolve(const yar_str *host, int32_t port, yar_net_addr *out)` performs
   DNS resolution and returns the first IPv4 or IPv6 address; resolver failure
   maps to `NotFound`.
@@ -320,6 +320,11 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   one reader and one writer concurrently and serializes same-direction calls.
   Reads accept 1 through 67,108,864 bytes inclusive. Writes perform one host
   write and return the exact, possibly short, count.
+- Listener and connection sockets are nonblocking internally. A call that would
+  block polls its close marker and operation-local timeout with adaptive
+  1-through-64-millisecond waits while retaining the blocking source-level
+  contract for that native task thread. This is a portability mechanism, not a
+  high-scale readiness poller; each blocked call still owns one native thread.
 - Read/write timeouts are relative per-operation socket timeouts. Updating one
   need not interrupt a syscall already running. DNS and connection creation are
   synchronous host calls and cannot be interrupted before a handle exists.
