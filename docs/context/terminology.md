@@ -3,7 +3,8 @@
 Yar — The compiler CLI and the source language implemented in this repository.
 
 file AST — A parsed source file with a package declaration, optional imports,
-and top-level `struct`, `interface`, `enum`, `fn`, and method declarations.
+and top-level `struct`, `interface`, `enum`, `error`, `fn`, and method
+declarations.
 
 package — A directory of one or more `.yar` files that declare the same package
 name and share one top-level namespace.
@@ -58,10 +59,21 @@ errorable value type — A first-class `!T` value shape, currently produced by
 language constructs such as `taskgroup []!T` results.
 
 error value — A value of builtin type `error`, typically introduced by
-returning `error.Name` or by the binder in an `or |err| { ... }` handler.
+referencing a declared local `error.Name` or imported `pkg.Name`, or by the
+binder in an `or |err| { ... }` handler.
 
-error code — The integer representation assigned to each distinct returned
-`error.Name` value during code generation.
+error declaration — A package-level `error Name` or `pub error Name` that owns
+one named error identity. Private declarations are not externally nameable.
+
+error identity — The origin-safe declaring package identity plus the declared
+leaf name. Equal leaf names from different packages are different identities.
+
+error code — The non-zero integer assigned deterministically to each error
+identity within one compiled program. It is not a stable cross-program ABI.
+
+error expression — Local `error.Name` or imported `pkg.Name` syntax that
+references a declared named error. Unknown or inaccessible declarations are
+rejected.
 
 result type — The generated LLVM struct used to represent an errorable return,
 carrying an error flag, an error code, and optionally a success value.
@@ -119,8 +131,8 @@ between tasks.
 map — A runtime-managed hash table type `map[K]V` with key types restricted to
 `bool`, `i32`, `i64`, and `str`.
 
-pub — Export marker for top-level `struct`, `interface`, `enum`, `fn`, and
-method declarations, making them visible to importing packages.
+pub — Export marker for top-level `struct`, `interface`, `enum`, `error`, `fn`,
+and method declarations, making them visible to importing packages.
 
 method — A top-level function declaration with an explicit receiver such as
 `fn (u User) label() str`, callable with `value.label()`.

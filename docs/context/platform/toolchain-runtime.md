@@ -268,9 +268,10 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - `yar_fs_write_handle(int64_t handle, const yar_str *data, int32_t *out)` writes data
   to an open file handle and returns bytes written.
 - `yar_fs_close_handle(int64_t handle)` closes an open file handle.
-- Runtime filesystem status codes map in code generation to stable YAR error
-  names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`,
-  `InvalidArgument`, `Closed`, and `IO`.
+- Runtime filesystem status codes map in code generation to package-owned `fs`
+  declarations (`NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`,
+  `InvalidArgument`, and `IO`) plus compiler-owned `error.Closed`. Runtime
+  status values do not change.
 - Filesystem operations are implemented with Rust `std::fs`, `std::path`, and
   `std::env` APIs. The small platform-specific boundary converts Yar path bytes
   to and from Unix `OsString` bytes or Windows UTF-8 strings.
@@ -289,9 +290,11 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   and an exit-code out-pointer while inheriting stdin/stdout/stderr.
 - `yar_env_lookup(const yar_str *name, yar_str *out)` looks up one environment
   variable and returns a stable host-process status code.
-- Host-process status codes map in code generation to stable YAR error names:
-  `NotFound`, `PermissionDenied`, `InvalidArgument`, `Timeout`,
-  `LimitExceeded`, `Cancelled`, and `IO`.
+- Host-process status codes map in code generation to package-owned
+  `process` declarations (`NotFound`, `PermissionDenied`, `InvalidArgument`,
+  `Timeout`, `LimitExceeded`, `Cancelled`, and `IO`) or the corresponding
+  `env` declarations for environment lookup. Runtime status values do not
+  change.
 - Process launch and waiting use the shared Rust process-control layer. Captured
   runs drain bounded stdout/stderr pipes concurrently. Controlled Unix children
   run in an operation-owned process group; controlled Windows children are
@@ -338,10 +341,10 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - Read/write timeouts are relative per-operation socket timeouts. Updating one
   need not interrupt a syscall already running. DNS and connection creation are
   synchronous host calls and cannot be interrupted before a handle exists.
-- All networking functions return `i32` status codes that map in code generation
-  to stable YAR error names: `ConnectionRefused`, `Timeout`, `AddrInUse`,
-  `ConnectionReset`, `NotFound`, `PermissionDenied`, `InvalidArgument`, `IO`,
-  and `Closed`.
+- All networking functions return unchanged `i32` status codes that map in code
+  generation to package-owned `net` declarations (`ConnectionRefused`,
+  `Timeout`, `AddrInUse`, `ConnectionReset`, `NotFound`, `PermissionDenied`,
+  `InvalidArgument`, and `IO`) plus compiler-owned `error.Closed`.
 - Networking is implemented with Rust `std::net`. Listener and connection
   sockets are nonblocking internally; the runtime provides the blocking Yar
   contract through adaptive polling of readiness, close state, and
@@ -393,8 +396,9 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - The test suite validates successful output, propagated unhandled errors,
   `panic`, `i64` compilation, slice behavior and traps, pointer behavior, enum
   definition and exhaustive `match`, map operations, control flow and aggregate
-  programs, the `?` / `or |err| { ... }` error-sugar paths, multi-package
-  imports, string operations (including indexing, slicing, and concatenation
+  programs, package-owned error identity and visibility, the `?` /
+  `or |err| { ... }` error-sugar paths, multi-package imports, string
+  operations (including indexing, slicing, and concatenation
   edge cases), stdlib imports, host filesystem/path behavior, host
   process/environment behavior, CC override behavior, internal builtin
   rejection, the embedded allocation/helper surface, a tight-heap

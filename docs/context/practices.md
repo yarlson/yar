@@ -64,7 +64,7 @@
   exported names into local scope.
 - Imported struct values may call exported methods through ordinary
   `value.method(...)` syntax.
-- Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
+- Top-level declarations may be `struct`, `interface`, `enum`, `error`, `fn`, or
   receiver-style method declarations, optionally prefixed with `pub`.
 - Cross-package references may use only exported top-level declarations.
 - Struct fields are package-private unless prefixed with `pub`. External
@@ -137,8 +137,9 @@
 - Closures capture outer locals lexically by value at closure creation time.
 - Captured outer locals are readable inside closures but cannot be assigned
   through the closure body in the current implementation.
-- Error names are collected across the program, sorted lexicographically, and
-  then mapped to integer codes for the generated IR and native `main` wrapper.
+- Declared error identities are collected across the program, sorted by their
+  origin-safe canonical package identity, and mapped to deterministic
+  program-local integer codes for generated IR and the native `main` wrapper.
 - Builtins are compiler-owned contracts, not user-overridable functions,
   including collection helpers such as `len`, `append`, `has`, `delete`, and
   `keys`.
@@ -187,12 +188,17 @@
   replaces the user `main()`, creates package-owned `testing.T` state through
   `testing.new`, reads results through methods, compiles the result, and executes
   it.
-- `error.Name` expressions are valid both in return statements and as general
-  expressions that produce values of type `error`.
+- Packages declare errors with `error Name` or `pub error Name`. Local
+  `error.Name` and imported public `pkg.Name` expressions are valid both in
+  return statements and as general values. Unknown spellings are rejected.
+- Private errors can propagate through exported errorable APIs but cannot be
+  named externally. Same-leaf errors from different package origins remain
+  distinct.
 - Error values support `==` and `!=` comparison.
 - The `to_str` builtin is polymorphic and accepts `i32`, `i64`, `bool`, `str`,
   and `error` arguments. For error values, code generation emits a switch over
-  the program-wide error-code table to produce `"error.Name"` strings.
+  the program-wide error-code table to produce legacy `"error.Name"` strings;
+  this display is not an identity operation.
 - Native build subprocesses share one absolute deadline configured by
   `YAR_BUILD_TIMEOUT_SECS` (30 seconds by default). Generated test binaries use
   `YAR_TEST_TIMEOUT_SECS` (30 seconds), while a `yar run` program has no default

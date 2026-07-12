@@ -2,6 +2,10 @@ package io
 
 import "std/conv"
 
+pub error IO
+pub error InvalidArgument
+pub error LimitExceeded
+
 pub interface Reader {
     read(max_bytes i32) !str
 }

@@ -1,5 +1,11 @@
 package support
 
+pub error SupportFailure
+
+pub fn named_error() error {
+    return error.SupportFailure
+}
+
 pub interface Labeler {
     label(prefix str) str
 }

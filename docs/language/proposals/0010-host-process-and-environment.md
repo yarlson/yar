@@ -86,10 +86,10 @@ reaps the leader before returning. Captured partial output is discarded.
 
 The resulting errors are:
 
-- `error.Timeout` for deadline expiry
-- `error.LimitExceeded` for either capture cap
-- `error.Cancelled` for an explicit cancellation signal
-- `error.IO` when termination, cleanup, capture, or waiting cannot complete
+- `process.Timeout` for deadline expiry
+- `process.LimitExceeded` for either capture cap
+- `process.Cancelled` for an explicit cancellation signal
+- `process.IO` when termination, cleanup, capture, or waiting cannot complete
 
 Cleanup failure takes precedence over the trigger error because the runtime
 cannot claim successful containment when cleanup is incomplete.
@@ -126,8 +126,8 @@ quotas.
 
 ## 8. Other Host Operations
 
-`env.lookup` returns `error.NotFound` when a name is absent and
-`error.InvalidArgument` when a name cannot cross the host boundary.
+`env.lookup` returns `env.NotFound` when a name is absent and
+`env.InvalidArgument` when a name cannot cross the host boundary.
 `stdio.eprint` serializes one complete message with other runtime stderr calls.
 
 ## 9. CLI Boundary

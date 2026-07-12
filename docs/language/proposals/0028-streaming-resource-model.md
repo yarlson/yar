@@ -60,11 +60,11 @@ pub fn close_quiet(c Closer) void
 `read(max_bytes)` returns an empty string on EOF. This mirrors the existing
 `net.read` contract and keeps EOF out of the ordinary error space.
 
-`copy` returns `error.InvalidArgument` when `chunk_size <= 0`, propagates stream
-errors, and returns `error.IO` if a writer reports a short write.
+`copy` returns `io.InvalidArgument` when `chunk_size <= 0`, propagates stream
+errors, and returns `io.IO` if a writer reports a short write.
 
-`read_all` returns `error.InvalidArgument` for invalid limits and
-`error.LimitExceeded` when reading would exceed `max_bytes`.
+`read_all` returns `io.InvalidArgument` for invalid limits and
+`io.LimitExceeded` when reading would exceed `max_bytes`.
 
 ### `fs`
 
@@ -85,13 +85,13 @@ pub fn (f File) close() !void
 
 Filesystem stream failures use ordinary errors:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.AlreadyExists`
-- `error.InvalidPath`
-- `error.InvalidArgument`
+- `fs.NotFound`
+- `fs.PermissionDenied`
+- `fs.AlreadyExists`
+- `fs.InvalidPath`
+- `fs.InvalidArgument`
 - `error.Closed`
-- `error.IO`
+- `fs.IO`
 
 ### `net`
 
@@ -201,8 +201,8 @@ interrupted before a connection handle exists.
 - streaming file copy through `io.copy`
 - explicit close on both streams
 - `error.Closed` after using a closed file
-- `error.InvalidArgument` for invalid copy chunk size
-- `error.LimitExceeded` for bounded `io.read_all`
+- `io.InvalidArgument` for invalid copy chunk size
+- `io.LimitExceeded` for bounded `io.read_all`
 - whole-file verification through the existing `fs.read_file`
 
 `TestStdlibIOFixtureProgram` builds and runs the fixture through the native

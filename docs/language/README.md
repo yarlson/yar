@@ -61,3 +61,4 @@ their status does not prove implementation.
 | 0027 | [HTTP Routing](proposals/0027-http-routing.md) | withdrawn | removed |
 | 0028 | [Streaming Resource Model](proposals/0028-streaming-resource-model.md) | accepted | implemented |
 | 0029 | [Struct Field Visibility and Package-Owned Construction](proposals/0029-struct-field-visibility.md) | accepted | implemented |
+| 0030 | [Package-Owned Error Declarations and Identity](proposals/0030-package-owned-errors.md) | accepted | implemented |

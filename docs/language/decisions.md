@@ -26,6 +26,25 @@ Status: accepted
 YAR uses explicit error values and error-aware return types as its primary error
 model.
 
+### Named errors are package-owned declarations
+
+Status: accepted
+
+Packages declare errors with `error Name` or `pub error Name`. Code in the
+declaring package uses `error.Name`; callers use `pkg.Name` for public errors.
+An error's identity includes its origin-safe declaring package, so equal leaf
+names from different packages remain distinct. Numeric codes are deterministic
+within one compiled program but are not a stable cross-program ABI.
+
+Private errors may cross an exported errorable API, but callers cannot name or
+construct them. They can still propagate them, bind them in a handler, compare
+obtained values, or stringify them. Stringification deliberately preserves the
+legacy `"error.Name"` display and therefore is not an identity operation.
+
+`error.MissingKey` and `error.Closed` are compiler-owned shared declarations
+for maps, channels, and closed resources. Other host-backed errors belong to
+the `fs`, `net`, `process`, or `env` package that exposes the operation.
+
 ### Propagation sugar with `?`
 
 Status: accepted
@@ -270,10 +289,10 @@ the testing package.
 
 Status: accepted
 
-Error values support `==` and `!=` comparison. `error.Name` expressions are
-valid outside return statements, enabling patterns like
-`testing.equal[error](t, err, error.NotFound)`. Errors are `i32` codes
-internally, so comparison uses integer `icmp`.
+Error values support `==` and `!=` comparison. Declared local `error.Name` and
+imported public `pkg.Name` expressions are valid outside return statements,
+enabling patterns like `testing.equal[error](t, err, fs.NotFound)`. Errors are
+program-local `i32` codes internally, so comparison uses integer `icmp`.
 
 ### Dependency management
 

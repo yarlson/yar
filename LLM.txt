@@ -60,7 +60,7 @@ fn main() i32 {
 | `str` | `"hello\n"` |
 | `void` | (no value) |
 | `noreturn` | (never returns) |
-| `error` | `error.Name` |
+| `error` | declared local `error.Name` or imported public `pkg.Name` |
 | `*T` | `*Node` (typed pointer) |
 | `[N]T` | `[3]i32{1, 2, 3}` |
 | `[]T` | `[]i32{1, 2}` |
@@ -368,6 +368,8 @@ String: `+` (concatenation), `==`/`!=` (equality), `s[i]` (byte), `s[i:j]`, `s[i
 Errors are values. No exceptions.
 
 ```yar
+error DivideByZero
+
 // Define errorable function
 fn divide(a i32, b i32) !i32 {
     if b == 0 {
@@ -396,7 +398,7 @@ fn handle() !i32 {
         if err == error.DivideByZero {
             return -1
         }
-        return error.Unknown
+        return error.DivideByZero
     }
     return result
 }
@@ -404,7 +406,16 @@ fn handle() !i32 {
 
 - `?` propagates error to caller (caller must return `!T` or `error`)
 - `or |err| { ... }` handles error locally; block must terminate control flow when used in value position
-- `error.Name` creates named error values
+- Declare package errors with `error Name` (private) or `pub error Name`
+- Use local `error.Name`; use imported public `pkg.Name`
+- Unknown names are compile-time errors; spelling a name does not create it
+- Error identity includes the origin-safe declaring package, so same-leaf
+  declarations from different packages compare unequal
+- Private errors may propagate through exported `!T` APIs but cannot be named
+  externally
+- `error.MissingKey` and `error.Closed` are compiler-owned and reserved
+- Codes are deterministic within one program, not stable ABI values
+- `to_str` preserves `"error.Name"`; display text is not identity
 - `error` is a valid type for variables, parameters, fields
 - Raw errorable call expressions cannot be used directly in expressions; must use `?`, `or`, or `return`
 - First-class `!T` values produced by the language, such as taskgroup result elements, may later be handled with `?` or `or`
@@ -529,7 +540,7 @@ utf8.is_digit(r) bool
 utf8.is_space(r) bool
 ```
 
-Errors: `error.InvalidUTF8`, `error.OutOfRange`
+Errors: `utf8.InvalidUTF8`, `utf8.OutOfRange`
 
 ### conv
 
@@ -590,7 +601,8 @@ operation holding the file lock before releasing it; close does not interrupt
 blocking I/O or perform an implicit durability sync. Unknown, stale-generation,
 and wrong-kind tokens produce `error.Closed`.
 
-Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.InvalidArgument`, `error.Closed`, `error.IO`
+Errors: `fs.NotFound`, `fs.PermissionDenied`, `fs.AlreadyExists`,
+`fs.InvalidPath`, `fs.InvalidArgument`, `error.Closed`, `fs.IO`
 
 ### io
 
@@ -635,18 +647,19 @@ process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.C
 Timeout range: 1..86,400,000 ms. Capture caps: 0..67,108,864 bytes each;
 the exact cap is allowed and zero allows no output. Timeout, cancellation, or
 cap breach terminates and reaps ordinary descendants; partial output is
-discarded. Cleanup failure is `error.IO`. `run_inherit` inherits stdio and has
+discarded. Cleanup failure is `process.IO`. `run_inherit` inherits stdio and has
 no capture caps. Unix descendants that create a new session may escape. These
 controls are not CPU, address-space, file, network, or process-count quotas.
 Only the calling native task thread blocks.
 
-Errors: `error.NotFound`, `error.PermissionDenied`, `error.InvalidArgument`,
-`error.Timeout`, `error.LimitExceeded`, `error.Cancelled`, `error.IO`
+Errors: `process.NotFound`, `process.PermissionDenied`,
+`process.InvalidArgument`, `process.Timeout`, `process.LimitExceeded`,
+`process.Cancelled`, `process.IO`
 
 ### env
 
 ```
-env.lookup(name) !str    // error.NotFound if missing
+env.lookup(name) !str    // env.NotFound if missing
 ```
 
 ### stdio
@@ -705,7 +718,9 @@ timeout need not interrupt an already-running syscall. Synchronous DNS/connect
 cannot be interrupted before a handle exists. Sibling close ends blocked
 accept/read/write with `error.Closed`.
 
-Errors: `error.ConnectionRefused`, `error.Timeout`, `error.AddrInUse`, `error.ConnectionReset`, `error.NotFound` (DNS), `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`, `error.Closed`
+Errors: `net.ConnectionRefused`, `net.Timeout`, `net.AddrInUse`,
+`net.ConnectionReset`, `net.NotFound` (DNS), `net.PermissionDenied`,
+`net.InvalidArgument`, `net.IO`, `error.Closed`
 
 ### HTTP serving
 
@@ -771,6 +786,8 @@ Convention: `fn test_<name>(t *testing.T) void`
 ### Testing Errors
 
 ```yar
+error DivideByZero
+
 fn divide(a i32, b i32) !i32 {
     if b == 0 {
         return error.DivideByZero

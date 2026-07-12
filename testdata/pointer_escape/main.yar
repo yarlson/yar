@@ -1,5 +1,8 @@
 package main
 
+error Boom
+error Unexpected
+
 struct Record {
 	value i32
 }

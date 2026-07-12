@@ -872,6 +872,7 @@ fn package_from_files(id: PackageId, name: String, stdlib: bool, files: Vec<Prog
         package.structs.extend(file.structs.clone());
         package.interfaces.extend(file.interfaces.clone());
         package.enums.extend(file.enums.clone());
+        package.errors.extend(file.errors.clone());
         package.functions.extend(file.functions.clone());
     }
     package
@@ -1121,6 +1122,32 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn aggregates_error_declarations_across_package_files() {
+        let (first, first_diagnostics) =
+            parse_file("first.yar", "package sample\n\nerror LocalFailure\n");
+        let (second, second_diagnostics) =
+            parse_file("second.yar", "package sample\n\npub error PublicFailure\n");
+        assert_eq!(first_diagnostics, Vec::new());
+        assert_eq!(second_diagnostics, Vec::new());
+
+        let package = package_from_files(
+            PackageId::default(),
+            "sample".to_owned(),
+            false,
+            vec![first, second],
+        );
+
+        assert_eq!(
+            package
+                .errors
+                .iter()
+                .map(|decl| (decl.name.as_str(), decl.exported))
+                .collect::<Vec<_>>(),
+            vec![("LocalFailure", false), ("PublicFailure", true)]
+        );
+    }
 
     #[test]
     fn loads_local_import_graph() {

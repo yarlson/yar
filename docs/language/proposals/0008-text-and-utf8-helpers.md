@@ -115,10 +115,10 @@ control flow beyond the existing `!T` error model.
 
 UTF-8 and parse failures are explicit errors:
 
-- `error.InvalidUTF8`
-- `error.OutOfRange`
-- `error.InvalidInteger`
-- `error.IntegerOverflow`
+- `utf8.InvalidUTF8`
+- `utf8.OutOfRange`
+- `strings.InvalidInteger`
+- `strings.IntegerOverflow`
 
 ## 5. Type Rules
 

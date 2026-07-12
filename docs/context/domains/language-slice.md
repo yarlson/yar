@@ -17,7 +17,7 @@
 - `std/<package>` imports resolve exclusively to embedded stdlib. Other imports
   resolve in the importer origin: own packages, aliases declared by that
   origin, then error. Dependency aliases cannot be named `std`.
-- Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
+- Top-level declarations may be `struct`, `interface`, `enum`, `error`, `fn`, or
   receiver-style method declarations, optionally prefixed with `pub`.
 - Top-level `struct` and `fn` declarations may declare explicit type
   parameters.
@@ -80,7 +80,9 @@
 - String literals with `\n`, `\t`, `\r`, `\0`, `\\`, and `\"` escapes
 - Boolean literals
 - `nil`
-- `error.Name` expressions as general values and in return position
+- Package-level `error Name` and `pub error Name` declarations
+- Local `error.Name` and imported public `pkg.Name` expressions as general
+  values and in return position
 - Struct literals
 - Enum case constructors such as `TokenKind.Ident`,
   `Expr.Name{text: "main"}`, and `Expr.Name("main")` for single-field cases
@@ -262,9 +264,11 @@
 - `m[key] = value` inserts or replaces the entry for `key` in a map.
 - `len` requires an array, slice, map, or `str` argument and returns `i32`.
 - `append` requires `append([]T, T)` and returns `[]T`.
-- `error.Name` is valid as a general expression producing a value of type
-  `error`, and as the operand of `return` inside an errorable function or a
-  function returning `error`.
+- `error.Name` resolves a declared error in the current package; `pkg.Name`
+  resolves a public error in an imported package. Both produce `error` values
+  and may be returned from compatible functions. Unknown spellings and private
+  imported errors are rejected, while same-leaf declarations from different
+  origins remain distinct.
 - A raw errorable call cannot be used directly as a value; it must be returned
   directly, propagated with `?`, or handled with `or |err| { ... }`. First-
   class `!T` values produced by constructs such as taskgroup results may be

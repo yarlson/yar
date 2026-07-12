@@ -38,7 +38,7 @@ fn write_all(conn net.Conn, data str) !void {
     off := 0
     for off < len(data) {
         n := conn.write(data[off:])?
-        if n <= 0 { return error.IO }
+        if n <= 0 { return net.IO }
         off += n
     }
     return
@@ -67,7 +67,7 @@ fn write_all(conn net.Conn, data str) !void {
     off := 0
     for off < len(data) {
         n := conn.write(data[off:])?
-        if n <= 0 { return error.IO }
+        if n <= 0 { return net.IO }
         off += n
     }
     return
@@ -127,7 +127,7 @@ remain kind-checked at the runtime boundary.
 - `Conn.set_read_deadline(millis)` / `set_write_deadline(millis)` set
   socket timeouts. 0 means no timeout.
 - `resolve(host, port)` returns the first IPv4 or IPv6 result; resolver failure
-  is `error.NotFound`.
+  is `net.NotFound`.
 - Typed connections and listeners are share-safe registry references. One read
   and one write may run concurrently; same-direction operations serialize.
 - Closing linearizes at registry removal, wakes blocked accept/read/write calls
@@ -167,16 +167,17 @@ None.
 ### Checker impact
 
 - `IsHostIntrinsic` extended with all `net.*` function names.
-- `registerHostErrorNames` extended to register 9 error names:
-  `AddrInUse`, `Closed`, `ConnectionRefused`, `ConnectionReset`, `IO`,
-  `InvalidArgument`, `NotFound`, `PermissionDenied`, `Timeout`.
+- The package declares public errors for `AddrInUse`, `ConnectionRefused`,
+  `ConnectionReset`, `IO`, `InvalidArgument`, `NotFound`, `PermissionDenied`,
+  and `Timeout`. Closed resources use compiler-owned `error.Closed`.
 
 ### Codegen impact
 
 - 13 new LLVM extern declarations (`@yar_net_*`) in `writeRuntimeDecls`.
 - 14 new cases in `genHostIntrinsicCall` following existing patterns
   (alloca out → call → load → emit status result).
-- 1 new case in `emitHostErrorCode` mapping 9 status codes to error names.
+- Host status mapping resolves package-owned `net` error identities and the
+  shared compiler-owned `error.Closed` identity.
 
 ### Runtime impact
 
@@ -191,10 +192,11 @@ None.
 
 ### Errors
 
-New error names (`ConnectionRefused`, `Timeout`, `AddrInUse`,
-`ConnectionReset`, `Closed`) join the program-wide error code table. Existing
-names (`IO`, `NotFound`, `PermissionDenied`, `InvalidArgument`) are reused.
-All error handling works through standard `?` and `or |err| { ... }`.
+Networking errors are package-owned declarations such as
+`net.ConnectionRefused`, `net.Timeout`, and `net.IO`; closed resources use
+compiler-owned `error.Closed`. Same-leaf errors from other packages remain
+distinct. All error handling works through standard `?` and
+`or |err| { ... }`.
 
 ### Structs
 

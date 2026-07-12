@@ -43,6 +43,7 @@ pub fn lower_package_graph(graph: &PackageGraph) -> (Program, Vec<Diagnostic>) {
         program.enums.extend(lowerer.lower_enums(package));
         program.interfaces.extend(lowerer.lower_interfaces(package));
         program.structs.extend(lowerer.lower_structs(package));
+        program.errors.extend(lowerer.lower_errors(package));
         program.functions.extend(lowerer.lower_functions(package));
     }
 
@@ -54,8 +55,10 @@ struct PackageLowerer<'a> {
     structs: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
     interfaces: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
     enums: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
+    errors: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
     functions: BTreeMap<PackageId, BTreeMap<String, DeclVisibility>>,
     imports: BTreeMap<PackageId, BTreeMap<String, PackageId>>,
+    local_scopes: Vec<BTreeSet<String>>,
     diag: List,
 }
 
@@ -71,8 +74,10 @@ impl<'a> PackageLowerer<'a> {
             structs: BTreeMap::new(),
             interfaces: BTreeMap::new(),
             enums: BTreeMap::new(),
+            errors: BTreeMap::new(),
             functions: BTreeMap::new(),
             imports: BTreeMap::new(),
+            local_scopes: Vec::new(),
             diag: List::default(),
         }
     }
@@ -135,6 +140,35 @@ impl<'a> PackageLowerer<'a> {
                 }
             }
             self.enums.insert(path.clone(), enums);
+
+            let mut errors = BTreeMap::new();
+            for decl in &package.errors {
+                if matches!(decl.name.as_str(), "MissingKey" | "Closed") {
+                    self.diag.add(
+                        decl.name_pos.clone(),
+                        format!(
+                            "error {:?} is compiler-owned and cannot be declared",
+                            decl.name
+                        ),
+                    );
+                    continue;
+                }
+                if errors
+                    .insert(
+                        decl.name.clone(),
+                        DeclVisibility {
+                            exported: decl.exported,
+                        },
+                    )
+                    .is_some()
+                {
+                    self.diag.add(
+                        decl.name_pos.clone(),
+                        format!("error {:?} is already declared", decl.name),
+                    );
+                }
+            }
+            self.errors.insert(path.clone(), errors);
 
             let mut functions = BTreeMap::new();
             for decl in &package.functions {
@@ -473,6 +507,20 @@ impl<'a> PackageLowerer<'a> {
             .collect()
     }
 
+    fn lower_errors(&self, package: &Package) -> Vec<ErrorDecl> {
+        package
+            .errors
+            .iter()
+            .filter(|decl| !matches!(decl.name.as_str(), "MissingKey" | "Closed"))
+            .map(|decl| ErrorDecl {
+                error_pos: decl.error_pos.clone(),
+                exported: decl.exported,
+                name: canonical_decl_name(&self.graph.entry, package, &decl.name),
+                name_pos: decl.name_pos.clone(),
+            })
+            .collect()
+    }
+
     fn lower_functions(&mut self, package: &Package) -> Vec<FunctionDecl> {
         package
             .functions
@@ -493,6 +541,18 @@ impl<'a> PackageLowerer<'a> {
                 } else {
                     canonical_function_name(self.graph, package, &decl.name)
                 };
+                let mut function_scope = decl
+                    .params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<BTreeSet<_>>();
+                if let Some(receiver) = &decl.receiver {
+                    function_scope.insert(receiver.name.clone());
+                }
+                self.local_scopes.push(function_scope);
+                let body = self.rewrite_block(package, &decl.body, Some(&type_params));
+                self.local_scopes.pop();
+
                 FunctionDecl {
                     exported: decl.exported,
                     host_intrinsic: decl.host_intrinsic,
@@ -507,7 +567,7 @@ impl<'a> PackageLowerer<'a> {
                         Some(&type_params),
                     ),
                     return_is_bang: decl.return_is_bang,
-                    body: self.rewrite_block(package, &decl.body, Some(&type_params)),
+                    body,
                 }
             })
             .collect()
@@ -617,13 +677,16 @@ impl<'a> PackageLowerer<'a> {
         block: &BlockStmt,
         type_params: Option<&BTreeSet<String>>,
     ) -> BlockStmt {
+        self.local_scopes.push(BTreeSet::new());
+        let stmts = block
+            .stmts
+            .iter()
+            .map(|stmt| self.rewrite_statement(package, stmt, type_params))
+            .collect();
+        self.local_scopes.pop();
         BlockStmt {
             lbrace: block.lbrace.clone(),
-            stmts: block
-                .stmts
-                .iter()
-                .map(|stmt| self.rewrite_statement(package, stmt, type_params))
-                .collect(),
+            stmts,
         }
     }
 
@@ -637,22 +700,30 @@ impl<'a> PackageLowerer<'a> {
             Statement::Block(block) => {
                 Statement::Block(Box::new(self.rewrite_block(package, block, type_params)))
             }
-            Statement::Let(stmt) => Statement::Let(Box::new(LetStmt {
-                let_pos: stmt.let_pos.clone(),
-                name: stmt.name.clone(),
-                name_pos: stmt.name_pos.clone(),
-                value: self.rewrite_expr(package, &stmt.value, type_params),
-            })),
-            Statement::Var(stmt) => Statement::Var(Box::new(VarStmt {
-                var_pos: stmt.var_pos.clone(),
-                name: stmt.name.clone(),
-                name_pos: stmt.name_pos.clone(),
-                type_ref: self.rewrite_type_ref(package, &stmt.type_ref, type_params),
-                value: stmt
+            Statement::Let(stmt) => {
+                let value = self.rewrite_expr(package, &stmt.value, type_params);
+                self.declare_local(&stmt.name);
+                Statement::Let(Box::new(LetStmt {
+                    let_pos: stmt.let_pos.clone(),
+                    name: stmt.name.clone(),
+                    name_pos: stmt.name_pos.clone(),
+                    value,
+                }))
+            }
+            Statement::Var(stmt) => {
+                let value = stmt
                     .value
                     .as_ref()
-                    .map(|expr| self.rewrite_expr(package, expr, type_params)),
-            })),
+                    .map(|expr| self.rewrite_expr(package, expr, type_params));
+                self.declare_local(&stmt.name);
+                Statement::Var(Box::new(VarStmt {
+                    var_pos: stmt.var_pos.clone(),
+                    name: stmt.name.clone(),
+                    name_pos: stmt.name_pos.clone(),
+                    type_ref: self.rewrite_type_ref(package, &stmt.type_ref, type_params),
+                    value,
+                }))
+            }
             Statement::Assign(stmt) => Statement::Assign(Box::new(AssignStmt {
                 target: self.rewrite_expr(package, &stmt.target, type_params),
                 value: self.rewrite_expr(package, &stmt.value, type_params),
@@ -674,22 +745,27 @@ impl<'a> PackageLowerer<'a> {
                     .as_ref()
                     .map(|stmt| self.rewrite_statement(package, stmt, type_params)),
             })),
-            Statement::For(stmt) => Statement::For(Box::new(ForStmt {
-                for_pos: stmt.for_pos.clone(),
-                init: stmt
-                    .init
-                    .as_ref()
-                    .map(|stmt| self.rewrite_statement(package, stmt, type_params)),
-                cond: stmt
-                    .cond
-                    .as_ref()
-                    .map(|expr| self.rewrite_expr(package, expr, type_params)),
-                post: stmt
-                    .post
-                    .as_ref()
-                    .map(|stmt| self.rewrite_statement(package, stmt, type_params)),
-                body: self.rewrite_block(package, &stmt.body, type_params),
-            })),
+            Statement::For(stmt) => {
+                self.local_scopes.push(BTreeSet::new());
+                let rewritten = ForStmt {
+                    for_pos: stmt.for_pos.clone(),
+                    init: stmt
+                        .init
+                        .as_ref()
+                        .map(|stmt| self.rewrite_statement(package, stmt, type_params)),
+                    cond: stmt
+                        .cond
+                        .as_ref()
+                        .map(|expr| self.rewrite_expr(package, expr, type_params)),
+                    post: stmt
+                        .post
+                        .as_ref()
+                        .map(|stmt| self.rewrite_statement(package, stmt, type_params)),
+                    body: self.rewrite_block(package, &stmt.body, type_params),
+                };
+                self.local_scopes.pop();
+                Statement::For(Box::new(rewritten))
+            }
             Statement::Break(stmt) => Statement::Break(stmt.clone()),
             Statement::Continue(stmt) => Statement::Continue(stmt.clone()),
             Statement::Return(stmt) => Statement::Return(Box::new(ReturnStmt {
@@ -699,28 +775,41 @@ impl<'a> PackageLowerer<'a> {
                     .as_ref()
                     .map(|expr| self.rewrite_expr(package, expr, type_params)),
             })),
-            Statement::Match(stmt) => Statement::Match(Box::new(MatchStmt {
-                match_pos: stmt.match_pos.clone(),
-                value: self.rewrite_expr(package, &stmt.value, type_params),
-                arms: stmt
+            Statement::Match(stmt) => {
+                let value = self.rewrite_expr(package, &stmt.value, type_params);
+                let arms = stmt
                     .arms
                     .iter()
-                    .map(|arm| MatchArm {
-                        case_pos: arm.case_pos.clone(),
-                        enum_type: self.rewrite_type_ref(package, &arm.enum_type, type_params),
-                        case_name: arm.case_name.clone(),
-                        case_name_pos: arm.case_name_pos.clone(),
-                        bind_name: arm.bind_name.clone(),
-                        bind_name_pos: arm.bind_name_pos.clone(),
-                        bind_ignore: arm.bind_ignore,
-                        body: self.rewrite_block(package, &arm.body, type_params),
+                    .map(|arm| {
+                        self.local_scopes.push(BTreeSet::new());
+                        if !arm.bind_ignore {
+                            self.declare_local(&arm.bind_name);
+                        }
+                        let body = self.rewrite_block(package, &arm.body, type_params);
+                        self.local_scopes.pop();
+                        MatchArm {
+                            case_pos: arm.case_pos.clone(),
+                            enum_type: self.rewrite_type_ref(package, &arm.enum_type, type_params),
+                            case_name: arm.case_name.clone(),
+                            case_name_pos: arm.case_name_pos.clone(),
+                            bind_name: arm.bind_name.clone(),
+                            bind_name_pos: arm.bind_name_pos.clone(),
+                            bind_ignore: arm.bind_ignore,
+                            body,
+                        }
                     })
-                    .collect(),
-                else_body: stmt
+                    .collect();
+                let else_body = stmt
                     .else_body
                     .as_ref()
-                    .map(|block| self.rewrite_block(package, block, type_params)),
-            })),
+                    .map(|block| self.rewrite_block(package, block, type_params));
+                Statement::Match(Box::new(MatchStmt {
+                    match_pos: stmt.match_pos.clone(),
+                    value,
+                    arms,
+                    else_body,
+                }))
+            }
             Statement::Expr(stmt) => Statement::Expr(Box::new(ExprStmt {
                 expr: self.rewrite_expr(package, &stmt.expr, type_params),
             })),
@@ -744,18 +833,22 @@ impl<'a> PackageLowerer<'a> {
             Expression::String(expr) => Expression::String(expr.clone()),
             Expression::Bool(expr) => Expression::Bool(expr.clone()),
             Expression::Nil(expr) => Expression::Nil(expr.clone()),
-            Expression::Error(expr) => Expression::Error(expr.clone()),
+            Expression::Error(expr) => self.rewrite_local_error(package, expr),
             Expression::Group(expr) => Expression::Group(Box::new(GroupExpr {
                 inner: self.rewrite_expr(package, &expr.inner, type_params),
             })),
             Expression::FunctionLiteral(expr) => {
+                self.local_scopes
+                    .push(expr.params.iter().map(|param| param.name.clone()).collect());
+                let body = self.rewrite_block(package, &expr.body, type_params);
+                self.local_scopes.pop();
                 Expression::FunctionLiteral(Box::new(FunctionLiteralExpr {
                     fn_pos: expr.fn_pos.clone(),
                     enclosing_function: expr.enclosing_function.clone(),
                     params: self.lower_params(package, &expr.params, type_params),
                     return_type: self.rewrite_type_ref(package, &expr.return_type, type_params),
                     return_is_bang: expr.return_is_bang,
-                    body: self.rewrite_block(package, &expr.body, type_params),
+                    body,
                 }))
             }
             Expression::Taskgroup(expr) => Expression::Taskgroup(Box::new(TaskgroupExpr {
@@ -795,6 +888,9 @@ impl<'a> PackageLowerer<'a> {
             })),
             Expression::Selector(expr) => {
                 if let Some(rewritten) = self.rewrite_enum_case_selector(package, expr) {
+                    return rewritten;
+                }
+                if let Some(rewritten) = self.rewrite_imported_error(package, expr) {
                     return rewritten;
                 }
                 Expression::Selector(Box::new(SelectorExpr {
@@ -880,15 +976,96 @@ impl<'a> PackageLowerer<'a> {
                 inner: self.rewrite_expr(package, &expr.inner, type_params),
                 question_pos: expr.question_pos.clone(),
             })),
-            Expression::Handle(expr) => Expression::Handle(Box::new(HandleExpr {
-                inner: self.rewrite_expr(package, &expr.inner, type_params),
-                or_pos: expr.or_pos.clone(),
-                err_name: expr.err_name.clone(),
-                err_pos: expr.err_pos.clone(),
-                handler: self.rewrite_block(package, &expr.handler, type_params),
-            })),
+            Expression::Handle(expr) => {
+                let inner = self.rewrite_expr(package, &expr.inner, type_params);
+                self.local_scopes
+                    .push(BTreeSet::from([expr.err_name.clone()]));
+                let handler = self.rewrite_block(package, &expr.handler, type_params);
+                self.local_scopes.pop();
+                Expression::Handle(Box::new(HandleExpr {
+                    inner,
+                    or_pos: expr.or_pos.clone(),
+                    err_name: expr.err_name.clone(),
+                    err_pos: expr.err_pos.clone(),
+                    handler,
+                }))
+            }
             Expression::Missing(pos) => Expression::Missing(pos.clone()),
         }
+    }
+
+    fn rewrite_local_error(&mut self, package: &Package, expr: &ErrorLiteral) -> Expression {
+        if matches!(expr.name.as_str(), "MissingKey" | "Closed") {
+            return Expression::Error(ErrorLiteral {
+                name: format!("error.{}", expr.name),
+                err_pos: expr.err_pos.clone(),
+            });
+        }
+        if self
+            .errors
+            .get(&package.id)
+            .is_some_and(|errors| errors.contains_key(&expr.name))
+        {
+            return Expression::Error(ErrorLiteral {
+                name: canonical_decl_name(&self.graph.entry, package, &expr.name),
+                err_pos: expr.err_pos.clone(),
+            });
+        }
+        self.diag.add(
+            expr.err_pos.clone(),
+            format!(
+                "error {:?} is not declared in package {:?}",
+                expr.name, package.name
+            ),
+        );
+        Expression::Error(expr.clone())
+    }
+
+    fn rewrite_imported_error(
+        &mut self,
+        package: &Package,
+        expr: &SelectorExpr,
+    ) -> Option<Expression> {
+        let Expression::Ident(qualifier) = &expr.inner else {
+            return None;
+        };
+        if self.local_is_visible(&qualifier.name) {
+            return None;
+        }
+        let target = self.import_target(package, &qualifier.name)?;
+        let visibility = self
+            .errors
+            .get(&target.id)
+            .and_then(|errors| errors.get(&expr.name));
+        let target_id = target.id.clone();
+        let target_name = target.name.clone();
+
+        match visibility {
+            Some(error) if !error.exported => self.diag.add(
+                expr.name_pos.clone(),
+                format!(
+                    "package {:?} does not export error {:?}",
+                    target_name, expr.name
+                ),
+            ),
+            None => self.diag.add(
+                expr.name_pos.clone(),
+                format!(
+                    "package {:?} does not declare error {:?}",
+                    target_name, expr.name
+                ),
+            ),
+            Some(_) => {}
+        }
+
+        Some(Expression::Error(ErrorLiteral {
+            name: canonical_decl_name(
+                &self.graph.entry,
+                self.graph.packages.get(&target_id)?,
+                &expr.name,
+            ),
+            err_pos: qualifier.name_pos.clone(),
+        }))
     }
 
     fn rewrite_callee(
@@ -928,6 +1105,7 @@ impl<'a> PackageLowerer<'a> {
 
         if let Expression::Selector(selector) = callee
             && let Expression::Ident(inner) = &selector.inner
+            && !self.local_is_visible(&inner.name)
             && let Some(target) = self.import_target(package, &inner.name)
             && let Some(function) = self
                 .functions
@@ -953,6 +1131,26 @@ impl<'a> PackageLowerer<'a> {
             }));
         }
 
+        // A bare imported selector can denote an error value, but an unknown
+        // selector in callee position is still a function-call diagnostic.
+        // Do not misreport an unknown function as a missing error declaration.
+        if let Expression::Selector(selector) = callee
+            && let Expression::Ident(inner) = &selector.inner
+            && !self.local_is_visible(&inner.name)
+            && let Some(target) = self.import_target(package, &inner.name)
+        {
+            if self
+                .errors
+                .get(&target.id)
+                .is_some_and(|errors| errors.contains_key(&selector.name))
+            {
+                return self
+                    .rewrite_imported_error(package, selector)
+                    .unwrap_or_else(|| callee.clone());
+            }
+            return callee.clone();
+        }
+
         self.rewrite_expr(package, callee, type_params)
     }
 
@@ -963,6 +1161,9 @@ impl<'a> PackageLowerer<'a> {
     ) -> Option<Expression> {
         let (parts, positions) = selector_path(&Expression::Selector(Box::new(expr.clone())))?;
         if parts.len() != 2 && parts.len() != 3 {
+            return None;
+        }
+        if parts.len() == 3 && self.local_is_visible(&parts[0]) {
             return None;
         }
 
@@ -1084,6 +1285,19 @@ impl<'a> PackageLowerer<'a> {
         let id = self.imports.get(&package.id)?.get(import_name)?;
         self.graph.packages.get(id)
     }
+
+    fn declare_local(&mut self, name: &str) {
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name.to_owned());
+        }
+    }
+
+    fn local_is_visible(&self, name: &str) -> bool {
+        self.local_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
+    }
 }
 
 fn selector_path(expr: &Expression) -> Option<(Vec<String>, Vec<Position>)> {
@@ -1121,9 +1335,228 @@ fn is_builtin_type(name: &str) -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::package::load_package_graph;
+    use crate::{checker::check_program, package::load_package_graph, parser::parse};
 
     use super::*;
+
+    #[test]
+    fn lowers_local_and_imported_errors_to_canonical_names() {
+        let entry_id = PackageId::default();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "/tmp/dependency/yar.toml".to_owned(),
+            },
+            subpath: String::new(),
+        };
+        let (entry_program, entry_diagnostics) = parse(
+            r#"package main
+
+import "dependency"
+error LocalFailure
+
+fn local() error { return error.LocalFailure }
+fn imported() error { return dependency.PublicFailure }
+"#,
+        );
+        let (dependency_program, dependency_diagnostics) = parse(
+            r#"package dependency
+
+pub error PublicFailure
+"#,
+        );
+        assert_eq!(entry_diagnostics, Vec::new());
+        assert_eq!(dependency_diagnostics, Vec::new());
+
+        let graph =
+            graph_with_dependency(entry_id, dependency_id, entry_program, dependency_program);
+        let (program, diagnostics) = lower_package_graph(&graph);
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(
+            program
+                .errors
+                .iter()
+                .any(|decl| decl.name == "main.LocalFailure")
+        );
+        assert!(
+            program
+                .errors
+                .iter()
+                .any(|decl| decl.name.ends_with(".dependency.PublicFailure"))
+        );
+        let returned_errors = program
+            .functions
+            .iter()
+            .flat_map(|function| &function.body.stmts)
+            .filter_map(|statement| match statement {
+                Statement::Return(statement) => match statement.value.as_ref() {
+                    Some(Expression::Error(error)) => Some(error.name.as_str()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(returned_errors.contains(&"main.LocalFailure"));
+        assert!(
+            returned_errors
+                .iter()
+                .any(|name| name.ends_with(".dependency.PublicFailure"))
+        );
+    }
+
+    #[test]
+    fn preserves_selectors_when_lexical_bindings_shadow_import_qualifiers() {
+        let entry_id = PackageId::default();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "/tmp/dependency/yar.toml".to_owned(),
+            },
+            subpath: String::new(),
+        };
+        let (entry_program, entry_diagnostics) = parse(
+            r#"package main
+
+import "dependency"
+
+struct Holder { Failure i32 }
+
+fn (holder Holder) Failure() i32 { return holder.Failure }
+
+fn parameter(dependency Holder) i32 {
+    return dependency.Failure
+}
+
+fn local() i32 {
+    dependency := Holder{Failure: 2}
+    return dependency.Failure()
+}
+
+fn nested() i32 {
+    if true {
+        dependency := Holder{Failure: 3}
+        return dependency.Failure
+    }
+    return 0
+}
+
+fn closure() i32 {
+    read := fn(dependency Holder) i32 { return dependency.Failure }
+    return read(Holder{Failure: 4})
+}
+
+fn main() i32 { return 0 }
+"#,
+        );
+        let (dependency_program, dependency_diagnostics) = parse(
+            r#"package dependency
+
+pub error Failure
+"#,
+        );
+        assert_eq!(entry_diagnostics, Vec::new());
+        assert_eq!(dependency_diagnostics, Vec::new());
+
+        let graph =
+            graph_with_dependency(entry_id, dependency_id, entry_program, dependency_program);
+        let (program, lower_diagnostics) = lower_package_graph(&graph);
+        let (_, check_diagnostics) = check_program(&program);
+
+        assert_eq!(lower_diagnostics, Vec::new());
+        assert_eq!(check_diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn diagnoses_duplicate_reserved_private_and_missing_errors() {
+        let entry_id = PackageId::default();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "/tmp/dependency/yar.toml".to_owned(),
+            },
+            subpath: String::new(),
+        };
+        let (entry_program, entry_diagnostics) = parse(
+            r#"package main
+
+import "dependency"
+error Duplicate
+error Duplicate
+error MissingKey
+
+fn hidden() error { return dependency.HiddenFailure }
+fn missing() error { return dependency.UnknownFailure }
+fn local_missing() error { return error.UnknownLocal }
+"#,
+        );
+        let (dependency_program, dependency_diagnostics) = parse(
+            r#"package dependency
+
+error HiddenFailure
+"#,
+        );
+        assert_eq!(entry_diagnostics, Vec::new());
+        assert_eq!(dependency_diagnostics, Vec::new());
+
+        let graph =
+            graph_with_dependency(entry_id, dependency_id, entry_program, dependency_program);
+        let (_, diagnostics) = lower_package_graph(&graph);
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(messages.contains(&"error \"Duplicate\" is already declared"));
+        assert!(
+            messages.contains(&"error \"MissingKey\" is compiler-owned and cannot be declared")
+        );
+        assert!(
+            messages.contains(&"package \"dependency\" does not export error \"HiddenFailure\"")
+        );
+        assert!(
+            messages.contains(&"package \"dependency\" does not declare error \"UnknownFailure\"")
+        );
+        assert!(messages.contains(&"error \"UnknownLocal\" is not declared in package \"main\""));
+    }
+
+    fn graph_with_dependency(
+        entry_id: PackageId,
+        dependency_id: PackageId,
+        entry_program: Program,
+        dependency_program: Program,
+    ) -> PackageGraph {
+        let import_decl = entry_program.imports[0].clone();
+        let entry = Package {
+            id: entry_id.clone(),
+            name: "main".to_owned(),
+            files: vec![entry_program.clone()],
+            imports: vec![PackageImport {
+                name: "dependency".to_owned(),
+                path: "dependency".to_owned(),
+                target: dependency_id.clone(),
+                decl: import_decl,
+            }],
+            structs: entry_program.structs.clone(),
+            interfaces: entry_program.interfaces.clone(),
+            enums: entry_program.enums.clone(),
+            errors: entry_program.errors.clone(),
+            functions: entry_program.functions.clone(),
+            ..Package::default()
+        };
+        let dependency = Package {
+            id: dependency_id.clone(),
+            name: "dependency".to_owned(),
+            files: vec![dependency_program.clone()],
+            structs: dependency_program.structs.clone(),
+            interfaces: dependency_program.interfaces.clone(),
+            enums: dependency_program.enums.clone(),
+            errors: dependency_program.errors.clone(),
+            functions: dependency_program.functions.clone(),
+            ..Package::default()
+        };
+        PackageGraph {
+            entry: entry_id,
+            packages: BTreeMap::from([(entry.id.clone(), entry), (dependency_id, dependency)]),
+        }
+    }
 
     #[test]
     fn lowers_local_import_calls_to_canonical_names() {

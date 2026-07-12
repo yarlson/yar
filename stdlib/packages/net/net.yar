@@ -1,5 +1,14 @@
 package net
 
+pub error AddrInUse
+pub error ConnectionRefused
+pub error ConnectionReset
+pub error IO
+pub error InvalidArgument
+pub error NotFound
+pub error PermissionDenied
+pub error Timeout
+
 pub struct Addr {
     pub host str
     pub port i32

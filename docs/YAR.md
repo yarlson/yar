@@ -10,7 +10,7 @@ updated.
 
 - Multi-file packages
 - Entry `package main` plus imported packages
-- Top-level `struct`, `interface`, `enum`, and `fn` declarations, with optional `pub`
+- Top-level `struct`, `interface`, `enum`, `error`, and `fn` declarations, with optional `pub`
 - Explicit generic structs and functions
 - Function types and anonymous function literals
 - Native code generation through LLVM IR plus `clang` (overridable via `CC` environment variable)
@@ -47,6 +47,7 @@ A valid entry package:
 - contains zero or more top-level `struct` declarations
 - contains zero or more top-level `interface` declarations
 - contains zero or more top-level `enum` declarations
+- contains zero or more top-level `error` declarations
 - contains zero or more top-level `fn` declarations
 - must define `main`
 
@@ -54,7 +55,7 @@ Imported packages:
 
 - use `import "path"` with slash-separated package paths
 - must declare a package name matching the final import path segment
-- may expose top-level `struct`, `interface`, `enum`, and `fn` declarations with `pub`
+- may expose top-level `struct`, `interface`, `enum`, `error`, and `fn` declarations with `pub`
 - use the reserved `std/<package>` namespace for embedded standard-library
   packages; these imports bypass project and dependency lookup
 - otherwise resolve within the importing source origin: same-origin packages →
@@ -799,20 +800,40 @@ Supported escapes in character literals: `\n`, `\t`, `\r`, `\0`, `\\`, `\'`.
 Errors are explicit values. There are no exceptions, hidden stack unwinding, or
 `try`/`catch` semantics.
 
-Named errors are written as:
+Named errors are package-level declarations. They are private by default:
 
-```
-error.DivideByZero
+```yar
+error Internal
+pub error Public
 ```
 
-`error.Name` is valid as:
+The declaring package refers to either declaration as `error.Name`. An importer
+refers to a public error through its import qualifier, such as `storage.Public`.
+Unknown names are compile-time errors; writing a name does not create an error.
+
+Named error identity includes the origin-safe declaring package. Two packages
+may declare the same leaf name without making equal values. Declarations in the
+same package refer to one identity even when reached through different valid
+import paths.
+
+Named error expressions are valid as:
 
 - the direct operand of `return` inside an errorable function or a function returning plain `error`
 - a general expression producing a value of type `error`
 - an operand in `==` or `!=` comparisons with other error values
 
-The checker records every distinct returned error name and assigns it a numeric
-code for code generation.
+Private errors may propagate through an exported errorable function, but
+callers cannot name or construct them. Callers can still propagate them, bind
+them in `or |err|`, compare obtained values, and stringify them.
+
+The compiler assigns each canonical declaration identity a deterministic,
+non-zero code within one compiled program. Codes are not stable across programs
+and are not a host ABI. `to_str` preserves the legacy `"error.Name"` display,
+so stringification is not an identity operation when two packages use the same
+leaf name.
+
+`error.MissingKey` and `error.Closed` are compiler-owned shared declarations
+for maps, channels, and closed or invalid resources. They cannot be redeclared.
 
 ## Error Handling Forms
 
@@ -822,6 +843,8 @@ An errorable call may be returned directly from a function with the same
 errorable result type:
 
 ```
+error Boom
+
 fn fail() !i32 {
     return error.Boom
 }
@@ -998,7 +1021,8 @@ Available functions:
 - `strings.to_upper(s str) str` — ASCII uppercase conversion
 - `strings.join(parts []str, sep str) str`
 - `strings.from_byte(i32) str` — construct a single-byte string from a byte value
-- `strings.parse_i64(str) !i64` — parse a base-10 signed integer
+- `strings.parse_i64(str) !i64` — parse a base-10 signed integer; returns
+  `strings.InvalidInteger` or `strings.IntegerOverflow`
 
 ### `utf8`
 
@@ -1014,8 +1038,8 @@ Available functions:
 - `utf8.is_digit(r i32) bool` — classify a decoded rune as an ASCII digit
 - `utf8.is_space(r i32) bool` — classify a decoded rune as whitespace
 
-UTF-8 errors return `error.InvalidUTF8`. Out-of-range offsets return
-`error.OutOfRange`.
+UTF-8 errors return `utf8.InvalidUTF8`. Out-of-range offsets return
+`utf8.OutOfRange`.
 
 ### `conv`
 
@@ -1105,15 +1129,15 @@ Methods on `fs.File`:
 - `write(data str) !i32` — write data and return bytes written
 - `close() !void` — close the host file handle
 
-Filesystem errors surface through ordinary YAR errors using the names:
+Filesystem errors surface through package-owned public errors:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.AlreadyExists`
-- `error.InvalidPath`
-- `error.InvalidArgument`
+- `fs.NotFound`
+- `fs.PermissionDenied`
+- `fs.AlreadyExists`
+- `fs.InvalidPath`
+- `fs.InvalidArgument`
 - `error.Closed`
-- `error.IO`
+- `fs.IO`
 
 `fs.temp_dir` uses `TMPDIR` or `/tmp` on Unix and the system temporary
 directory on Windows.
@@ -1139,6 +1163,11 @@ Available functions:
 - `io.read_all(src io.Reader, chunk_size i32, max_bytes i32) !str`
 - `io.close_quiet(c io.Closer) void`
 
+`io.copy` and `io.read_all` use `io.InvalidArgument`; `io.copy` uses `io.IO`
+for a short write, and `io.read_all` uses `io.LimitExceeded` when its bound
+would be exceeded. Errors from the supplied reader, writer, or closer preserve
+their original identities.
+
 ### `process`
 
 ```
@@ -1160,15 +1189,15 @@ Available functions:
 - `process.run(argv []str, limits process.Limits, cancellation process.Cancellation) !process.Result`
 - `process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.Cancellation) !i32`
 
-Host-process launch failures surface through ordinary YAR errors using the names:
+Host-process launch failures surface through package-owned public errors:
 
-- `error.NotFound`
-- `error.PermissionDenied`
-- `error.InvalidArgument`
-- `error.Timeout`
-- `error.LimitExceeded`
-- `error.Cancelled`
-- `error.IO`
+- `process.NotFound`
+- `process.PermissionDenied`
+- `process.InvalidArgument`
+- `process.Timeout`
+- `process.LimitExceeded`
+- `process.Cancelled`
+- `process.IO`
 
 If a child process launches successfully, a non-zero child exit code is reported
 as data in `process.Result.exit_code` or the returned `i32`, not as a YAR
@@ -1179,7 +1208,7 @@ between 0 and 64 MiB; zero permits no bytes, and the exact cap is allowed.
 `run` drains stdout and stderr concurrently. A timeout, cancellation, or the
 first byte beyond either cap terminates and reaps the leader and ordinary
 descendants before returning, and partial output is discarded. Cleanup failure
-returns `error.IO`. `run_inherit` has the same timeout and cancellation
+returns `process.IO`. `run_inherit` has the same timeout and cancellation
 semantics but no capture limits because it inherits stdio.
 
 On Unix, a descendant that deliberately starts a new session may escape the
@@ -1198,8 +1227,9 @@ Available functions:
 
 - `env.lookup(name str) !str`
 
-Environment lookup returns `error.NotFound` when a variable is absent. Names
-that cannot cross the host boundary return `error.InvalidArgument`.
+Environment lookup returns `env.NotFound` when a variable is absent. Names
+that cannot cross the host boundary return `env.InvalidArgument`. Other host
+failures use `env.PermissionDenied` or `env.IO`.
 
 ### `stdio`
 
@@ -1269,16 +1299,16 @@ creation are synchronous host calls and cannot be interrupted before a
 connection handle exists. A sibling task can end blocked accept, read, or write
 by closing the typed listener or connection.
 
-Networking errors surface through ordinary YAR errors using the names:
+Networking errors surface through package-owned public errors:
 
-- `error.ConnectionRefused`
-- `error.Timeout`
-- `error.AddrInUse`
-- `error.ConnectionReset`
-- `error.NotFound` (DNS failure)
-- `error.PermissionDenied`
-- `error.InvalidArgument`
-- `error.IO`
+- `net.ConnectionRefused`
+- `net.Timeout`
+- `net.AddrInUse`
+- `net.ConnectionReset`
+- `net.NotFound` (DNS failure)
+- `net.PermissionDenied`
+- `net.InvalidArgument`
+- `net.IO`
 - `error.Closed`
 
 ### HTTP serving
@@ -1363,6 +1393,8 @@ fn test_greeting(t *testing.T) void {
 Error values support `==` and `!=`, so tests can assert on specific errors:
 
 ```
+error DivideByZero
+
 fn test_divide_by_zero(t *testing.T) void {
     result := divide(10, 0) or |err| {
         testing.equal[error](t, err, error.DivideByZero)
