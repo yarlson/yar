@@ -113,7 +113,7 @@ pub(crate) fn delete(map_ptr: *mut u8, key: *const u8) {
             return;
         }
 
-        *bucket = 0;
+        ptr::write_bytes(bucket, 0, (*map).bucket_size as usize);
         (*map).count -= 1;
 
         let mask = (*map).cap - 1;
@@ -125,7 +125,7 @@ pub(crate) fn delete(map_ptr: *mut u8, key: *const u8) {
             }
 
             let saved = std::slice::from_raw_parts(next, (*map).bucket_size as usize).to_vec();
-            *next = 0;
+            ptr::write_bytes(next, 0, (*map).bucket_size as usize);
             (*map).count -= 1;
             insert_existing(
                 map,
@@ -293,4 +293,31 @@ unsafe fn raw_bytes<'a>(ptr: *const u8, len: i64) -> &'a [u8] {
         super::runtime_fail(b"runtime failure: invalid map key\n");
     }
     unsafe { std::slice::from_raw_parts(ptr, len as usize) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_clears_pointer_bytes_from_live_entry_storage() {
+        let map = new(1, size_of::<i32>() as i32, size_of::<usize>() as i32);
+        let key = 7_i32;
+        let value = Box::into_raw(Box::new(11_u8)) as usize;
+        set(
+            map,
+            (&key as *const i32).cast::<u8>(),
+            (&value as *const usize).cast::<u8>(),
+        );
+        delete(map, (&key as *const i32).cast::<u8>());
+
+        let map = map.cast::<RuntimeMap>();
+        let storage = unsafe {
+            std::slice::from_raw_parts((*map).entries, ((*map).cap * (*map).bucket_size) as usize)
+        };
+        assert!(storage.iter().all(|&byte| byte == 0));
+
+        // SAFETY: value came from Box::into_raw and is reclaimed once.
+        unsafe { drop(Box::from_raw(value as *mut u8)) };
+    }
 }

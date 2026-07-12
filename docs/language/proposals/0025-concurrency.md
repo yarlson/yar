@@ -305,8 +305,9 @@ complete.
 - Channels are safe for concurrent use by multiple tasks. Multiple senders and
   multiple receivers are supported (MPMC).
 - Channel ordering: values are received in FIFO order relative to sends.
-- Channel handles and buffers currently remain allocated for the process
-  lifetime. The runtime has no collector or explicit channel-destroy API.
+- Channel handles and their Rust-owned buffers remain allocated for the process
+  lifetime because there is no channel-destroy API. Managed pointers buffered
+  in live slots are registered as collector roots.
 
 ### Blocking behavior change
 
@@ -317,9 +318,10 @@ thread. A program with no taskgroups retains the single-threaded behavior.
 
 ### Thread safety of existing operations
 
-- **Allocation lifetime**: the current runtime has no garbage collector. Yar
-  allocations, taskgroup handles, and channel handles remain valid for the
-  process lifetime.
+- **Allocation lifetime**: the current runtime conservatively reclaims
+  unreachable managed blocks. Collection is suppressed while spawned results
+  remain unjoined. Taskgroup and channel handles themselves remain valid for
+  the process lifetime.
 - **Pointers, slices, and maps**: these values cannot be passed or captured
   across a spawn boundary, including when nested inside aggregates.
 - **String builders**: `sb_new`/`sb_write`/`sb_string` resolve through the
@@ -700,9 +702,9 @@ The original audit assumed a collector with six unsynchronized globals:
 - `yar_gc_collecting` — reentrancy guard
 - `yar_gc_stack_top` — stack marker for root scanning
 
-That design would have required synchronized allocation and a stop-the-world
-barrier. These globals and that collector are not part of the shipped Rust
-runtime.
+Those exact globals are not part of the shipped runtime. The Rust collector
+uses synchronized external metadata, captures the main stack and preserved
+registers, and defers collection rather than attempting to stop worker threads.
 
 Additionally, `yar_env_lookup` and `yar_fs_temp_dir` call `getenv()`, which
 is not thread-safe on POSIX (returns a pointer to shared global storage that
@@ -1005,7 +1007,8 @@ Deferred (not rejected) because:
   need ordered result assembly and a mandatory join.
 - **Runtime**: the native-thread baseline is simpler than the explored M:N
   scheduler, but one thread per spawn and process-lifetime taskgroup, channel,
-  and string-builder handles are material operational limits.
+  and string-builder handles remain material operational limits. Managed heap
+  blocks are reclaimed separately.
 - **Testing**: concurrency ordering, channel closure, nested captures, resource
   provenance, and task-boundary alias rejection need end-to-end coverage.
 
@@ -1312,15 +1315,18 @@ any architecture without dedicated assembly.
 
 ### GC modifications for multi-task scanning
 
-**Decision**: follow the Boehm GC multi-thread model — stop-the-world across
-all OS threads, scan all task stacks, then resume.
+This subsection records the deferred M:N scheduler design, not shipped runtime
+behavior. The current native-thread baseline defers collection while any
+spawned result is unjoined; it does not pause or scan worker threads.
+
+**Deferred M:N decision**: follow the Boehm GC multi-thread model —
+stop-the-world across all OS threads, scan all task stacks, then resume.
 
 **Research findings**:
 
-- Yar's current GC is a conservative mark-and-sweep, stop-the-world collector.
-  Adding concurrency does not require concurrent GC — the same STW approach
-  works with multiple tasks. The critical change is scanning multiple stacks
-  instead of one.
+- A future M:N runtime can retain conservative mark-and-sweep without making
+  collection concurrent. Its critical change would be stopping mutators and
+  scanning multiple registered stacks instead of deferring collection.
 - Boehm GC handles multiple threads by: (a) registering each thread with the
   collector via `GC_register_my_thread`, (b) stopping all threads with
   `SIGUSR1` (or `SuspendThread` on Windows) during collection, (c) scanning
@@ -1334,9 +1340,9 @@ all OS threads, scan all task stacks, then resume.
 - No write barriers needed — Yar's STW collector sees a frozen snapshot of
   all memory during collection. Write barriers would only be needed for
   concurrent or incremental marking, which is not in scope.
-- Channel buffers are heap-allocated via `yar_alloc` and are part of the
-  normal heap graph. No special treatment needed — the conservative scanner
-  examines every word in live heap blocks.
+- The current native-thread runtime keeps channel buffers in Rust-owned storage
+  and snapshots live slots as explicit roots. A future M:N runtime may instead
+  move them into managed heap blocks, but that is not current behavior.
 
 ## 13. Remaining Open Questions
 

@@ -1004,9 +1004,8 @@ Cache: `$HOME/Library/Caches/yar/deps/` on macOS, otherwise
 
 ## Memory Management
 
-- Runtime-managed heap; the current Rust runtime retains allocations until
-  process exit
-- No manual free, no GC builtins
+- Runtime-managed heap with conservative non-moving reclamation
+- No manual free or user-visible GC builtins; collection timing is unspecified
 - Allocation failure is unrecoverable (not a YAR error)
 
 ## Key Restrictions

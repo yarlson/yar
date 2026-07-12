@@ -27,11 +27,9 @@ Closures, interfaces, maps, slices, pointer-backed recursive structures, string
 concatenation, and host-backed runtime helpers all increase pressure on that
 heap.
 
-The current Rust runtime leaves every allocation live until process exit. That
-is semantically valid under the minimal memory model, but it makes
-longer-running compiler-style and tooling-style programs more fragile than
-necessary. A small runtime-only collector would improve that behavior without
-widening the language surface.
+The Rust runtime uses one shared allocation boundary. Reclaiming unreachable
+blocks behind that boundary keeps longer-running compiler-style and
+tooling-style programs viable without widening the language surface.
 
 ## 3. User-Facing Examples
 
@@ -103,8 +101,9 @@ would require a separate proposal.
 - codegen impact: the generated native `main` wrapper already passes a
   stack-top pointer through a reserved runtime hook, and existing heap
   operations already lower through shared allocation helpers
-- runtime impact: high; implement a conservative mark-and-sweep collector that
-  scans spilled registers, the stack, and the contents of live heap blocks
+- runtime impact: high; the collector captures ABI-preserved registers, scans
+  the main stack and managed blocks conservatively, and sweeps unreachable
+  blocks
 
 ## 8. Interactions
 
@@ -159,7 +158,7 @@ the runtime is still small enough to evolve deliberately.
 
 ## 13. Decision
 
-Accepted, but not implemented in the current Rust runtime.
+Accepted and implemented in the Rust runtime.
 
 The language surface stays unchanged:
 
@@ -167,18 +166,18 @@ The language surface stays unchanged:
 - no manual deallocation
 - no finalizers
 
-The current Rust runtime retains heap-backed storage until process exit. A
-future implementation must add reclamation behind the existing allocation
-boundary without changing the source language.
+The runtime reclaims unreachable heap-backed storage behind the existing
+allocation boundary. Collection is deferred while spawned results remain
+unjoined, and live channel slots are explicit roots.
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- `docs/context` update
-- `docs/YAR.md` update
-- `docs/language` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] diagnostics
+- [x] tests
+- [x] `docs/context` update
+- [x] `docs/YAR.md` update
+- [x] `docs/language` update

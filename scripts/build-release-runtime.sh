@@ -19,6 +19,37 @@ if [ -z "$archive" ]; then
   exit 1
 fi
 
+# cargo-zigbuild selects Zig for Rust's linker, while cc-based build scripts
+# require their own explicit target compiler and archiver selection.
+export CRATE_CC_NO_DEFAULTS=1
+case "$target" in
+  x86_64-apple-darwin)
+    export CC_x86_64_apple_darwin="$PWD/scripts/zig-cc.sh"
+    export CFLAGS_x86_64_apple_darwin="-target x86_64-macos"
+    export AR_x86_64_apple_darwin="zig ar"
+    ;;
+  aarch64-apple-darwin)
+    export CC_aarch64_apple_darwin="$PWD/scripts/zig-cc.sh"
+    export CFLAGS_aarch64_apple_darwin="-target aarch64-macos"
+    export AR_aarch64_apple_darwin="zig ar"
+    ;;
+  x86_64-unknown-linux-gnu)
+    export CC_x86_64_unknown_linux_gnu="$PWD/scripts/zig-cc.sh"
+    export CFLAGS_x86_64_unknown_linux_gnu="-target x86_64-linux-gnu"
+    export AR_x86_64_unknown_linux_gnu="zig ar"
+    ;;
+  aarch64-unknown-linux-gnu)
+    export CC_aarch64_unknown_linux_gnu="$PWD/scripts/zig-cc.sh"
+    export CFLAGS_aarch64_unknown_linux_gnu="-target aarch64-linux-gnu"
+    export AR_aarch64_unknown_linux_gnu="zig ar"
+    ;;
+  x86_64-pc-windows-gnu)
+    export CC_x86_64_pc_windows_gnu="$PWD/scripts/zig-cc.sh"
+    export CFLAGS_x86_64_pc_windows_gnu="-target x86_64-windows-gnu"
+    export AR_x86_64_pc_windows_gnu="zig ar"
+    ;;
+esac
+
 cargo zigbuild -p yar-runtime --release --target "$target"
 
 out_dir="dist/runtime/$target"

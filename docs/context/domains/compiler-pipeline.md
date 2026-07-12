@@ -76,10 +76,9 @@
   pointers to LLVM `ptr` values, lowering slices to runtime descriptors plus
   allocation/copy helpers, lowering maps to opaque runtime-managed hash tables
   with typed key/value access and key-snapshot extraction, generating the
-  native `main` wrapper around `yar.main`, calling the runtime's reserved GC
-  initialization hook there, and declaring the shared runtime allocation
-  helpers used by heap-backed features. The current Rust runtime leaves that GC
-  hook inactive and retains allocations until process exit.
+  native `main` wrapper around `yar.main`, registering its outer stack boundary
+  for conservative collection, and declaring the shared runtime allocation
+  helpers used by heap-backed features.
 - `stdlib/packages` contains the standard library written in Yar. The Rust
   package loader embeds those files behind the reserved `std/...` namespace.
 

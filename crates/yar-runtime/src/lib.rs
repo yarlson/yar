@@ -111,10 +111,14 @@ pub extern "C" fn yar_alloc_zeroed(size: i64) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_gc_init_stack_top(_stack_top: *mut u8) {}
+pub extern "C" fn yar_gc_init_stack_top(stack_top: *mut u8) {
+    memory::init_stack_top(stack_top);
+}
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_gc_collect() {}
+pub extern "C" fn yar_gc_collect() {
+    memory::collect();
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_taskgroup_new(elem_size: i32) -> *mut u8 {

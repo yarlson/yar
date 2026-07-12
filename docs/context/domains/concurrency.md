@@ -94,8 +94,12 @@
   static-library contract.
 - Windows currently has runtime stubs that fail with a clear
   "concurrency is not supported on windows yet" runtime error.
-- The current Rust runtime does not collect heap storage while workers run (or
-  outside taskgroups); allocations remain live until process exit.
+- The collector defers marking and sweeping while any spawned task result is
+  unjoined. Worker allocations remain registered, and collection resumes only
+  after every outstanding result has been joined and copied into managed
+  storage.
+- Live channel buffer slots are explicit conservative roots because channel
+  storage lives outside the managed heap. Consumed slots are cleared.
 - Explicit file and network close removes the handle from the runtime registry;
   string-builder handles have no close operation and remain registered for the
   process lifetime.

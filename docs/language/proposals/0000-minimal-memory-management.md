@@ -124,7 +124,7 @@ Current implementation note:
 
 - the compiler/runtime now has a shared allocation boundary through runtime
   helper functions
-- the current Rust runtime retains allocations until process exit behind that
+- the current Rust runtime uses conservative non-moving reclamation behind that
   boundary
 - this still adds no user-visible heap-management syntax by itself
 
