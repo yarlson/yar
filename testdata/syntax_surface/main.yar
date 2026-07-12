@@ -4,8 +4,8 @@ import "support"
 
 // This fixture is the compact compatibility surface for syntax tooling.
 pub struct Point[T] {
-    x T
-    y T
+    pub x T
+    pub y T
 }
 
 interface ValueReader {

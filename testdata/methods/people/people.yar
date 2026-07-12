@@ -1,7 +1,7 @@
 package people
 
 pub struct User {
-	name str
+	pub name str
 }
 
 pub fn (u User) label() str {

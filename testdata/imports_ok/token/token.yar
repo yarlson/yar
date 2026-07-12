@@ -1,7 +1,7 @@
 package token
 
 pub struct Kind {
-	ident bool
+	pub ident bool
 }
 
 pub fn ident_kind() Kind {

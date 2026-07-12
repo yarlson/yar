@@ -1,8 +1,8 @@
 package net
 
 pub struct Addr {
-    host str
-    port i32
+    pub host str
+    pub port i32
 }
 
 pub struct Conn {

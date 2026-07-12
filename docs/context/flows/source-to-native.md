@@ -123,8 +123,9 @@
 - Validates every entry test-file `test_*` declaration and stops with
   source-positioned diagnostics if any candidate is malformed.
 - Generates a synthetic test runner that replaces the user `main()`, creates a
-  `testing.T` instance for each discovered test, calls each test function, and
-  reports PASS/FAIL results to stdout.
+  package-owned `testing.T` instance through `testing.new` for each discovered
+  test, calls each test function, reads failure messages through exported
+  methods, and reports PASS/FAIL results to stdout.
 - Compiles and executes the test binary through the same `clang` pipeline as
   `run`; the Rust CLI links the Rust runtime static library through the same
   archive lookup used by `build`.

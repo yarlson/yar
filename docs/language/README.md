@@ -60,3 +60,4 @@ their status does not prove implementation.
 | 0026 | [Minimal HTTP Server](proposals/0026-http-server.md) | withdrawn | removed |
 | 0027 | [HTTP Routing](proposals/0027-http-routing.md) | withdrawn | removed |
 | 0028 | [Streaming Resource Model](proposals/0028-streaming-resource-model.md) | accepted | implemented |
+| 0029 | [Struct Field Visibility and Package-Owned Construction](proposals/0029-struct-field-visibility.md) | accepted | implemented |

@@ -209,9 +209,14 @@ User-defined structs are declared at top level:
 ```
 struct User {
     id i32
-    name str
+    pub name str
 }
 ```
+
+Struct fields are package-private by default. Prefix a field with `pub` to make
+it accessible outside the struct's declaring package. There is no `opaque`
+keyword: an exported struct whose fields are all private is an opaque,
+package-owned type by ordinary field visibility.
 
 Supported struct operations:
 
@@ -219,6 +224,24 @@ Supported struct operations:
 - keyed literals: `User{id: 1, name: "bob"}`
 - empty literals: `User{}`
 - field assignment: `user.name = "eve"`
+
+Within the declaring package, every field may be read, assigned, used as a
+compound-assignment target, or addressed, and struct literals may initialize
+private fields. Function literals defined there retain the same package
+authority. Outside that package, those selector operations are available only
+for `pub` fields. If a struct has any private field, all struct-literal
+construction of that type is package-owned, including empty literals and
+literals that mention only public fields. Exported constructors and methods are
+the intended external boundary for such types.
+
+Generic structs preserve each declared field's visibility in every concrete
+instantiation. Package ownership follows the generic declaration, not the
+instantiating package.
+
+The current restriction applies to struct literals, not every zero-initialized
+path. `var value imported.Type` and aggregate zero-initialization can still
+produce values whose types have private fields. Closing those construction
+loopholes belongs to separate zero-value/initialization design work.
 
 Recursive data is modeled through pointer indirection:
 
@@ -234,20 +257,22 @@ There are no:
 - embedding
 - tags
 
-Top-level visibility uses `pub`:
+Top-level and struct-field visibility use `pub`:
 
 ```
 pub struct User {
     id i32
+    pub name str
 }
 
 pub fn lookup() User {
-    return User{id: 1}
+    return User{id: 1, name: "Ada"}
 }
 ```
 
 Exported declarations cannot expose package-local types (struct, interface, or
-enum) through public fields, parameters, or return types.
+enum) through public fields, parameters, or return types. Private fields may use
+package-local types because they are not part of the exported surface.
 
 ## Interfaces
 
@@ -314,6 +339,10 @@ Supported enum operations:
 - exhaustive `match`
 - payload binding inside `match` arms with `case Expr.Name(v) { ... }`
 - payload ignore binding with `case Expr.Int(_) { ... }`
+
+Enum payload field syntax and visibility are unchanged. Payload fields are
+inherently public. Writing `pub` inside an enum case payload produces
+`enum payload fields are inherently public and do not accept 'pub'`.
 
 `match` is a statement in the current implementation:
 
@@ -1043,9 +1072,9 @@ import "std/fs"
 
 Types:
 
-- `fs.DirEntry { name str, is_dir bool }`
+- `fs.DirEntry { pub name str, pub is_dir bool }`
 - `fs.EntryKind { File, Directory, Other }`
-- `fs.File { handle i64 }`
+- `fs.File` — package-owned resource value with a private runtime handle
 
 `fs.File` is a resource struct and cannot be passed to or captured by a
 spawned task.
@@ -1118,9 +1147,9 @@ import "std/process"
 
 Types:
 
-- `process.Result { exit_code i32, stdout str, stderr str }`
-- `process.Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }`
-- `process.Cancellation { signal chan[bool] }`
+- `process.Result { pub exit_code i32, pub stdout str, pub stderr str }`
+- `process.Limits` — package-owned validated execution limits
+- `process.Cancellation` — package-owned share-safe cancellation signal
 
 Available functions:
 
@@ -1190,11 +1219,13 @@ import "std/net"
 
 Types:
 
-- `net.Addr { host str, port i32 }`
+- `net.Addr { pub host str, pub port i32 }`
 - `net.Conn` — opaque connection reference
 - `net.Listener` — opaque listener reference
 
-`net.Conn` and `net.Listener` are typed, share-safe references backed by
+`net.Conn` and `net.Listener` have private handle fields, so ordinary struct
+visibility prevents external field access and literal construction. They are
+typed, share-safe references backed by
 kind-checked, generation-tagged process-local opaque `i64` tokens. They may be
 passed to or captured by spawned tasks. Raw `i64` network intrinsics are
 compiler/runtime implementation details rather than public stdlib API.
@@ -1266,13 +1297,19 @@ import "std/testing"
 
 Types:
 
-- `testing.T { name str, failed bool, messages []str }`
+- `testing.T` — package-owned test state with private fields
+
+Construction used by the generated runner:
+
+- `testing.new(name str) *testing.T`
 
 Methods on `*testing.T`:
 
 - `t.fail(msg str) void` — mark test as failed with a message
 - `t.log(msg str) void` — record a message (shown on failure)
 - `t.has_failed() bool` — check if the test has failed
+- `t.message_count() i32` — return the number of recorded messages
+- `t.message(index i32) str` — return one recorded message
 
 Assertions:
 

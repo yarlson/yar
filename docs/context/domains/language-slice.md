@@ -143,9 +143,25 @@
 - Package lowering uses origin-safe canonical names, so equal logical package
   paths from different origins do not collide.
 - Imported packages expose only `pub` top-level declarations.
-- Exported functions, structs, interfaces, enums, and methods cannot expose
-  non-exported local struct, interface, or enum types in parameters, returns,
-  fields, or receiver types.
+- Struct fields are package-private by default; `pub field Type` exports one
+  field. Same-package code may use all fields. External selector reads,
+  assignments, compound assignments, and address-taking require a public field.
+- If any struct field is private, struct-literal construction is restricted to
+  the declaring package, including empty and public-field-only literals. There
+  is no separate `opaque` keyword.
+- Exported functions, interfaces, enums, methods, and public struct fields cannot
+  expose non-exported local struct, interface, or enum types. Private fields may
+  use private types.
+- Generic struct instantiations preserve field visibility and the declaration
+  package remains the owner.
+- Function literals retain their defining function's package authority for
+  private field access and literals.
+- Enum payload fields are unchanged and inherently public; `pub` is not part of
+  enum payload field syntax and produces a targeted parse diagnostic.
+- A zero-value declaration such as `var value imported.Type` and aggregate
+  zero-initialization are not struct literals and can still create values whose
+  types have private fields. Closing those loopholes belongs to separate
+  zero-value/initialization design work.
 - Duplicate top-level names are rejected package-wide, including across files.
 - Import cycles are rejected.
 - Enum case names must be unique within their enum.
@@ -189,8 +205,9 @@
 - Dereference requires a non-errorable pointer operand.
 - Dereferencing `nil`, including through pointer-to-struct field access or
   assignment, terminates with `runtime failure: nil pointer dereference`.
-- Field access requires a struct value and a known field. Pointer-to-struct
-  values are implicitly dereferenced for field access and assignment.
+- Field access requires a struct value, a known field, and either same-package
+  ownership or a public field. Pointer-to-struct values are implicitly
+  dereferenced for field access and assignment.
 - Plain enum cases are values of their enum type.
 - Payload enum cases are constructed with keyed field syntax and produce the
   enclosing enum type. Single-field payload cases also accept positional syntax:

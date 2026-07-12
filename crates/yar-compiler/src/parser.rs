@@ -91,7 +91,6 @@ impl Parser {
         let mut decl = StructDecl {
             struct_pos: struct_tok.pos,
             exported,
-            opaque: false,
             resource: false,
             name: name_tok.text,
             name_pos: name_tok.pos,
@@ -99,9 +98,16 @@ impl Parser {
             fields: Vec::new(),
         };
         while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+            let exported = if self.at(Kind::Pub) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             let field_name = self.expect(Kind::Ident, "expected field name");
             let field_type = self.parse_type_ref();
             decl.fields.push(StructField {
+                exported,
                 name: field_name.text,
                 name_pos: field_name.pos,
                 type_ref: field_type,
@@ -162,9 +168,16 @@ impl Parser {
             if self.at(Kind::LBrace) {
                 self.advance();
                 while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+                    if self.at(Kind::Pub) {
+                        self.error_current(
+                            "enum payload fields are inherently public and do not accept 'pub'",
+                        );
+                        self.advance();
+                    }
                     let field_name = self.expect(Kind::Ident, "expected payload field name");
                     let field_type = self.parse_type_ref();
                     enum_case.fields.push(StructField {
+                        exported: true,
                         name: field_name.text,
                         name_pos: field_name.pos,
                         type_ref: field_type,
@@ -1346,7 +1359,7 @@ mod tests {
             r#"
 package main
 
-struct Box[T] { value T }
+struct Box[T] { pub value T private i32 }
 enum Expr { Int { value i64 } Name { text str } }
 
 fn make_adder(x i32) fn(i32) !i32 {
@@ -1370,9 +1383,32 @@ fn main() !i32 {
         assert_eq!(diagnostics, Vec::new());
         assert_eq!(program.package_name, "main");
         assert_eq!(program.structs[0].type_params[0].name, "T");
+        assert!(program.structs[0].fields[0].exported);
+        assert!(!program.structs[0].fields[1].exported);
         assert_eq!(program.enums[0].cases.len(), 2);
         assert_eq!(program.functions.len(), 2);
         assert_eq!(program.functions[0].return_type.to_string(), "fn(i32) !i32");
+    }
+
+    #[test]
+    fn rejects_pub_on_enum_payload_fields_without_stalling() {
+        let (program, diagnostics) = parse(
+            r#"package main
+
+enum Value {
+    Number { pub value i32 }
+}
+"#,
+        );
+
+        assert_eq!(program.enums[0].cases[0].fields[0].name, "value");
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["enum payload fields are inherently public and do not accept 'pub'"]
+        );
     }
 
     #[test]

@@ -916,10 +916,6 @@ fn read_stdlib_package(import_path: &str) -> Option<(Package, Vec<Diagnostic>)> 
 
 fn mark_stdlib_metadata(import_path: &str, program: &mut Program) {
     for decl in &mut program.structs {
-        decl.opaque = matches!(
-            (import_path, decl.name.as_str()),
-            ("fs", "File") | ("net", "Conn" | "Listener")
-        );
         decl.resource = matches!((import_path, decl.name.as_str()), ("fs", "File"));
     }
     for function in &mut program.functions {
@@ -1297,13 +1293,6 @@ dep = { path = "dep" }
         );
         assert!(
             fs_package
-                .structs
-                .iter()
-                .find(|decl| decl.name == "File")
-                .is_some_and(|decl| decl.opaque)
-        );
-        assert!(
-            fs_package
                 .functions
                 .iter()
                 .find(|decl| decl.name == "read_file")
@@ -1320,15 +1309,6 @@ dep = { path = "dep" }
         let (net_package, diagnostics) = read_stdlib_package("net").unwrap();
         assert_eq!(diagnostics, Vec::new());
         assert!(net_package.structs.iter().all(|decl| !decl.resource));
-        assert_eq!(
-            net_package
-                .structs
-                .iter()
-                .filter(|decl| decl.opaque)
-                .map(|decl| decl.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["Conn", "Listener"],
-        );
         for name in [
             "listen",
             "accept",
@@ -1403,7 +1383,7 @@ pub fn read_file(path str) str {
             graph.packages[&entry_package_id("fs")]
                 .structs
                 .iter()
-                .all(|decl| !decl.resource && !decl.opaque)
+                .all(|decl| !decl.resource)
         );
         assert!(
             graph.packages[&entry_package_id("fs")]

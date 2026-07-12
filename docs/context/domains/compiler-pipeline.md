@@ -49,7 +49,9 @@
   lock updates.
 - `crates/yar-compiler/src/lower.rs` lowers the package graph into one combined
   `Program` by following resolved package identities and rewriting declarations
-  to origin-safe canonical names.
+  to origin-safe canonical names. It preserves struct-field visibility, permits
+  private fields to use private local types, and validates hidden-type exposure
+  only through public fields and other exported signatures.
 - `crates/yar-compiler/src/symbol.rs` owns those internal names and removes
   their reserved origin prefix from diagnostics before they leave the compiler.
 - `crates/yar-compiler/src/mono.rs` monomorphizes explicit generic struct and
@@ -63,7 +65,9 @@
   validates interface satisfaction and interface-method calls, validates loop
   and assignment-target rules, validates slice indexing/slicing and `append`,
   validates map key type restrictions, indexing, and `keys`, validates
-  error-sugar legality, and records ordered error names.
+  error-sugar legality, enforces package-owned private field selectors and
+  struct-literal construction, preserves defining-package authority while
+  checking function literals, and records ordered error names.
 - `crates/yar-compiler/src/codegen.rs` lowers the checked AST into LLVM IR, expanding concrete
   method calls into ordinary function calls with an explicit receiver argument,
   lowering interface values to boxed-data-plus-method-table pairs and
@@ -140,7 +144,7 @@
   captured-environment objects.
 - Generic instantiations follow a different pattern: generic syntax survives
   parsing and package lowering, then the compiler clones concrete declarations
-  before semantic analysis.
+  before semantic analysis while preserving every field's visibility.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
 - The generated native `main` wrapper passes a stack-top pointer to the reserved

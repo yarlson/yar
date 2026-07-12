@@ -123,12 +123,15 @@ n := counts[key] or |err| { return 0 }
 **IX. Export with `pub`, hide by default.**
 Top-level declarations are package-private unless marked `pub`. Exported
 declarations cannot leak package-local types through their public surface —
-the compiler rejects this.
+the compiler rejects this. Struct fields follow the same default: mark a field
+`pub` only when it belongs to the public representation. A private field makes
+external struct literals invalid; package constructors and methods own that
+representation.
 
 ```
 pub struct User {
     id i32
-    name str
+    pub name str
 }
 
 pub fn new_user(id i32, name str) User {

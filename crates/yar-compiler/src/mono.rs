@@ -94,7 +94,6 @@ impl Monomorphizer {
         StructDecl {
             struct_pos: decl.struct_pos.clone(),
             exported: decl.exported,
-            opaque: decl.opaque,
             resource: decl.resource,
             name: decl.name.clone(),
             name_pos: decl.name_pos.clone(),
@@ -103,6 +102,7 @@ impl Monomorphizer {
                 .fields
                 .iter()
                 .map(|field| StructField {
+                    exported: field.exported,
                     name: field.name.clone(),
                     name_pos: field.name_pos.clone(),
                     type_ref: self.rewrite_type_ref(&field.type_ref, subst),
@@ -819,7 +819,8 @@ mod tests {
             r#"package main
 
 struct Resource[T] {
-    value T
+    pub value T
+    secret i32
 }
 
 fn consume(resource Resource[i32]) void {
@@ -843,6 +844,13 @@ fn main() i32 {
                 .iter()
                 .any(|decl| decl.name == "Resource[i32]" && decl.resource)
         );
+        let instantiated = program
+            .structs
+            .iter()
+            .find(|decl| decl.name == "Resource[i32]")
+            .unwrap();
+        assert!(instantiated.fields[0].exported);
+        assert!(!instantiated.fields[1].exported);
     }
 
     #[test]

@@ -94,6 +94,22 @@ Status: accepted
 Language sugar is acceptable only when it maps cleanly onto simpler existing
 semantics.
 
+### Struct fields are package-private by default
+
+Status: accepted
+
+`pub field Type` explicitly exports a struct field. Same-package code may use
+all fields, while external selector operations require public fields. If any
+field is private, struct-literal construction belongs to the declaring package;
+an all-private public struct is therefore opaque without an `opaque` keyword.
+Private fields may use private types, public fields may not expose them, and
+generic instantiations preserve declaration visibility and ownership. Enum
+payload fields remain inherently public.
+
+This boundary does not yet reject zero-value declarations or aggregate
+zero-initialization of imported structs with private fields. Those construction
+loopholes remain separate zero-value/initialization design work.
+
 ### Documentation authority is explicit
 
 Status: accepted

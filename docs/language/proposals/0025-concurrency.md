@@ -853,7 +853,7 @@ it is not required by the implemented native-thread task model.
 
 | Function                                                                 | Thread-safe? | Notes                                                                                                                                                                                                                                                    |
 | ------------------------------------------------------------------------ | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `equal`, `not_equal`, `is_true`, `is_false`, `fail`, `log`, `has_failed` | Per-T        | Modify or read the `*testing.T` struct. Safe when each test has its own `T` instance (which is the case in the test runner). If `yar test` runs tests concurrently in the future, each test function receives a separate `T`. No runtime changes needed. |
+| `new`, `equal`, `not_equal`, `is_true`, `is_false`, `fail`, `log`, `has_failed`, `message_count`, `message` | Per-T | Construct, modify, or read package-owned `*testing.T` state. Safe when each test has its own `T` instance (which is the case in the test runner). If `yar test` runs tests concurrently in the future, each test function receives a separate `T`. No runtime changes needed. |
 
 ### Summary of required runtime changes for existing code
 

@@ -58,6 +58,7 @@ pub struct Signature {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StructField {
+    pub exported: bool,
     pub name: String,
     pub type_: Type,
 }
@@ -66,7 +67,6 @@ pub struct StructField {
 pub struct StructInfo {
     pub name: String,
     pub exported: bool,
-    pub opaque: bool,
     pub resource: bool,
     pub fields: Vec<StructField>,
 }
@@ -337,7 +337,6 @@ impl Checker {
             let mut info = StructInfo {
                 name: decl.name.clone(),
                 exported: decl.exported,
-                opaque: decl.opaque,
                 resource: decl.resource,
                 fields: Vec::new(),
             };
@@ -369,6 +368,7 @@ impl Checker {
                     continue;
                 }
                 info.fields.push(StructField {
+                    exported: field.exported,
                     name: field.name.clone(),
                     type_: field_type,
                 });
@@ -481,7 +481,6 @@ impl Checker {
                     let mut payload = StructInfo {
                         name: payload_name.clone(),
                         exported: false,
-                        opaque: false,
                         resource: false,
                         fields: Vec::new(),
                     };
@@ -513,6 +512,7 @@ impl Checker {
                             continue;
                         }
                         payload.fields.push(StructField {
+                            exported: true,
                             name: field.name.clone(),
                             type_: field_type,
                         });
@@ -1586,11 +1586,19 @@ impl Checker {
             );
             return ExprType::invalid();
         };
-        if self.opaque_field_is_inaccessible(&info, &selector.name, &selector.name_pos) {
-            return ExprType::invalid();
-        }
-        match info.fields.iter().find(|field| field.name == selector.name) {
-            Some(field) => ExprType::plain(field.type_.clone()),
+        match info
+            .fields
+            .iter()
+            .find(|field| field.name == selector.name)
+            .cloned()
+        {
+            Some(field) => {
+                if self.private_field_is_inaccessible(&info, &field, &selector.name_pos) {
+                    ExprType::invalid()
+                } else {
+                    ExprType::plain(field.type_)
+                }
+            }
             None => {
                 if self.lookup_method_for_base(&base, &selector.name) {
                     self.diag
@@ -1617,20 +1625,21 @@ impl Checker {
             .unwrap_or_default()
     }
 
-    fn opaque_field_is_inaccessible(
+    fn private_field_is_inaccessible(
         &mut self,
         info: &StructInfo,
-        field_name: &str,
+        field: &StructField,
         field_pos: &Position,
     ) -> bool {
         let package = package_for_type(&info.name);
-        if !info.opaque || self.current_package() == package {
+        if field.exported || package.is_empty() || self.current_package() == package {
             return false;
         }
         self.diag.add(
             field_pos.clone(),
             format!(
-                "field {field_name:?} of opaque type {:?} is not accessible outside package {:?}",
+                "field {:?} of struct {:?} is not exported by package {:?}",
+                field.name,
                 diagnostic_type_name(&info.name),
                 package_display_name(&package),
             ),
@@ -1729,13 +1738,17 @@ impl Checker {
             );
             return ExprType::invalid();
         };
-        if info.opaque && self.current_package() != package_for_type(&info.name) {
+        let package = package_for_type(&info.name);
+        if info.fields.iter().any(|field| !field.exported)
+            && !package.is_empty()
+            && self.current_package() != package
+        {
             self.diag.add(
                 literal.type_ref.pos.clone(),
                 format!(
-                    "opaque type {:?} cannot be constructed outside package {:?}",
+                    "struct literal for {:?} is not allowed outside package {:?} because it has package-private fields",
                     diagnostic_type_name(&info.name),
-                    package_display_name(&package_for_type(&info.name)),
+                    package_display_name(&package),
                 ),
             );
             return ExprType::invalid();
@@ -2288,6 +2301,7 @@ impl Checker {
     }
 
     fn check_function_literal(&mut self, literal: &FunctionLiteralExpr) -> ExprType {
+        let package = self.current_package().to_owned();
         let mut params = Vec::with_capacity(literal.params.len());
         for param in &literal.params {
             let param_type = self.resolve_type_ref(&param.type_ref);
@@ -2326,7 +2340,7 @@ impl Checker {
 
         let sig = Signature {
             name: "function value".to_string(),
-            package: String::new(),
+            package,
             full_name: "function value".to_string(),
             method: false,
             receiver: String::new(),
@@ -3034,11 +3048,19 @@ impl Checker {
                         .add(expr.dot_pos.clone(), "field access requires a struct value");
                     return TYPE_INVALID.to_string();
                 };
-                if self.opaque_field_is_inaccessible(&info, &expr.name, &expr.name_pos) {
-                    return TYPE_INVALID.to_string();
-                }
-                match info.fields.iter().find(|field| field.name == expr.name) {
-                    Some(field) => field.type_.clone(),
+                match info
+                    .fields
+                    .iter()
+                    .find(|field| field.name == expr.name)
+                    .cloned()
+                {
+                    Some(field) => {
+                        if self.private_field_is_inaccessible(&info, &field, &expr.name_pos) {
+                            TYPE_INVALID.to_string()
+                        } else {
+                            field.type_
+                        }
+                    }
                     None => {
                         self.diag.add(
                             expr.name_pos.clone(),
@@ -4408,6 +4430,34 @@ mod tests {
             host_intrinsic: true,
             exported: true,
         }
+    }
+
+    #[test]
+    fn private_field_ownership_uses_canonical_package_identity() {
+        let (mut program, diagnostics) = parse_file(
+            "<test>",
+            r#"package main
+
+struct Secret {
+    secret i32
+}
+
+fn inspect(value Secret) i32 {
+    return value.secret
+}
+"#,
+        );
+        assert_eq!(diagnostics, Vec::new());
+
+        let secret_type = "origin_a.model.Secret".to_string();
+        program.structs[0].name = secret_type.clone();
+        program.functions[0].name = "origin_b.model.inspect".to_string();
+        program.functions[0].params[0].type_ref.name = secret_type;
+
+        let (_info, diagnostics) = check_program(&program);
+
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.message
+            == "field \"secret\" of struct \"origin_a.model.Secret\" is not exported by package \"model\""));
     }
 
     #[test]

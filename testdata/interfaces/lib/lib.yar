@@ -9,7 +9,7 @@ pub interface Counter {
 }
 
 pub struct User {
-	name str
+    pub name str
 }
 
 struct counterBox {

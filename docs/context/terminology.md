@@ -19,6 +19,11 @@ package origin — One source tree that owns package lookup and dependency
 bindings: the entry tree, one path dependency, one pinned git source, or the
 embedded stdlib.
 
+package-owned struct — A struct with at least one private field. When the type is
+exported, external code may use its public fields and methods but cannot
+construct it with a struct literal; same-package code retains full field and
+literal access.
+
 PackageId — Compiler identity for a package, formed from its package origin and
 source-relative subpath. The source import string is not package identity.
 

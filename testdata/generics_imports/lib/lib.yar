@@ -1,7 +1,7 @@
 package lib
 
 pub struct Box[T] {
-    value T
+    pub value T
 }
 
 pub fn wrap[T](value T) Box[T] {

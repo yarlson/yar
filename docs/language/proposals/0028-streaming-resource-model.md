@@ -95,8 +95,9 @@ Filesystem stream failures use ordinary errors:
 
 ### `net`
 
-`Conn` and `Listener` are public opaque named types whose registry fields remain
-package-private.
+`Conn` and `Listener` are public package-owned named structs. Their registry
+fields are private under the general struct visibility rules, so external code
+cannot select those fields or construct resource literals.
 
 ```yar
 pub fn listen_stream(host str, port i32) !Listener
@@ -169,6 +170,10 @@ for calling `close`.
 ## 5. Implementation Notes
 
 The `io` package is pure Yar.
+
+`fs.File`, `net.Conn`, and `net.Listener` use ordinary private struct fields for
+representation hiding. The compiler does not attach stdlib-specific opacity
+metadata.
 
 `fs.File` uses private host intrinsics:
 

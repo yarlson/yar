@@ -201,7 +201,6 @@ pub struct TypeParam {
 pub struct StructDecl {
     pub struct_pos: Position,
     pub exported: bool,
-    pub opaque: bool,
     pub resource: bool,
     pub name: String,
     pub name_pos: Position,
@@ -211,6 +210,7 @@ pub struct StructDecl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StructField {
+    pub exported: bool,
     pub name: String,
     pub name_pos: Position,
     pub type_ref: TypeRef,

@@ -1,8 +1,8 @@
 package fs
 
 pub struct DirEntry {
-    name str
-    is_dir bool
+    pub name str
+    pub is_dir bool
 }
 
 pub enum EntryKind {

@@ -187,6 +187,9 @@ impl<'a> PackageLowerer<'a> {
                     continue;
                 }
                 for field in &decl.fields {
+                    if !field.exported {
+                        continue;
+                    }
                     self.validate_exported_local_type_ref(
                         path,
                         &field.type_ref,
@@ -416,7 +419,6 @@ impl<'a> PackageLowerer<'a> {
                 StructDecl {
                     struct_pos: decl.struct_pos.clone(),
                     exported: decl.exported,
-                    opaque: decl.opaque,
                     resource: decl.resource,
                     name: canonical_decl_name(&self.graph.entry, package, &decl.name),
                     name_pos: decl.name_pos.clone(),
@@ -425,6 +427,7 @@ impl<'a> PackageLowerer<'a> {
                         .fields
                         .iter()
                         .map(|field| StructField {
+                            exported: field.exported,
                             name: field.name.clone(),
                             name_pos: field.name_pos.clone(),
                             type_ref: self.rewrite_type_ref(
@@ -458,6 +461,7 @@ impl<'a> PackageLowerer<'a> {
                             .fields
                             .iter()
                             .map(|field| StructField {
+                                exported: true,
                                 name: field.name.clone(),
                                 name_pos: field.name_pos.clone(),
                                 type_ref: self.rewrite_type_ref(package, &field.type_ref, None),
