@@ -303,45 +303,6 @@ Errors:
 - `error.IO`
 - `error.Closed`
 
-### `http`
-
-Pure-Yar HTTP/1.1 server helpers built on top of `net`.
-
-Types:
-
-- `Request { method str, path str, headers map[str]str, body str }`
-- `Response { status i32, headers map[str]str, body str }`
-
-Functions:
-
-- `text(status i32, body str) Response` — create a text/plain response with a
-  UTF-8 content type
-- `serve(addr net.Addr, handler fn(Request) !Response) !void` — listen on a
-  TCP address, accept connections, parse one HTTP request per connection, call
-  the handler, write one response, and close the connection
-
-Semantics:
-
-- Connections are processed sequentially; `serve` accepts the next connection
-  after the current connection is closed.
-- Request header names are normalized to lowercase.
-- `Content-Length` is honored for bodies up to 65536 bytes. Larger or invalid
-  lengths return `error.InvalidRequest` inside the package.
-- Handler errors are converted to `500 Internal Server Error`; the connection
-  is closed and `serve` continues accepting.
-- Malformed requests receive `400 Bad Request`; the connection is closed.
-- The response writer always sets `content-length` and defaults
-  `content-type` to `text/plain; charset=utf-8` when absent.
-
-Current v1 non-goals:
-
-- no keep-alive
-- no router
-- no query parser
-- no middleware
-- no stdlib auth
-- no TLS
-
 ### `testing`
 
 Test framework for `yar test`.

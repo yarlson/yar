@@ -311,7 +311,7 @@ origins remain distinct and cycles through dependencies are detected normally.
 
 The reserved `std/...` namespace bypasses directly declared dependencies and
 same-origin packages. Bare user packages and dependency aliases may still use
-names such as `fs` or `http`; they do not replace `std/fs` or `std/http`. A
+names such as `fs` or `net`; they do not replace `std/fs` or `std/net`. A
 selected dependency whose cache is missing or corrupt fails without any stdlib
 substitution. Stdlib's own imports never consult external aliases.
 

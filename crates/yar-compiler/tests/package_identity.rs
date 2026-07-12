@@ -300,21 +300,17 @@ fn stdlib_internal_import_coexists_with_root_shadow() {
         "main.yar",
         r#"package main
 
-import "std/http"
-import "net"
+import "std/io"
+import "conv"
 
 fn main() i32 {
-    response := http.text(204, "")
-    if response.status != 204 {
-        return 1
-    }
-    return net.local_value()
+    return conv.local_value()
 }
 "#,
     );
     fixture.write(
-        "net/net.yar",
-        r#"package net
+        "conv/conv.yar",
+        r#"package conv
 
 pub fn local_value() i32 {
     return 0

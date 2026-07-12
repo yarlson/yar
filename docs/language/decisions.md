@@ -359,7 +359,7 @@ Status: accepted
 The compiler embeds a standard library written in Yar. Its packages use the
 reserved import paths `std/strings`, `std/utf8`, `std/conv`, `std/sort`,
 `std/path`, `std/fs`, `std/io`, `std/process`, `std/env`, `std/stdio`,
-`std/net`, `std/http`, and `std/testing`. Direct and stdlib-internal imports
+`std/net`, and `std/testing`. Direct and stdlib-internal imports
 resolve only to the embedded stdlib origin and cannot be shadowed by project or
 dependency sources.
 

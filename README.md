@@ -174,11 +174,11 @@ operand width. Invalid division and remainder terminate deterministically.
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
 | `net`     | TCP networking and stream wrappers                    |
-| `http`    | Minimal HTTP/1.1 server helpers over TCP              |
 | `testing` | Test assertions and framework                         |
 
-See [`examples/http_server`](examples/http_server/) for a minimal native HTTP
-service.
+HTTP serving is not part of the standard library. The earlier
+`std/http` experiment was withdrawn until bounded framing, deadlines, and
+resource lifecycle rules are specified and tested.
 
 ## Install
 
@@ -362,7 +362,7 @@ local_lib = { path = "../my-local-lib" }
 ```
 
 The alias becomes the first import-path segment: `import "http"`. The `std`
-segment is reserved for compiler-owned packages such as `std/http`; dependency
+segment is reserved for compiler-owned packages such as `std/net`; dependency
 aliases cannot use it. `std/...` imports resolve only to the embedded standard
 library. Other imports resolve within the importing source's origin, checking
 same-origin packages before aliases declared directly by that origin.

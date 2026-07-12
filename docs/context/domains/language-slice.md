@@ -288,7 +288,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
+  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, and
   `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
@@ -317,10 +317,6 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
   connecting, reading, writing, closing, inspecting addresses, setting
   timeouts, and DNS resolution. It also provides `Conn` and `Listener` wrapper
   structs with methods that satisfy the `io` stream interfaces.
-- `http` provides `Request`, `Response`, `text`, and `serve` for small
-  HTTP/1.1 servers. `serve` processes connections sequentially, accepts one
-  request per connection, closes the connection after writing the response,
-  and converts handler errors to `500` responses while continuing to accept.
 - Host process/environment failures surface through ordinary `error` values
   using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and
   `IO`.

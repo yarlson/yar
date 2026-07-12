@@ -1,6 +1,19 @@
 # Proposal: Minimal HTTP Server (`http` stdlib package)
 
-Status: accepted and implemented
+Status: withdrawn
+
+This proposal records a removed experiment, not current behavior. The shipped
+implementation assumed that a complete request head arrived in one TCP read,
+accepted ambiguous body framing, serialized unvalidated response headers, and
+had no per-connection deadline or bounded lifecycle. Its claimed end-to-end
+socket test was also absent after the Rust rewrite. `std/http` was therefore
+removed rather than advertised as a safe server.
+
+A new proposal may restore HTTP only with bounded incremental head/body reads,
+strict request-line and header grammar, rejection of ambiguous
+`Content-Length`/`Transfer-Encoding`, response-splitting prevention, explicit
+deadlines and resource ownership, and adversarial real-socket tests. The
+sections below are retained as historical design context.
 
 ## 1. Summary
 
@@ -91,9 +104,9 @@ callers pass a function literal when adapting a named handler to `serve`.
 `serve` does not move that arbitrary handler value across a spawn boundary;
 it finishes the current connection before accepting the next one.
 
-## 6. Tests
+## 6. Historical Test Plan
 
-- `testdata/stdlib_http/main.yar` checks the exported request/response API.
-- `TestStdlibHTTPServeResponds` builds a temporary Yar server, runs it as a
-  subprocess, sends a real TCP HTTP request, and validates the response.
-- `examples/http_server/main.yar` is the user-facing sample app.
+The removed implementation had a compile-only `testdata/stdlib_http` fixture
+and an unverified `examples/http_server` program. The claimed
+`TestStdlibHTTPServeResponds` real-socket test was not present in the Rust
+implementation. All three artifacts are removed with the package.

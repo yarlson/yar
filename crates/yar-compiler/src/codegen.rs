@@ -6261,7 +6261,6 @@ mod tests {
         "testdata/slices/main.yar",
         "testdata/stdlib_conv/main.yar",
         "testdata/stdlib_fs_path/main.yar",
-        "testdata/stdlib_http/main.yar",
         "testdata/stdlib_io/main.yar",
         "testdata/stdlib_net/main.yar",
         "testdata/stdlib_process_env/main.yar",
@@ -6321,7 +6320,6 @@ mod tests {
                     | "testdata/slices/main.yar"
                     | "testdata/stdlib_conv/main.yar"
                     | "testdata/stdlib_fs_path/main.yar"
-                    | "testdata/stdlib_http/main.yar"
                     | "testdata/stdlib_io/main.yar"
                     | "testdata/stdlib_net/main.yar"
                     | "testdata/stdlib_process_env/main.yar"

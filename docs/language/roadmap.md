@@ -115,10 +115,10 @@ common boilerplate without adding new semantic models:
 - stdlib additions: `strings.split`, `strings.trim`, `strings.to_lower`,
   `strings.to_upper`
 
-## v0.3.2 capability: tiny native HTTP services (implemented)
+## v0.3.2 experiment: tiny native HTTP services (withdrawn)
 
-The `http` stdlib package adds a minimal HTTP/1.1 server wrapper over `net`.
-It is intentionally scoped to small native service demos:
+The former `http` stdlib package attempted a minimal HTTP/1.1 server wrapper
+over `net` with:
 
 - `http.Request` and `http.Response`
 - `http.text(status, body)`
@@ -127,8 +127,11 @@ It is intentionally scoped to small native service demos:
 - sequential connection processing
 - handler errors become `500` responses
 
-Non-goals remain explicit: no router, keep-alive, query parser, middleware,
-auth, TLS, or HTTP client.
+The experiment was removed from the current standard library. It assumed a
+complete request head arrived in one TCP read, accepted ambiguous framing and
+unvalidated response headers, and had no deadline or bounded connection
+lifecycle. A replacement requires a new accepted design plus adversarial
+socket tests; routing remains withdrawn with its missing server substrate.
 
 ## v0.3.3 capability: streaming resources (implemented)
 

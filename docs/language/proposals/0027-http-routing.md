@@ -1,6 +1,10 @@
 # Proposal: HTTP Routing (`http` stdlib package)
 
-Status: draft
+Status: withdrawn
+
+This routing proposal depended on the withdrawn proposal 0026 server contract.
+It is withdrawn without a decision on the routing model itself. Routing can be
+reconsidered only after a safe HTTP serving contract is accepted and shipped.
 
 ## 1. Summary
 

@@ -973,10 +973,6 @@ fn stdlib_entries(import_path: &str) -> Option<&'static [(&'static str, &'static
             include_str!("../../../stdlib/packages/env/env.yar"),
         )]),
         "fs" => Some(&[("fs.yar", include_str!("../../../stdlib/packages/fs/fs.yar"))]),
-        "http" => Some(&[(
-            "http.yar",
-            include_str!("../../../stdlib/packages/http/http.yar"),
-        )]),
         "io" => Some(&[("io.yar", include_str!("../../../stdlib/packages/io/io.yar"))]),
         "net" => Some(&[(
             "net.yar",
@@ -1273,16 +1269,16 @@ dep = { path = "dep" }
     fn loads_reserved_stdlib_graph() {
         let root = repo_root();
         let (graph, diagnostics) =
-            load_package_graph(root.join("testdata/stdlib_http/main.yar"), false).unwrap();
+            load_package_graph(root.join("testdata/stdlib_io/main.yar"), false).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
         let entry_import = &graph.packages[&PackageId::default()].imports[0];
-        assert_eq!(entry_import.name, "http");
-        assert_eq!(entry_import.path, "std/http");
-        assert_eq!(entry_import.target, stdlib_package_id("http"));
-        assert!(graph.packages[&stdlib_package_id("http")].stdlib);
-        assert!(graph.packages[&stdlib_package_id("net")].stdlib);
-        assert!(graph.packages[&stdlib_package_id("strings")].stdlib);
+        assert_eq!(entry_import.name, "fs");
+        assert_eq!(entry_import.path, "std/fs");
+        assert_eq!(entry_import.target, stdlib_package_id("fs"));
+        assert!(graph.packages[&stdlib_package_id("fs")].stdlib);
+        assert!(graph.packages[&stdlib_package_id("io")].stdlib);
+        assert!(graph.packages[&stdlib_package_id("conv")].stdlib);
     }
 
     #[test]
@@ -1440,14 +1436,14 @@ fn main() i32 {
     }
 
     #[test]
-    fn unknown_reserved_stdlib_import_does_not_fall_through() {
-        let dir = temp_dir("yar-rust-unknown-reserved-stdlib");
-        fs::create_dir_all(dir.join("std").join("missing")).unwrap();
+    fn withdrawn_http_stdlib_import_does_not_fall_through() {
+        let dir = temp_dir("yar-rust-withdrawn-http-stdlib");
+        fs::create_dir_all(dir.join("std").join("http")).unwrap();
         fs::write(
             dir.join("main.yar"),
             r#"package main
 
-import "std/missing"
+import "std/http"
 
 fn main() i32 {
     return 0
@@ -1456,8 +1452,8 @@ fn main() i32 {
         )
         .unwrap();
         fs::write(
-            dir.join("std").join("missing").join("missing.yar"),
-            r#"package missing
+            dir.join("std").join("http").join("http.yar"),
+            r#"package http
 
 pub fn local_value() i32 {
     return 1
@@ -1471,13 +1467,9 @@ pub fn local_value() i32 {
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(
             diagnostics[0].message,
-            "standard library package \"std/missing\" does not exist"
+            "standard library package \"std/http\" does not exist"
         );
-        assert!(
-            !graph
-                .packages
-                .contains_key(&entry_package_id("std/missing"))
-        );
+        assert!(!graph.packages.contains_key(&entry_package_id("std/http")));
     }
 
     #[test]
