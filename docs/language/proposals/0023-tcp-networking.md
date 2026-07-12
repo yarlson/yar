@@ -6,9 +6,10 @@ Status: accepted
 
 Add a `net` stdlib package providing TCP client/server primitives: listen,
 accept, connect, read, write, close, address inspection, timeouts, and DNS
-resolution. Connections and listeners are represented as opaque `i64` handles.
-The runtime represents those handles as kind-checked, non-reused process-local
-registry IDs. All calls are blocking.
+resolution. Connections and listeners are public typed, opaque, share-safe
+`Conn` and `Listener` references. The runtime backs them with kind-checked,
+non-reused process-local `i64` registry IDs; raw IDs exist only at the internal
+compiler/runtime ABI. Calls block only their calling native task thread.
 
 ## 2. Motivation
 
@@ -28,17 +29,27 @@ and the user-facing API idiomatic.
 ```
 import "std/net"
 
+fn write_all(conn net.Conn, data str) !void {
+    off := 0
+    for off < len(data) {
+        n := conn.write(data[off:])?
+        if n <= 0 { return error.IO }
+        off += n
+    }
+    return
+}
+
 // TCP echo server
 fn main() !i32 {
-    ln := net.listen("127.0.0.1", 8080)?
+    ln := net.listen_stream("127.0.0.1", 8080)?
     for true {
-        conn := net.accept(ln)?
+        conn := ln.accept()?
         for true {
-            data := net.read(conn, 4096)?
+            data := conn.read(4096)?
             if len(data) == 0 { break }
-            net.write(conn, data)?
+            write_all(conn, data)?
         }
-        net.close(conn)?
+        conn.close()?
     }
     return 0
 }
@@ -47,13 +58,23 @@ fn main() !i32 {
 ```
 import "std/net"
 
+fn write_all(conn net.Conn, data str) !void {
+    off := 0
+    for off < len(data) {
+        n := conn.write(data[off:])?
+        if n <= 0 { return error.IO }
+        off += n
+    }
+    return
+}
+
 // TCP client
 fn main() !i32 {
-    conn := net.connect("example.com", 80)?
-    net.write(conn, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")?
-    response := net.read(conn, 65536)?
+    conn := net.connect_stream("example.com", 80)?
+    write_all(conn, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")?
+    response := conn.read(65536)?
     print(response)
-    net.close(conn)?
+    conn.close()?
     return 0
 }
 ```
@@ -63,10 +84,10 @@ import "std/net"
 
 // Port 0 with address discovery
 fn main() !i32 {
-    ln := net.listen("127.0.0.1", 0)?
-    addr := net.listener_addr(ln)?
+    ln := net.listen_stream("127.0.0.1", 0)?
+    addr := ln.addr()?
     print("listening on port " + to_str(addr.port) + "\n")
-    net.close_listener(ln)?
+    ln.close()?
     return 0
 }
 ```
@@ -74,62 +95,57 @@ fn main() !i32 {
 ### Invalid examples
 
 ```
-// Cannot use listener handle as connection handle
-ln := net.listen("127.0.0.1", 8080)?
-net.read(ln, 4096)?  // error.Closed: ln is a listener, not a connection
+// A Listener is not a Conn.
+ln := net.listen_stream("127.0.0.1", 8080)?
+ln.read(4096)?  // checker error: Listener has no read method
 ```
 
-Both listeners and connections are `i64`, so misuse is not caught at compile
-time. Runtime lookup validates the ID and expected resource kind. This is
-consistent with how `sb_new`/`sb_write`/`sb_string` handles work.
+The public types prevent listener/connection confusion. Compiler-internal IDs
+remain kind-checked at the runtime boundary.
 
 ## 4. Semantics
 
-- `listen(host, port)` creates a TCP listener bound to the given address. Empty
-  host means all interfaces. Port 0 lets the OS assign a port. Returns an opaque
-  `i64` listener handle.
-- `accept(listener)` blocks until a client connects and returns an opaque `i64`
-  connection handle.
-- `listener_addr(listener)` returns the bound `Addr` of a listener (useful after
-  port 0).
-- `close_listener(listener)` closes a listener socket.
-- `connect(host, port)` performs DNS resolution and TCP connect. Returns an
-  opaque `i64` connection handle.
-- `read(conn, max_bytes)` reads up to `max_bytes` from a connection. Returns
+- `listen_stream(host, port)` creates a typed TCP listener. Empty host means
+  the IPv4 wildcard address. Port 0 lets the OS assign a port.
+- `Listener.accept()` blocks until a client connects and returns a typed `Conn`.
+- `Listener.addr()` returns the bound `Addr` (useful after port 0), and
+  `Listener.close()` closes it.
+- `connect_stream(host, port)` performs synchronous DNS resolution and TCP
+  connect and returns a typed `Conn`.
+- `Conn.read(max_bytes)` reads up to `max_bytes` from a connection. Returns
   empty string `""` on EOF (not an error). The runtime allocates the result via
   `yar_alloc`.
-- `write(conn, data)` writes all bytes in `data`. Returns bytes written as
-  `i32`.
-- `close(conn)` closes a connection socket.
-- `local_addr(conn)` / `remote_addr(conn)` return connection endpoint addresses.
-- `set_read_deadline(conn, millis)` / `set_write_deadline(conn, millis)` set
+- `Conn.write(data)` performs one host write and returns its exact byte count;
+  the result may be shorter than `len(data)`.
+- `Conn.close()` closes a connection socket.
+- `Conn.local_addr()` / `remote_addr()` return connection endpoint addresses.
+- `Conn.set_read_deadline(millis)` / `set_write_deadline(millis)` set
   socket timeouts. 0 means no timeout.
-- `resolve(host, port)` performs DNS resolution and returns the first result.
-- Handle IDs are positive, process-local, and never reused. Mutable listener and
-  connection state is synchronized. Closing removes the ID so new lookups fail,
-  then waits for any operation holding the socket lock before releasing it;
-  close does not interrupt blocking I/O.
-- Unknown, stale, and wrong-kind handles produce `error.Closed`. This runtime
-  check does not give raw `i64` values nominal types or compile-time provenance.
+- `resolve(host, port)` returns the first IPv4 or IPv6 result; resolver failure
+  is `error.NotFound`.
+- Typed connections and listeners are share-safe registry references. One read
+  and one write may run concurrently; same-direction operations serialize.
+- Closing linearizes at registry removal, wakes blocked accept/read/write calls
+  with `error.Closed`, and waits for operation and resource release.
 
-All functions that can fail return errorable types (`!i64`, `!str`, `!i32`,
-`!void`, `!Addr`).
+All functions and methods that can fail return errorable types.
 
 ## 5. Type Rules
 
 - `Addr` is a public struct: `pub struct Addr { host str, port i32 }`.
-- Listener and connection handles are `i64`. No new type constructors.
+- Listener and connection values use opaque named `Listener` and `Conn` types;
+  their registry fields are package-private.
 - Port must be `i32` (valid range 0–65535, validated at runtime).
 - Host must be `str`.
-- `max_bytes` for `read` must be `i32` (positive, validated at runtime).
+- `max_bytes` for `read` must be 1 through 67,108,864 inclusive.
 - `millis` for deadlines must be `i32` (non-negative, validated at runtime).
 - All host-backed functions are errorable.
 
 ## 6. Grammar / Parsing Shape
 
-No language grammar changes. The `net` package is a stdlib package imported with
-`import "std/net"`. All functions are called with qualified names (`net.listen`,
-`net.read`, etc.).
+No language grammar changes. The `net` package is imported with `import
+"std/net"`; constructors and resolution are qualified functions, while resource
+operations are methods on `Listener` and `Conn`.
 
 ## 7. Lowering / Implementation Model
 
@@ -175,32 +191,31 @@ All error handling works through standard `?` and `or |err| { ... }`.
 
 ### Structs
 
-`net.Addr { host str, port i32 }` is a regular public struct. Field access,
-literals, and passing work as expected.
+`Addr`, `Conn`, and `Listener` are public named structs. The two resource types
+are explicitly share-safe despite containing internal registry tokens.
 
 ### Control flow
 
-All networking calls block. In a single-threaded program, `accept` blocks the
-entire program until a connection arrives. No new control flow mechanisms.
+Networking calls block their calling native task thread. Sibling tasks continue,
+and sibling close ends blocked accept/read/write with `error.Closed`.
 
 ### Builtins
 
 No new builtins. `len`, `to_str`, etc. work on `net.Addr` fields naturally.
 
-### Future concurrency
+### Deadlines and synchronous host calls
 
-If Yar adds concurrency primitives, the blocking socket model naturally extends
-to per-goroutine/thread blocking. The opaque handle approach does not preclude
-this.
+Read and write deadlines are relative per-operation socket timeouts. Zero
+disables a timeout, and changing one is not promised to interrupt a syscall
+already running. DNS resolution and connect are synchronous host calls and
+cannot be interrupted before a connection handle exists.
 
 ## 9. Alternatives Considered
 
-### 1. Struct-based handles (`Listener`, `Conn` types)
+### 1. Public raw handles
 
-Would provide compile-time type safety between listeners and connections.
-Rejected because methods on opaque resource handles do not work well in Yar
-(methods require named local struct types with value/pointer receivers), and
-the additional struct layer adds boilerplate without significant benefit.
+The original API exposed `i64` handles. It was superseded because raw scalars
+bypassed resource typing and spawn-boundary ownership rules.
 
 ### 2. Combined "host:port" string addressing
 
@@ -208,11 +223,14 @@ Would match Go's `net.Dial("tcp", "host:port")` pattern. Rejected because
 parsing "host:port" in C is fragile (IPv6 brackets, edge cases), and separate
 parameters are more explicit, matching Yar's design philosophy.
 
-### 3. Non-blocking I/O with polling
+### 3. Public non-blocking or multiplexed I/O
 
-Would enable multiplexed servers. Rejected because Yar is single-threaded with
-no async primitives. Blocking I/O is simpler and sufficient for the current
-execution model.
+Would enable multiplexed servers without native task threads. Deferred because
+the shipped runtime uses one native thread per task. The blocking public API is
+implemented with internal nonblocking polling so close and operation-local
+timeouts behave consistently across host platforms. Adaptive bounded waits
+reduce idle wakeups, but each blocked call still consumes one native thread;
+high-connection-count multiplexing remains deferred.
 
 ## 10. Complexity Cost
 

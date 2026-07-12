@@ -2,19 +2,123 @@ use std::{
     collections::BTreeMap,
     fs::File,
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    ops::Deref,
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 pub(crate) type FileHandle = Arc<Mutex<Option<File>>>;
-pub(crate) type ListenerHandle = Arc<Mutex<Option<TcpListener>>>;
-pub(crate) type ConnectionHandle = Arc<Mutex<Option<TcpStream>>>;
 pub(crate) type StringBuilderHandle = Arc<Mutex<Vec<u8>>>;
+
+pub(crate) struct ListenerLease(Arc<ListenerState>);
+
+impl Deref for ListenerLease {
+    type Target = ListenerState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for ListenerLease {
+    fn drop(&mut self) {
+        self.0.operations.finish();
+    }
+}
+
+pub(crate) struct ConnectionLease(Arc<ConnectionState>);
+
+impl Deref for ConnectionLease {
+    type Target = ConnectionState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        self.0.operations.finish();
+    }
+}
+
+struct Operations {
+    active: Mutex<usize>,
+    idle: Condvar,
+}
+
+impl Operations {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(0),
+            idle: Condvar::new(),
+        }
+    }
+
+    fn start(&self) {
+        let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
+        *active = active.checked_add(1).unwrap_or_else(|| {
+            crate::runtime_fail(b"runtime failure: resource operation count exhausted\n")
+        });
+    }
+
+    fn finish(&self) {
+        let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
+        *active = active.checked_sub(1).unwrap_or_else(|| {
+            crate::runtime_fail(b"runtime failure: inconsistent resource operation count\n")
+        });
+        if *active == 0 {
+            self.idle.notify_all();
+        }
+    }
+
+    fn wait(&self) {
+        let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
+        while *active != 0 {
+            active = self
+                .idle
+                .wait(active)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+    }
+}
+
+pub(crate) struct ListenerState {
+    pub(crate) listener: TcpListener,
+    pub(crate) closed: AtomicBool,
+    operations: Operations,
+    pub(crate) accept: Mutex<()>,
+}
+
+impl ListenerState {
+    pub(crate) fn wait_for_operations(&self) {
+        self.operations.wait();
+    }
+}
+
+pub(crate) struct ConnectionState {
+    pub(crate) stream: TcpStream,
+    pub(crate) closed: AtomicBool,
+    operations: Operations,
+    pub(crate) read_timeout_millis: AtomicU64,
+    pub(crate) write_timeout_millis: AtomicU64,
+    pub(crate) read: Mutex<()>,
+    pub(crate) write: Mutex<()>,
+}
+
+impl ConnectionState {
+    pub(crate) fn wait_for_operations(&self) {
+        self.operations.wait();
+    }
+}
 
 #[derive(Clone)]
 enum HandleEntry {
     File(FileHandle),
-    Listener(ListenerHandle),
-    Connection(ConnectionHandle),
+    Listener(Arc<ListenerState>),
+    Connection(Arc<ConnectionState>),
     StringBuilder(StringBuilderHandle),
 }
 
@@ -111,39 +215,66 @@ pub(crate) fn remove_file(id: i64) -> Option<FileHandle> {
 }
 
 pub(crate) fn register_listener(listener: TcpListener) -> i64 {
-    handles().insert(HandleEntry::Listener(Arc::new(Mutex::new(Some(listener)))))
+    handles().insert(HandleEntry::Listener(Arc::new(ListenerState {
+        listener,
+        closed: AtomicBool::new(false),
+        operations: Operations::new(),
+        accept: Mutex::new(()),
+    })))
 }
 
-pub(crate) fn listener(id: i64) -> Option<ListenerHandle> {
-    match handles().get(id, HandleKind::Listener)? {
-        HandleEntry::Listener(handle) => Some(handle),
+pub(crate) fn listener(id: i64) -> Option<ListenerLease> {
+    let registry = handles();
+    match registry.get(id, HandleKind::Listener)? {
+        HandleEntry::Listener(handle) => {
+            handle.operations.start();
+            Some(ListenerLease(handle))
+        }
         _ => None,
     }
 }
 
-pub(crate) fn remove_listener(id: i64) -> Option<ListenerHandle> {
-    match handles().remove(id, HandleKind::Listener)? {
-        HandleEntry::Listener(handle) => Some(handle),
-        _ => None,
-    }
+pub(crate) fn remove_listener(id: i64) -> Option<Arc<ListenerState>> {
+    let mut registry = handles();
+    let HandleEntry::Listener(handle) = registry.get(id, HandleKind::Listener)? else {
+        return None;
+    };
+    handle.closed.store(true, Ordering::Release);
+    let _ = registry.remove(id, HandleKind::Listener);
+    Some(handle)
 }
 
 pub(crate) fn register_connection(stream: TcpStream) -> i64 {
-    handles().insert(HandleEntry::Connection(Arc::new(Mutex::new(Some(stream)))))
+    handles().insert(HandleEntry::Connection(Arc::new(ConnectionState {
+        stream,
+        closed: AtomicBool::new(false),
+        operations: Operations::new(),
+        read_timeout_millis: AtomicU64::new(0),
+        write_timeout_millis: AtomicU64::new(0),
+        read: Mutex::new(()),
+        write: Mutex::new(()),
+    })))
 }
 
-pub(crate) fn connection(id: i64) -> Option<ConnectionHandle> {
-    match handles().get(id, HandleKind::Connection)? {
-        HandleEntry::Connection(handle) => Some(handle),
+pub(crate) fn connection(id: i64) -> Option<ConnectionLease> {
+    let registry = handles();
+    match registry.get(id, HandleKind::Connection)? {
+        HandleEntry::Connection(handle) => {
+            handle.operations.start();
+            Some(ConnectionLease(handle))
+        }
         _ => None,
     }
 }
 
-pub(crate) fn remove_connection(id: i64) -> Option<ConnectionHandle> {
-    match handles().remove(id, HandleKind::Connection)? {
-        HandleEntry::Connection(handle) => Some(handle),
-        _ => None,
-    }
+pub(crate) fn remove_connection(id: i64) -> Option<Arc<ConnectionState>> {
+    let mut registry = handles();
+    let HandleEntry::Connection(handle) = registry.get(id, HandleKind::Connection)? else {
+        return None;
+    };
+    handle.closed.store(true, Ordering::Release);
+    let _ = registry.remove(id, HandleKind::Connection);
+    Some(handle)
 }
 
 pub(crate) fn register_string_builder() -> i64 {

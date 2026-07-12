@@ -91,6 +91,7 @@ impl Parser {
         let mut decl = StructDecl {
             struct_pos: struct_tok.pos,
             exported,
+            opaque: false,
             resource: false,
             name: name_tok.text,
             name_pos: name_tok.pos,

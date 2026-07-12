@@ -10,8 +10,9 @@ workspace:
 - `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` run on Linux.
 - `cargo test --workspace` runs on Linux and macOS.
 - Windows GNU CI builds the native CLI/runtime bundle and executes the
-  taskgroup, channel, share-safety, filesystem, and garbage-collection
-  fixtures under a forced 1 KiB collection threshold.
+  taskgroup, channel, share-safety, filesystem, networking, and
+  garbage-collection fixtures under a forced 1 KiB collection threshold. It
+  also runs the focused networking runtime tests natively on Windows.
 - `./scripts/verify-rust-testdata.sh` builds the Rust CLI and Rust runtime
   once, then verifies that the Rust CLI can native-build every checked-in
   `testdata/**/main.yar` fixture.

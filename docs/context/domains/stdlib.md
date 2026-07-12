@@ -259,36 +259,16 @@ Host-backed TCP networking primitives.
 Types:
 
 - `Addr { host str, port i32 }`
-- `Conn { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
-- `Listener { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
+- `Conn` — opaque typed, share-safe registry reference
+- `Listener` — opaque typed, share-safe registry reference
 
 Functions:
 
-- `listen(host str, port i32) !i64` — bind and listen on a TCP address; empty
-  host means all interfaces; returns an opaque listener handle
-- `accept(listener i64) !i64` — block until a connection arrives on the
-  listener; returns an opaque connection handle
-- `listener_addr(listener i64) !Addr` — return the bound address of a listener
-  (useful for OS-assigned port discovery)
-- `close_listener(listener i64) !void` — close a listener socket
-- `connect(host str, port i32) !i64` — TCP connect with DNS resolution; returns
-  an opaque connection handle
-- `read(conn i64, max_bytes i32) !str` — read up to `max_bytes`; returns empty
-  string on EOF
-- `write(conn i64, data str) !i32` — write all of data; returns bytes written
-- `close(conn i64) !void` — close a connection
-- `local_addr(conn i64) !Addr` — local address of a connection
-- `remote_addr(conn i64) !Addr` — remote address of a connection
-- `set_read_deadline(conn i64, millis i32) !void` — set read timeout in
-  milliseconds; 0 disables the timeout
-- `set_write_deadline(conn i64, millis i32) !void` — set write timeout in
-  milliseconds; 0 disables the timeout
-- `resolve(host str, port i32) !Addr` — DNS resolution; returns the first
-  resolved address
-- `listen_stream(host str, port i32) !Listener` — listen and wrap the listener
-  handle
-- `connect_stream(host str, port i32) !Conn` — connect and wrap the connection
-  handle
+- `listen_stream(host str, port i32) !Listener` — bind and listen; empty host is
+  the IPv4 wildcard address
+- `connect_stream(host str, port i32) !Conn` — synchronous DNS resolution and TCP
+  connection creation
+- `resolve(host str, port i32) !Addr` — return the first IPv4 or IPv6 result
 
 Methods on `Listener`:
 
@@ -299,7 +279,8 @@ Methods on `Listener`:
 Methods on `Conn`:
 
 - `read(max_bytes i32) !str`
-- `write(data str) !i32`
+- `write(data str) !i32` — one host write returning its exact, possibly short,
+  byte count
 - `close() !void`
 - `local_addr() !Addr`
 - `remote_addr() !Addr`
@@ -317,6 +298,17 @@ Errors:
 - `error.InvalidArgument`
 - `error.IO`
 - `error.Closed`
+
+`read` accepts 1 through 67,108,864 bytes inclusive and returns an empty string
+only on EOF. One reader and one writer may operate concurrently; calls in the
+same direction serialize. Close linearizes at registry removal, wakes blocked
+accept/read/write calls with `error.Closed`, then waits for in-flight operations
+and resource release. Raw `i64` network intrinsics are internal.
+
+Read and write deadlines are relative per-operation socket timeouts. Zero
+disables a timeout; changing it is not promised to interrupt a syscall already
+in progress. Synchronous DNS and connect cannot be interrupted before a handle
+exists. Resolver failure is `error.NotFound`.
 
 ### `testing`
 
@@ -354,13 +346,12 @@ Functions:
   `CreateDirectoryA`, `CreateProcessA`, `GetEnvironmentVariableA`, and
   Winsock2 functions). Windows runtime bundles include the complete ordered
   native-library contract for the Rust staticlib, including `ws2_32`.
-- The `net` package uses opaque `i64` handles for listeners and connections.
-  They are kind-checked, non-reused process-local registry IDs, and their state
-  is synchronized. Explicit close removes the ID so new lookups fail, then
-  waits for an operation holding the socket lock before releasing it; close
-  does not interrupt blocking I/O. Unknown, stale, and wrong-kind IDs produce
-  `error.Closed`. All networking calls are blocking. Timeouts are set
-  per-connection via `SO_RCVTIMEO`/`SO_SNDTIMEO`. SIGPIPE is suppressed on POSIX
+- The `net` package exposes typed share-safe references backed by kind-checked,
+  non-reused registry IDs. Raw IDs remain internal. Operations block only their
+  native task thread. Close wakes blocked socket operations before waiting for
+  cleanup. The runtime polls nonblocking sockets with adaptive bounded waits
+  against per-operation relative timeouts; this portable native-thread model is
+  not a high-scale readiness poller. SIGPIPE is suppressed on POSIX
   (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
 - Process execution requires at least one argv element. Empty command vectors,
   invalid host strings, invalid timeouts, and invalid capture caps surface

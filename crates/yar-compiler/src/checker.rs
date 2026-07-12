@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     ast::*,
     diag::{Diagnostic, List},
-    token::Kind,
+    token::{Kind, Position},
 };
 
 pub type Type = String;
@@ -66,6 +66,7 @@ pub struct StructField {
 pub struct StructInfo {
     pub name: String,
     pub exported: bool,
+    pub opaque: bool,
     pub resource: bool,
     pub fields: Vec<StructField>,
 }
@@ -336,6 +337,7 @@ impl Checker {
             let mut info = StructInfo {
                 name: decl.name.clone(),
                 exported: decl.exported,
+                opaque: decl.opaque,
                 resource: decl.resource,
                 fields: Vec::new(),
             };
@@ -479,6 +481,7 @@ impl Checker {
                     let mut payload = StructInfo {
                         name: payload_name.clone(),
                         exported: false,
+                        opaque: false,
                         resource: false,
                         fields: Vec::new(),
                     };
@@ -1576,13 +1579,16 @@ impl Checker {
             return ExprType::invalid();
         }
 
-        let Some(info) = self.info.structs.get(&base) else {
+        let Some(info) = self.info.structs.get(&base).cloned() else {
             self.diag.add(
                 selector.dot_pos.clone(),
                 "field access requires a struct value",
             );
             return ExprType::invalid();
         };
+        if self.opaque_field_is_inaccessible(&info, &selector.name, &selector.name_pos) {
+            return ExprType::invalid();
+        }
         match info.fields.iter().find(|field| field.name == selector.name) {
             Some(field) => ExprType::plain(field.type_.clone()),
             None => {
@@ -1602,6 +1608,34 @@ impl Checker {
                 ExprType::invalid()
             }
         }
+    }
+
+    fn current_package(&self) -> &str {
+        self.current
+            .as_ref()
+            .map(|current| current.signature.package.as_str())
+            .unwrap_or_default()
+    }
+
+    fn opaque_field_is_inaccessible(
+        &mut self,
+        info: &StructInfo,
+        field_name: &str,
+        field_pos: &Position,
+    ) -> bool {
+        let package = package_for_type(&info.name);
+        if !info.opaque || self.current_package() == package {
+            return false;
+        }
+        self.diag.add(
+            field_pos.clone(),
+            format!(
+                "field {field_name:?} of opaque type {:?} is not accessible outside package {:?}",
+                diagnostic_type_name(&info.name),
+                package_display_name(&package),
+            ),
+        );
+        true
     }
 
     fn check_index(&mut self, index: &IndexExpr) -> ExprType {
@@ -1695,6 +1729,17 @@ impl Checker {
             );
             return ExprType::invalid();
         };
+        if info.opaque && self.current_package() != package_for_type(&info.name) {
+            self.diag.add(
+                literal.type_ref.pos.clone(),
+                format!(
+                    "opaque type {:?} cannot be constructed outside package {:?}",
+                    diagnostic_type_name(&info.name),
+                    package_display_name(&package_for_type(&info.name)),
+                ),
+            );
+            return ExprType::invalid();
+        }
         let mut seen = BTreeSet::new();
         for field in &literal.fields {
             if !seen.insert(field.name.clone()) {
@@ -2984,11 +3029,14 @@ impl Checker {
             Expression::Selector(expr) => {
                 let base = self.check_addressable_expr(&expr.inner, false);
                 let resolved = parse_pointer_type(&base).unwrap_or(base);
-                let Some(info) = self.info.structs.get(&resolved) else {
+                let Some(info) = self.info.structs.get(&resolved).cloned() else {
                     self.diag
                         .add(expr.dot_pos.clone(), "field access requires a struct value");
                     return TYPE_INVALID.to_string();
                 };
+                if self.opaque_field_is_inaccessible(&info, &expr.name, &expr.name_pos) {
+                    return TYPE_INVALID.to_string();
+                }
                 match info.fields.iter().find(|field| field.name == expr.name) {
                     Some(field) => field.type_.clone(),
                     None => {

@@ -50,9 +50,10 @@ Each `spawn` starts a native thread with shallow copies of its arguments and
 inline-literal captures. The checker therefore permits only transitively
 share-safe inputs: scalars, strings, errors, errorable values and channels with
 share-safe payloads, and aggregates composed entirely from share-safe values.
-Pointers, slices, maps, interfaces, functions, and resource structs cannot
-cross the boundary. Results are exempt because the parent observes them only
-after join.
+Pointers, slices, maps, interfaces, functions, and file resource structs cannot
+cross the boundary. Typed `net.Conn` and `net.Listener` values are deliberate
+share-safe resource references. Results are exempt because the parent observes
+them only after join.
 
 Spawn targets are limited to named functions and immediately called inline
 function literals so the checker can validate the complete boundary. Bare
@@ -64,14 +65,21 @@ host-intrinsic spawns additionally require a task wrapper; currently only
 
 Status: accepted
 
-User-visible `i64` handles for string builders, streaming files, TCP listeners,
-and TCP connections are positive process-local registry IDs rather than native
-addresses. IDs are kind-checked, never reused within a process, and resolve to
-synchronized mutable state. Explicit file and network close removes the ID so
-new lookups fail, then waits for any operation holding the per-resource lock
-before releasing the host resource; close does not interrupt blocking I/O.
+User-visible file handles and compiler-internal network handles are positive
+process-local registry IDs rather than native addresses. IDs are kind-checked,
+never reused within a process, and resolve to synchronized mutable state.
+`net.Conn` and `net.Listener` are typed, opaque, share-safe references; raw
+network IDs are not public stdlib surface.
 
-Unknown, stale, and wrong-kind file or network IDs produce `error.Closed`.
+Network close linearizes when it removes the ID from the registry. It wakes
+blocked accept, read, and write operations with `error.Closed`, then waits for
+those operations and the host resource to finish releasing. A connection
+permits one reader and one writer concurrently while serializing operations in
+the same direction. File close remains non-interrupting and releases the host
+file without an implicit durability sync.
+
+Unknown, stale, and wrong-kind file or internal network IDs produce
+`error.Closed`.
 Invalid string-builder IDs terminate with the deterministic string-builder
 runtime failure. This registry is a runtime safety boundary only: raw `i64`
 values still have no compiler-visible nominal handle type or provenance.

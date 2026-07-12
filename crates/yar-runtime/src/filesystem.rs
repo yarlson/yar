@@ -270,14 +270,10 @@ pub(crate) fn close_handle(raw_handle: i64) -> i32 {
         return FS_CLOSED;
     };
     let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(file) = state.take() else {
+    if state.take().is_none() {
         return FS_CLOSED;
-    };
-
-    match file.sync_all() {
-        Ok(()) => FS_OK,
-        Err(err) => status_from_io(err),
     }
+    FS_OK
 }
 
 enum OpenMode {

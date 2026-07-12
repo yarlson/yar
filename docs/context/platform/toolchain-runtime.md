@@ -210,17 +210,18 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 ### Runtime Handle Registry
 
 - String builders, streaming files, TCP listeners, and TCP connections use
-  positive process-local `i64` registry IDs rather than exposed native
-  addresses.
+  positive process-local registry IDs rather than exposed native addresses.
+  Network IDs are internal to typed, share-safe `Conn` and `Listener` values.
 - IDs increase monotonically and are never reused within a process. Registry
   lookup validates the expected resource kind, so a listener ID cannot be used
   as a connection, file, or string builder.
 - Registry lookup returns synchronized per-resource state and releases the
   registry lock before filesystem or network I/O. Operations on one handle do
   not hold the registry lock across blocking work.
-- Explicit file and network close removes the ID so later lookup fails, then
-  waits for any operation holding the per-resource lock before taking and
-  dropping the host resource. Close does not interrupt blocking I/O.
+- Network close removes the ID so later lookup fails, wakes blocked
+  accept/read/write calls with `Closed`, and waits for operation and resource
+  release. File close remains non-interrupting and performs no implicit
+  durability sync.
 - Unknown, stale, and wrong-kind file or network IDs map to `error.Closed`.
   Invalid string-builder IDs terminate with
   `runtime failure: invalid string builder`.
@@ -290,8 +291,8 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 ### Networking Runtime
 
 - `yar_net_listen(const yar_str *host, int32_t port, int64_t *out)` binds and listens
-  on a TCP address. Empty host means all interfaces. Returns an opaque listener
-  registry ID via the out-pointer.
+  on a TCP address. Empty host means the IPv4 wildcard address. It returns an
+  internal listener registry ID via the out-pointer.
 - `yar_net_accept(int64_t listener, int64_t *out)` blocks until a connection
   arrives and returns an opaque connection registry ID.
 - `yar_net_listener_addr(int64_t listener, yar_net_addr *out)` returns the
@@ -301,19 +302,32 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   connect with DNS resolution and returns a connection registry ID.
 - `yar_net_read(int64_t conn, int32_t max_bytes, yar_str *out)` reads up to
   `max_bytes` from a connection. Returns empty string on EOF.
-- `yar_net_write(int64_t conn, const yar_str *data, int32_t *out)` writes all data
-  to a connection. Returns bytes written.
+- `yar_net_write(int64_t conn, const yar_str *data, int32_t *out)` performs one
+  host write and returns its exact byte count, which may be short.
 - `yar_net_close(int64_t conn)` closes a connection socket.
 - `yar_net_local_addr(int64_t conn, yar_net_addr *out)` returns the local
   address of a connection via `getsockname`.
 - `yar_net_remote_addr(int64_t conn, yar_net_addr *out)` returns the remote
   address of a connection via `getpeername`.
-- `yar_net_set_read_deadline(int64_t conn, int32_t millis)` sets a read
-  timeout via `SO_RCVTIMEO`. Zero disables the timeout.
-- `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets a write
-  timeout via `SO_SNDTIMEO`. Zero disables the timeout.
+- `yar_net_set_read_deadline(int64_t conn, int32_t millis)` sets the relative
+  timeout captured by the next read operation. Zero disables the timeout.
+- `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets the relative
+  timeout captured by the next write operation. Zero disables the timeout.
 - `yar_net_resolve(const yar_str *host, int32_t port, yar_net_addr *out)` performs
-  DNS resolution and returns the first resolved address.
+  DNS resolution and returns the first IPv4 or IPv6 address; resolver failure
+  maps to `NotFound`.
+- Network ABI entry points operate on compiler-internal IDs. The runtime permits
+  one reader and one writer concurrently and serializes same-direction calls.
+  Reads accept 1 through 67,108,864 bytes inclusive. Writes perform one host
+  write and return the exact, possibly short, count.
+- Listener and connection sockets are nonblocking internally. A call that would
+  block polls its close marker and operation-local timeout with adaptive
+  1-through-64-millisecond waits while retaining the blocking source-level
+  contract for that native task thread. This is a portability mechanism, not a
+  high-scale readiness poller; each blocked call still owns one native thread.
+- Read/write timeouts are relative per-operation socket timeouts. Updating one
+  need not interrupt a syscall already running. DNS and connection creation are
+  synchronous host calls and cannot be interrupted before a handle exists.
 - All networking functions return `i32` status codes that map in code generation
   to stable YAR error names: `ConnectionRefused`, `Timeout`, `AddrInUse`,
   `ConnectionReset`, `NotFound`, `PermissionDenied`, `InvalidArgument`, `IO`,

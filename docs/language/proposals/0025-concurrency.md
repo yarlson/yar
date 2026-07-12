@@ -253,10 +253,11 @@ complete.
 - The checker therefore requires every argument and capture to be transitively
   share-safe. Scalars, `str`, and `error` are share-safe. Fixed arrays, enums,
   and non-resource structs are share-safe only when every contained value is
-  share-safe. `!T` and `chan[T]` are share-safe only when `T` is share-safe;
-  `!void` is also share-safe.
-- Pointers, slices, maps, interfaces, function values, resource structs, and
-  aggregates containing any of them cannot cross the task boundary.
+  share-safe. Typed `net.Conn` and `net.Listener` values are explicit
+  share-safe resource references. `!T` and `chan[T]` are share-safe only when
+  `T` is share-safe; `!void` is also share-safe.
+- Pointers, slices, maps, interfaces, function values, file resource structs,
+  and aggregates containing any of them cannot cross the task boundary.
 - Channels are the synchronized mechanism for inter-task communication.
   Multiple tasks may hold the same share-safe channel and use its operations
   concurrently.
@@ -373,10 +374,11 @@ thread. A program with no taskgroups retains the single-threaded behavior.
 - The spawned expression's arguments are evaluated in the enclosing scope at
   spawn time (sequentially, during the taskgroup body's execution).
 - Spawn arguments and inline-literal captures must be transitively share-safe.
-  Scalars, `str`, `error`, arrays, enums, non-resource structs, errorable
-  values, and channels compose only when their contained types are share-safe;
-  `!void` is also share-safe. Pointers, slices, maps, interfaces, functions,
-  and resource structs are not share-safe.
+  Scalars, `str`, `error`, arrays, enums, non-resource structs, typed
+  `net.Conn` and `net.Listener` references, errorable values, and channels
+  compose only when their contained types are share-safe; `!void` is also
+  share-safe. Pointers, slices, maps, interfaces, functions, and file resource
+  structs are not share-safe.
 - Spawn result types are not subject to this restriction because results are
   observed only after the taskgroup join.
 
@@ -774,10 +776,11 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 | -------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `stdio.eprint` | Yes   | A stderr mutex covers each complete write and flush. |
 
-### Host intrinsics: `net` package
+### Historical host-intrinsic audit: `net` package
 
-All network functions change behavior: they block the calling **task** instead
-of the program, via integration with the netpoller.
+The table below is the original unimplemented M:N/netpoller design described by
+the section preface. It is retained as historical design exploration and is not
+the current networking contract.
 
 | Function                                           | Thread-safe?   | Change needed                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | -------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -791,6 +794,15 @@ of the program, via integration with the netpoller.
 | `net.listener_addr`                                | Yes            | Read-only socket metadata. No blocking.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `net.set_read_deadline` / `net.set_write_deadline` | Per-connection | Sets socket option. If two tasks set different deadlines on the same connection concurrently, last write wins. This is a programming error. No runtime change needed — socket option setting is atomic at the syscall level.                                                                                                                                                                                                                              |
 | `net.resolve`                                      | Yes            | `getaddrinfo` is thread-safe on all modern platforms. Parks task, submits to I/O thread pool (DNS can block).                                                                                                                                                                                                                                                                                                                                             |
+
+The shipped native-thread contract instead uses typed, share-safe `Conn` and
+`Listener` registry references. It permits one reader and one writer
+concurrently, serializes same-direction operations, and makes close wake blocked
+accept/read/write calls with `error.Closed` before waiting for cleanup. Raw
+network IDs are internal. Read size is capped at 64 MiB inclusive; write is one
+host write and may be short. Socket timeouts are relative per-operation limits,
+and changing one need not interrupt an already-running syscall. Synchronous DNS
+and connect cannot be interrupted before a handle exists.
 
 ### Host intrinsics: `time` package (proposed, not yet implemented)
 
@@ -853,8 +865,10 @@ it is not required by the implemented native-thread task model.
    serialize each complete call so individual messages are not torn.
 4. **`panic` termination**: implemented; concurrent fatal paths skip output
    before immediate termination without shutdown handlers.
-5. **`net.close` safety**: deregister fd from netpoller and wake parked tasks
-   with `error.Closed` before calling `close()`.
+5. **Historical `net.close` safety requirement**: the proposed netpoller would
+   deregister the fd and wake parked tasks before close. The shipped
+   native-thread runtime meets the same user-visible wake-before-wait contract
+   without a netpoller.
 6. **`net.ensure_init` race**: replace static flag with `pthread_once`.
 **Documentation-only (no runtime changes, behavior documented):**
 
