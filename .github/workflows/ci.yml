@@ -74,11 +74,33 @@ jobs:
       - name: Run process-control tests
         run: cargo test -p yar-process-control
 
+  concurrency-windows:
+    name: Concurrency behavior (Windows GNU)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Windows GNU Rust toolchain
+        run: rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+
+      - name: Show toolchain
+        run: |
+          clang --version
+          rustc +stable-x86_64-pc-windows-gnu --version
+          cargo +stable-x86_64-pc-windows-gnu --version
+
+      - name: Run native concurrency fixtures
+        run: ./scripts/verify-windows-concurrency.ps1
+
   release-dry-run:
     name: Release dry run
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs:
+      - concurrency-windows
       - lint
       - process-control-windows
       - test

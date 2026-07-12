@@ -232,10 +232,10 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_process_run(ptr, ptr)\n");
         out.push_str("declare i32 @yar_process_run_inherit(ptr, ptr)\n");
         out.push_str("declare i32 @yar_env_lookup(%yar.str, ptr)\n");
-        out.push_str("declare ptr @yar_taskgroup_new(i32)\n");
+        out.push_str("declare ptr @yar_taskgroup_new(i64)\n");
         out.push_str("declare void @yar_taskgroup_spawn(ptr, ptr, ptr)\n");
         out.push_str("declare %yar.slice @yar_taskgroup_wait(ptr)\n");
-        out.push_str("declare ptr @yar_chan_new(i32, i32)\n");
+        out.push_str("declare ptr @yar_chan_new(i64, i32)\n");
         out.push_str("declare i32 @yar_chan_send(ptr, ptr)\n");
         out.push_str("declare i32 @yar_chan_recv(ptr, ptr)\n");
         out.push_str("declare void @yar_chan_close(ptr)\n");
@@ -1431,17 +1431,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return Err(CodegenError::unsupported("taskgroup result type"));
         };
         let elem_size = if element_type == "void" {
-            "0".to_string()
+            0
         } else {
-            self.emit_type_size(&element_type)?
+            self.type_size(&element_type)?
         };
-        let elem_size32 = self.temp("taskgroup.elem_size");
-        self.body.push_str(&format!(
-            "  %{elem_size32} = trunc i64 {elem_size} to i32\n"
-        ));
         let handle = self.temp("taskgroup");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_taskgroup_new(i32 %{elem_size32})\n"
+            "  %{handle} = call ptr @yar_taskgroup_new(i64 {elem_size})\n"
         ));
 
         let previous = self.taskgroup.replace(TaskgroupContext {
@@ -3541,14 +3537,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 capacity.type_
             )));
         }
-        let elem_size = self.emit_type_size(&element_type)?;
-        let elem_size32 = self.temp("chan.elem_size");
-        self.body.push_str(&format!(
-            "  %{elem_size32} = trunc i64 {elem_size} to i32\n"
-        ));
+        let elem_size = self.type_size(&element_type)?;
         let handle = self.temp("chan.new");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_chan_new(i32 %{elem_size32}, i32 {})\n",
+            "  %{handle} = call ptr @yar_chan_new(i64 {elem_size}, i32 {})\n",
             capacity.repr
         ));
         Ok(Value {
@@ -5876,6 +5868,12 @@ fn collect_map_result_types_from_expression(
     match expression {
         Expression::TypeApplication(expr) => {
             collect_map_result_types_from_expression(&expr.inner, result_types);
+            if matches!(&expr.inner, Expression::Ident(ident) if ident.name == "chan_new")
+                && let [element_type] = expr.type_args.as_slice()
+            {
+                result_types.push("void".to_string());
+                result_types.push(element_type.to_string());
+            }
             for type_arg in &expr.type_args {
                 collect_map_result_types_from_type_ref(type_arg, result_types);
             }
@@ -6171,6 +6169,7 @@ mod tests {
         "testdata/concurrency_channels/main.yar",
         "testdata/concurrency_errors/main.yar",
         "testdata/concurrency_fs/main.yar",
+        "testdata/concurrency_lifecycle/main.yar",
         "testdata/concurrency_share_safe/main.yar",
         "testdata/deps_local/main.yar",
         "testdata/divide/main.yar",
@@ -6365,6 +6364,63 @@ fn main() i32 {
 
         assert!(ir.contains("icmp eq ptr"), "{ir}");
         assert!(ir.contains("icmp ne ptr"), "{ir}");
+        assert!(ir.contains("call ptr @yar_chan_new(i64 4, i32 1)"), "{ir}");
+        assert!(!ir.contains("chan.elem_size"), "{ir}");
+    }
+
+    #[test]
+    fn declares_channel_result_types_for_inferred_chan_new_values() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn main() i32 {
+    ch := chan_new[str](1)
+    chan_send(ch, "value") or |_| {
+        return 1
+    }
+    value := chan_recv(ch) or |_| {
+        return 1
+    }
+    if value != "value" {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        assert!(ir.contains("%yar.result.void = type { i1, i32 }"), "{ir}");
+        assert!(
+            ir.contains("%yar.result.str = type { i1, i32, %yar.str }"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn passes_checked_taskgroup_element_sizes_without_truncation() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn work() i64 {
+    return 1
+}
+
+fn main() i32 {
+    values := taskgroup []i64 {
+        spawn work()
+    }
+    if len(values) != 1 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        assert!(ir.contains("call ptr @yar_taskgroup_new(i64 8)"), "{ir}");
+        assert!(!ir.contains("taskgroup.elem_size"), "{ir}");
     }
 
     #[test]

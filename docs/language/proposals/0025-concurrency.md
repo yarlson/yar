@@ -7,7 +7,7 @@ Status: accepted and implemented
 Add structured concurrency to Yar through two constructs: `taskgroup` blocks
 that spawn and join concurrent tasks with guaranteed lifetime, and typed bounded
 channels for inter-task communication. The current implementation starts each
-spawn on a native POSIX thread and joins through the taskgroup runtime API.
+spawn on a native OS thread and joins through the taskgroup runtime API.
 This preserves the surface semantics proposed here while deferring the
 exploratory M:N scheduler work. Arguments and closure captures use shallow
 value copies, so the checker admits only transitively share-safe values at the
@@ -272,7 +272,7 @@ complete.
 
 ### Task scheduling
 
-- Every successful `spawn` creates one native POSIX thread immediately.
+- Every successful `spawn` creates one native OS thread immediately.
 - There is no task pool, work-stealing scheduler, parking, or M:N multiplexing
   in the current runtime.
 - A blocking operation blocks that task's native thread. Other spawned threads
@@ -305,9 +305,10 @@ complete.
 - Channels are safe for concurrent use by multiple tasks. Multiple senders and
   multiple receivers are supported (MPMC).
 - Channel ordering: values are received in FIFO order relative to sends.
-- Channel handles and their Rust-owned buffers remain allocated for the process
-  lifetime because there is no channel-destroy API. Managed pointers buffered
-  in live slots are registered as collector roots.
+- A channel value is a managed opaque token backed by synchronized Rust-owned
+  state in a validated registry. Collection finalizes an unreachable token,
+  removes that state, and stops treating its buffered values as roots. Live
+  buffered slots remain collector roots while the channel token is reachable.
 
 ### Blocking behavior change
 
@@ -320,16 +321,20 @@ thread. A program with no taskgroups retains the single-threaded behavior.
 
 - **Allocation lifetime**: the current runtime conservatively reclaims
   unreachable managed blocks. Collection is suppressed while spawned results
-  remain unjoined. Taskgroup and channel handles themselves remain valid for
-  the process lifetime.
+  remain unjoined. A taskgroup handle is consumed and reclaimed by its mandatory
+  join; unreachable channel tokens finalize their external state.
 - **Pointers, slices, and maps**: these values cannot be passed or captured
   across a spawn boundary, including when nested inside aggregates.
 - **String builders**: `sb_new`/`sb_write`/`sb_string` resolve through the
   runtime handle registry and serialize mutable state per builder. Raw builder
   IDs remain indistinguishable from ordinary `i64` values to the checker.
-- **`print`**: `print` writes to stdout. Concurrent `print` calls from
-  multiple tasks may interleave output; the runtime provides no per-call
-  atomicity or ordering guarantee.
+- **Output**: `print` and `stdio.eprint` serialize each complete call under
+  separate stdout and stderr locks. Calls have no ordering guarantee, but a
+  single message is never torn by another runtime output call.
+- **Fatal errors**: `panic` and runtime failures omit diagnostics whenever any
+  task is unjoined, then terminate the whole process without waiting for output,
+  shutdown handlers, or tasks. Single-threaded failures retain best-effort
+  locked stderr diagnostics.
 - **`process.run`**: safe to call concurrently (each call creates a separate
   child process). `process.args()` returns a snapshot and is safe.
 - **`env.lookup`**: reads from the process environment through the Rust host
@@ -340,7 +345,8 @@ thread. A program with no taskgroups retains the single-threaded behavior.
 ### New type
 
 - `chan[T]` is a built-in parameterized type. `T` may be any type except
-  `void`, `noreturn`, and `chan[U]` (no nested channels in v1).
+  `void`, `noreturn`, first-class errorable `!U`, and `chan[U]` (no errorable
+  elements or nested channels in v1).
 - `chan[T]` supports `==` and `!=` comparison (identity comparison on the
   underlying handle).
 - `chan[T]` does not support `<`, `>`, `<=`, `>=`, arithmetic, indexing,
@@ -479,8 +485,9 @@ No ambiguity with existing syntax:
 - **Closure spawns**: an immediately called function literal copies its closure
   value and arguments into the task context. Arbitrary closure values are not
   valid spawn targets.
-- **Channel lowering**: `chan[T]` lowers to an opaque `i64` handle (same
-  pattern as maps and string builders). `chan_new` calls
+- **Channel lowering**: `chan[T]` lowers to an opaque managed pointer token.
+  The token addresses synchronized external state through a validated runtime
+  registry and is finalized by collection. `chan_new` calls
   `yar_chan_new(elem_size, capacity)`. `chan_send` calls
   `yar_chan_send(handle, value_ptr)`. `chan_recv` calls
   `yar_chan_recv(handle, out_ptr)`. `chan_close` calls
@@ -490,7 +497,7 @@ No ambiguity with existing syntax:
 
 The runtime design below records the scheduler explored before implementation.
 It is not the shipped runtime model; the current implementation creates one
-native POSIX thread per spawn as described above and in section 14.
+native OS thread per spawn as described above and in section 14.
 
 This is the largest implementation area — estimated ~2500-3500 lines of new C
 and assembly code in the runtime.
@@ -744,8 +751,8 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 
 | Builtin | Issue                                                                                                                                                           | Required change                                                                                                                                                                                                                                                   |
 | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `print` | Concurrent writes to stdout interleave at the `fwrite` level. Individual `print` calls are not atomic for large strings.                                        | Add a stdout mutex in the runtime. Each `print` call acquires the mutex, writes the full string, releases. Output from different tasks may still be interleaved between calls, but individual messages are never torn.                                            |
-| `panic` | Calls `exit(1)`. In a multi-threaded runtime, `exit()` runs atexit handlers and flushes stdio from the calling thread while other threads may still be running. | Change `panic` to: (a) set a global panic flag, (b) print the message under the stderr mutex, (c) call `_exit(1)` (immediate termination, no atexit handlers) to avoid races during shutdown. Alternatively, signal all scheduler threads to stop before exiting. |
+| `print` | Concurrent calls need call-level output atomicity. | Implemented: a stdout mutex covers each complete write. Calls may reorder, but messages are not torn. |
+| `panic` | A fatal worker must not wait behind ordinary output or run shutdown handlers concurrently with other tasks. | Implemented: omit the diagnostic while tasks are unjoined, then immediately terminate the whole process without shutdown handlers. |
 
 ### Host intrinsics: `fs` package
 
@@ -777,7 +784,7 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 
 | Function       | Safe? | Change needed                                                                                                                                        |
 | -------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stdio.eprint` | No    | Same interleaving issue as `print`. Fix: add a stderr mutex in the runtime. Each `eprint` call acquires the mutex, writes the full string, releases. |
+| `stdio.eprint` | Yes   | A stderr mutex covers each complete write and flush. |
 
 ### Host intrinsics: `net` package
 
@@ -863,10 +870,10 @@ implementation regardless of concurrency.
 2. **`getenv` safety**: protect `yar_env_lookup` with a mutex that covers
    both the `getenv()` call and the copy of the returned string. Cache
    `TMPDIR` at startup for `yar_fs_temp_dir` and `yar_process_run`.
-3. **stdout/stderr mutexes**: protect `yar_print` and `yar_eprint` so
-   individual messages are not torn.
-4. **`panic` termination**: change from `exit(1)` to immediate termination
-   (`_exit(1)`) or coordinated shutdown to avoid races during exit.
+3. **stdout/stderr mutexes**: implemented; `yar_print` and `yar_eprint`
+   serialize each complete call so individual messages are not torn.
+4. **`panic` termination**: implemented; concurrent fatal paths skip output
+   before immediate termination without shutdown handlers.
 5. **`net.close` safety**: deregister fd from netpoller and wake parked tasks
    with `error.Closed` before calling `close()`.
 6. **`net.ensure_init` race**: replace static flag with `pthread_once`.
@@ -1006,9 +1013,9 @@ Deferred (not rejected) because:
 - **Codegen**: each spawn needs a typed task context and wrapper; taskgroups
   need ordered result assembly and a mandatory join.
 - **Runtime**: the native-thread baseline is simpler than the explored M:N
-  scheduler, but one thread per spawn and process-lifetime taskgroup, channel,
-  and string-builder handles remain material operational limits. Managed heap
-  blocks are reclaimed separately.
+  scheduler, but one thread per spawn, collection suppression while tasks are
+  unjoined, and process-lifetime string-builder handles remain material
+  operational limits. Taskgroups and unreachable channel state are reclaimed.
 - **Testing**: concurrency ordering, channel closure, nested captures, resource
   provenance, and task-boundary alias rejection need end-to-end coverage.
 
@@ -1398,7 +1405,7 @@ The shipped implementation includes:
 The current runtime implementation deliberately differs from the original
 exploration in a few ways:
 
-- it uses native POSIX threads rather than an M:N scheduler
+- it uses native OS threads rather than an M:N scheduler
 - each spawn receives shallow value copies, so pointers, slices, maps,
   interfaces, functions, resource structs, and aggregates containing them are
   rejected at the task boundary; channels compose only with share-safe element
@@ -1412,8 +1419,8 @@ exploration in a few ways:
 - it rejects same-function `?` propagation inside a taskgroup body so accepted
   control-flow paths cannot bypass the join
 - it does not yet include a race-detector mode
-- Windows concurrency entry points currently fail at runtime with a clear
-  unsupported message
+- Linux, macOS, and Windows GNU use the portable native-thread runtime; CI
+  executes taskgroup, channel, and forced-collection fixtures on Windows
 
 ## 15. Implementation Checklist
 
@@ -1474,6 +1481,8 @@ The shipped baseline instead has:
 - [x] `testdata/concurrency_basic/main.yar` — basic taskgroup test
 - [x] `testdata/concurrency_channels/main.yar` — channel test
 - [x] `testdata/concurrency_errors/main.yar` — error propagation test
+- [x] `testdata/concurrency_lifecycle/main.yar` — repeated taskgroup/channel
+      reclamation under forced collection
 - [x] `testdata/concurrency_share_safe/main.yar` — transitive share-safety and
       unrestricted result test
 - [ ] `testdata/concurrency_net/main.yar` — concurrent TCP server test

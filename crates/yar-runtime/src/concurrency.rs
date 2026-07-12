@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::ptr;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crate::YarSlice;
@@ -10,6 +11,13 @@ type TaskEntry = extern "C" fn(*mut u8, *mut u8);
 
 struct TaskgroupHandle {
     state: Mutex<Option<TaskgroupState>>,
+}
+
+#[cfg(test)]
+impl Drop for TaskgroupHandle {
+    fn drop(&mut self) {
+        TASKGROUP_DROPS.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 struct TaskgroupState {
@@ -34,20 +42,24 @@ struct ChannelState {
 }
 
 static UNJOINED_TASKS: AtomicUsize = AtomicUsize::new(0);
-static CHANNELS: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+static CHANNELS: OnceLock<Mutex<BTreeMap<usize, Arc<ChannelHandle>>>> = OnceLock::new();
+#[cfg(test)]
+static TASKGROUP_DROPS: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) fn taskgroup_new(elem_size: i32) -> *mut u8 {
+pub(crate) fn taskgroup_new(elem_size: i64) -> *mut u8 {
     if elem_size < 0 {
         super::runtime_fail(b"runtime failure: invalid taskgroup element size\n");
     }
 
-    let handle = Box::leak(Box::new(TaskgroupHandle {
+    let handle = Box::new(TaskgroupHandle {
         state: Mutex::new(Some(TaskgroupState {
-            elem_size: elem_size as usize,
+            elem_size: usize::try_from(elem_size).unwrap_or_else(|_| {
+                super::runtime_fail(b"runtime failure: invalid taskgroup element size\n")
+            }),
             tasks: Vec::new(),
         })),
-    }));
-    (handle as *mut TaskgroupHandle).cast::<u8>()
+    });
+    Box::into_raw(handle).cast::<u8>()
 }
 
 pub(crate) fn taskgroup_spawn(group: *mut u8, entry: *mut u8, ctx: *mut u8) {
@@ -66,10 +78,20 @@ pub(crate) fn taskgroup_spawn(group: *mut u8, entry: *mut u8, ctx: *mut u8) {
     let entry: TaskEntry = unsafe { std::mem::transmute(entry) };
     let ctx = ctx as usize;
     let elem_size = state.elem_size;
-    UNJOINED_TASKS.fetch_add(1, Ordering::SeqCst);
+    state
+        .tasks
+        .try_reserve(1)
+        .unwrap_or_else(|_| super::yar_trap_oom());
+    if !add_unjoined_tasks(&UNJOINED_TASKS, 1) {
+        super::runtime_fail(b"runtime failure: task accounting exhausted\n");
+    }
     let task = thread::Builder::new()
         .spawn(move || {
-            let mut result = vec![0; elem_size];
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(elem_size)
+                .unwrap_or_else(|_| super::yar_trap_oom());
+            result.resize(elem_size, 0);
             let result_ptr = if result.is_empty() {
                 ptr::null_mut()
             } else {
@@ -79,7 +101,9 @@ pub(crate) fn taskgroup_spawn(group: *mut u8, entry: *mut u8, ctx: *mut u8) {
             result
         })
         .unwrap_or_else(|_| {
-            UNJOINED_TASKS.fetch_sub(1, Ordering::SeqCst);
+            if !remove_unjoined_tasks(&UNJOINED_TASKS, 1) {
+                super::runtime_fail(b"runtime failure: task accounting corrupted\n");
+            }
             super::runtime_fail(b"runtime failure: cannot spawn task\n")
         });
     state.tasks.push(task);
@@ -90,28 +114,41 @@ pub(crate) fn taskgroup_wait(group: *mut u8) -> YarSlice {
         return empty_slice();
     }
 
-    let handle = taskgroup_from_ptr(group);
+    // SAFETY: taskgroup handles are compiler-internal, allocated by
+    // taskgroup_new, and consumed exactly once by generated taskgroup code.
+    let handle = unsafe { Box::from_raw(group.cast::<TaskgroupHandle>()) };
     let mut guard = handle.state.lock().unwrap_or_else(|err| err.into_inner());
     let Some(state) = guard.take() else {
         return empty_slice();
     };
     drop(guard);
+    drop(handle);
 
     finish_taskgroup(state)
 }
 
-pub(crate) fn chan_new(elem_size: i32, capacity: i32) -> *mut u8 {
-    if elem_size < 0 || capacity <= 0 {
+pub(crate) fn chan_new(elem_size: i64, capacity: i32) -> *mut u8 {
+    if elem_size < 0 {
+        super::runtime_fail(b"runtime failure: invalid channel element size\n");
+    }
+    if capacity <= 0 {
         super::runtime_fail(b"runtime failure: invalid channel capacity\n");
     }
 
-    let elem_size = elem_size as usize;
+    let elem_size = usize::try_from(elem_size).unwrap_or_else(|_| {
+        super::runtime_fail(b"runtime failure: invalid channel element size\n")
+    });
     let capacity = capacity as usize;
     let Some(buffer_size) = elem_size.checked_mul(capacity) else {
         super::runtime_fail(b"runtime failure: invalid channel capacity\n");
     };
 
-    let handle = Box::leak(Box::new(ChannelHandle {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(buffer_size)
+        .unwrap_or_else(|_| super::yar_trap_oom());
+    buffer.resize(buffer_size, 0);
+    let channel = Arc::new(ChannelHandle {
         state: Mutex::new(ChannelState {
             elem_size,
             capacity,
@@ -119,16 +156,22 @@ pub(crate) fn chan_new(elem_size: i32, capacity: i32) -> *mut u8 {
             head: 0,
             tail: 0,
             closed: false,
-            buffer: vec![0; buffer_size],
+            buffer,
         }),
         can_send: Condvar::new(),
         can_recv: Condvar::new(),
-    }));
-    channels()
+    });
+    let handle = super::memory::alloc_finalized(1, finalize_channel);
+    let address = handle as usize;
+    if channels()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .push(handle as *mut ChannelHandle as usize);
-    (handle as *mut ChannelHandle).cast::<u8>()
+        .insert(address, channel)
+        .is_some()
+    {
+        super::runtime_fail(b"runtime failure: channel registry corrupted\n");
+    }
+    handle
 }
 
 pub(crate) fn chan_send(handle: *mut u8, value: *const u8) -> i32 {
@@ -136,7 +179,9 @@ pub(crate) fn chan_send(handle: *mut u8, value: *const u8) -> i32 {
         return 1;
     }
 
-    let channel = channel_from_ptr(handle);
+    let Some(channel) = channel_from_ptr(handle) else {
+        return 1;
+    };
     let mut state = channel.state.lock().unwrap_or_else(|err| err.into_inner());
     while !state.closed && state.count == state.capacity {
         state = channel
@@ -173,7 +218,9 @@ pub(crate) fn chan_recv(handle: *mut u8, out: *mut u8) -> i32 {
         return 1;
     }
 
-    let channel = channel_from_ptr(handle);
+    let Some(channel) = channel_from_ptr(handle) else {
+        return 1;
+    };
     let mut state = channel.state.lock().unwrap_or_else(|err| err.into_inner());
     while state.count == 0 && !state.closed {
         state = channel
@@ -207,7 +254,9 @@ pub(crate) fn chan_close(handle: *mut u8) {
         return;
     }
 
-    let channel = channel_from_ptr(handle);
+    let Some(channel) = channel_from_ptr(handle) else {
+        return;
+    };
     let mut state = channel.state.lock().unwrap_or_else(|err| err.into_inner());
     state.closed = true;
     channel.can_send.notify_all();
@@ -225,15 +274,22 @@ fn taskgroup_from_ptr<'a>(group: *mut u8) -> &'a TaskgroupHandle {
     unsafe { &*ptr }
 }
 
-fn channel_from_ptr<'a>(handle: *mut u8) -> &'a ChannelHandle {
-    let ptr = handle.cast::<ChannelHandle>();
-    if ptr.is_null() {
-        super::runtime_fail(b"runtime failure: invalid channel handle\n");
+fn channel_from_ptr(handle: *mut u8) -> Option<Arc<ChannelHandle>> {
+    if handle.is_null() {
+        return None;
     }
+    channels()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .get(&(handle as usize))
+        .cloned()
+}
 
-    // SAFETY: channel handles are created by chan_new with Box::leak and remain
-    // valid for the process lifetime.
-    unsafe { &*ptr }
+fn finalize_channel(handle: *mut u8) {
+    channels()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&(handle as usize));
 }
 
 fn finish_taskgroup(mut state: TaskgroupState) -> YarSlice {
@@ -241,7 +297,10 @@ fn finish_taskgroup(mut state: TaskgroupState) -> YarSlice {
     let len = i32::try_from(count)
         .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid taskgroup size\n"));
 
-    let mut results = Vec::with_capacity(count);
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(count)
+        .unwrap_or_else(|_| super::yar_trap_oom());
     for task in state.tasks.drain(..) {
         let result = task
             .join()
@@ -276,8 +335,7 @@ fn finish_taskgroup(mut state: TaskgroupState) -> YarSlice {
         YarSlice { ptr, len, cap: len }
     };
 
-    let previous = UNJOINED_TASKS.fetch_sub(count, Ordering::SeqCst);
-    if previous < count {
+    if !remove_unjoined_tasks(&UNJOINED_TASKS, count) {
         super::runtime_fail(b"runtime failure: task accounting corrupted\n");
     }
     output
@@ -295,14 +353,31 @@ pub(crate) fn unjoined_tasks() -> usize {
     UNJOINED_TASKS.load(Ordering::SeqCst)
 }
 
+fn add_unjoined_tasks(counter: &AtomicUsize, count: usize) -> bool {
+    counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            current.checked_add(count)
+        })
+        .is_ok()
+}
+
+fn remove_unjoined_tasks(counter: &AtomicUsize, count: usize) -> bool {
+    counter
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+            current.checked_sub(count)
+        })
+        .is_ok()
+}
+
 pub(crate) fn channel_root_snapshots() -> Vec<Vec<u8>> {
-    let channel_addresses = channels()
+    let live_channels = channels()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .clone();
-    let mut roots = Vec::with_capacity(channel_addresses.len());
-    for address in channel_addresses {
-        let channel = channel_from_ptr(address as *mut u8);
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut roots = Vec::with_capacity(live_channels.len());
+    for channel in live_channels {
         let state = channel.state.lock().unwrap_or_else(|err| err.into_inner());
         if state.elem_size == 0 || state.count == 0 {
             continue;
@@ -318,8 +393,8 @@ pub(crate) fn channel_root_snapshots() -> Vec<Vec<u8>> {
     roots
 }
 
-fn channels() -> &'static Mutex<Vec<usize>> {
-    CHANNELS.get_or_init(|| Mutex::new(Vec::new()))
+fn channels() -> &'static Mutex<BTreeMap<usize, Arc<ChannelHandle>>> {
+    CHANNELS.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 #[cfg(test)]
@@ -327,8 +402,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn taskgroup_wait_consumes_and_reclaims_the_handle() {
+        let drops_before = TASKGROUP_DROPS.load(Ordering::SeqCst);
+        let handle = taskgroup_new(0);
+
+        assert_eq!(taskgroup_wait(handle), empty_slice());
+        assert_eq!(TASKGROUP_DROPS.load(Ordering::SeqCst), drops_before + 1);
+    }
+
+    #[test]
+    fn task_accounting_rejects_overflow_and_underflow() {
+        let counter = AtomicUsize::new(usize::MAX);
+        assert!(!add_unjoined_tasks(&counter, 1));
+        assert_eq!(counter.load(Ordering::SeqCst), usize::MAX);
+
+        let counter = AtomicUsize::new(0);
+        assert!(!remove_unjoined_tasks(&counter, 1));
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn channel_finalization_removes_external_state_and_payload_roots() {
+        let handle = chan_new(size_of::<usize>() as i64, 1);
+        let payload = 0x1234_5678_usize;
+        assert_eq!(chan_send(handle, payload.to_ne_bytes().as_ptr()), 0);
+        assert!(snapshot_contains(payload));
+
+        finalize_channel(handle);
+
+        assert!(channel_from_ptr(handle).is_none());
+        assert!(!snapshot_contains(payload));
+    }
+
+    #[test]
+    fn closing_a_channel_wakes_a_blocked_sender() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let handle = chan_new(size_of::<i32>() as i64, 1);
+        let first = 17_i32;
+        assert_eq!(chan_send(handle, (&first as *const i32).cast()), 0);
+
+        let address = handle as usize;
+        let (result_tx, result_rx) = mpsc::channel();
+        let sender = thread::spawn(move || {
+            let second = 29_i32;
+            result_tx
+                .send(chan_send(
+                    address as *mut u8,
+                    (&second as *const i32).cast(),
+                ))
+                .unwrap();
+        });
+        assert!(result_rx.recv_timeout(Duration::from_millis(20)).is_err());
+
+        chan_close(handle);
+
+        assert_eq!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
+        sender.join().unwrap();
+    }
+
+    #[test]
     fn channel_root_snapshots_include_only_live_fifo_slots() {
-        let handle = chan_new(size_of::<usize>() as i32, 2);
+        let handle = chan_new(size_of::<usize>() as i64, 2);
         let first = Box::into_raw(Box::new(17_u8)) as usize;
         let second = Box::into_raw(Box::new(29_u8)) as usize;
 

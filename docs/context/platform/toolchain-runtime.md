@@ -94,9 +94,9 @@
   rejected with migration guidance.
 - The Rust runtime uses `#[cfg(...)]` platform modules and branches to select
   POSIX or Win32 implementations at compile time.
-- Concurrency support is currently implemented only on POSIX targets. Windows
-  builds compile, but the concurrency runtime entry points fail with an
-  explicit runtime error when called.
+- Concurrency uses portable Rust native threads on Linux, macOS, and Windows
+  GNU. CI executes taskgroup and channel programs on Windows in addition to
+  building the target runtime bundle.
 
 ## Runtime Surface
 
@@ -151,12 +151,12 @@
 
 ### Concurrency Runtime
 
-- `yar_taskgroup_new(int32_t elem_size)` allocates a taskgroup handle.
+- `yar_taskgroup_new(int64_t elem_size)` allocates a taskgroup handle.
 - `yar_taskgroup_spawn(void *group, void *entry, void *ctx)` records one task
-  and starts it on a native POSIX thread immediately.
+  and starts it on a native OS thread immediately.
 - `yar_taskgroup_wait(void *group)` joins all started tasks and returns a
   runtime-managed result slice whose element order matches spawn order.
-- `yar_chan_new(int32_t elem_size, int32_t capacity)` allocates a bounded FIFO
+- `yar_chan_new(int64_t elem_size, int32_t capacity)` allocates a bounded FIFO
   channel.
 - `yar_chan_send(void *handle, const void *value_ptr)` blocks while the channel
   buffer is full and returns a non-zero status when the channel is closed.

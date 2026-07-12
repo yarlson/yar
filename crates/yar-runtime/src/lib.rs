@@ -9,8 +9,15 @@ mod string;
 mod string_builder;
 
 use std::io::{self, Write};
-use std::process;
 use std::ptr;
+use std::sync::{Mutex, TryLockError};
+
+static STDOUT_WRITE: Mutex<()> = Mutex::new(());
+static STDERR_WRITE: Mutex<()> = Mutex::new(());
+
+unsafe extern "C" {
+    fn yar_runtime_exit_immediately(status: i32) -> !;
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +56,7 @@ pub struct YarNetAddr {
     pub port: i32,
 }
 
-fn write_all(mut out: impl Write, data: *const u8, len: i64) {
+fn write_all_locked(lock: &Mutex<()>, mut out: impl Write, data: *const u8, len: i64, flush: bool) {
     if data.is_null() || len <= 0 {
         return;
     }
@@ -61,31 +68,64 @@ fn write_all(mut out: impl Write, data: *const u8, len: i64) {
     // SAFETY: The generated program passes a pointer/length pair for a live Yar
     // string. Invalid pairs are a compiler/runtime ABI violation.
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let _guard = lock.lock().unwrap_or_else(|err| err.into_inner());
     let _ = out.write_all(bytes);
+    if flush {
+        let _ = out.flush();
+    }
 }
 
 fn runtime_fail(message: &[u8]) -> ! {
-    let _ = io::stderr().write_all(message);
-    let _ = io::stderr().flush();
-    process::exit(1);
+    write_fatal_message(message);
+    // SAFETY: the C11 shim terminates the complete process without running
+    // shutdown handlers while other runtime threads may still be active.
+    unsafe { yar_runtime_exit_immediately(1) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_print(data: *const u8, len: i64) {
-    write_all(io::stdout(), data, len);
+    write_all_locked(&STDOUT_WRITE, io::stdout(), data, len, false);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_eprint(data: *const u8, len: i64) {
-    write_all(io::stderr(), data, len);
-    let _ = io::stderr().flush();
+    write_all_locked(&STDERR_WRITE, io::stderr(), data, len, true);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_panic(data: *const u8, len: i64) -> ! {
-    write_all(io::stderr(), data, len);
-    let _ = io::stderr().flush();
-    process::exit(1);
+    panic_immediately(data, len)
+}
+
+fn panic_immediately(data: *const u8, len: i64) -> ! {
+    if !data.is_null()
+        && len > 0
+        && let Ok(len) = usize::try_from(len)
+    {
+        // SAFETY: The generated program passes a live Yar string pair.
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        write_fatal_message(bytes);
+    }
+    // SAFETY: the C11 shim terminates the complete process without running
+    // shutdown handlers while other runtime threads may still be active.
+    unsafe { yar_runtime_exit_immediately(1) }
+}
+
+fn write_fatal_message(message: &[u8]) {
+    // A fatal path reached while tasks are active must not perform potentially
+    // blocking OS output before whole-process termination. Single-threaded
+    // failures preserve the ordinary diagnostic contract.
+    if concurrency::unjoined_tasks() != 0 {
+        return;
+    }
+    let _guard = match STDERR_WRITE.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(err)) => err.into_inner(),
+        Err(TryLockError::WouldBlock) => return,
+    };
+    let mut stderr = io::stderr();
+    let _ = stderr.write_all(message);
+    let _ = stderr.flush();
 }
 
 #[unsafe(no_mangle)]
@@ -121,7 +161,7 @@ pub extern "C" fn yar_gc_collect() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_taskgroup_new(elem_size: i32) -> *mut u8 {
+pub extern "C" fn yar_taskgroup_new(elem_size: i64) -> *mut u8 {
     concurrency::taskgroup_new(elem_size)
 }
 
@@ -136,7 +176,7 @@ pub extern "C" fn yar_taskgroup_wait(group: *mut u8) -> YarSlice {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_chan_new(elem_size: i32, capacity: i32) -> *mut u8 {
+pub extern "C" fn yar_chan_new(elem_size: i64, capacity: i32) -> *mut u8 {
     concurrency::chan_new(elem_size, capacity)
 }
 
@@ -445,6 +485,142 @@ pub extern "C" fn yar_net_resolve(host: YarStr, port: i32, out: *mut YarNetAddr)
 mod tests {
     use super::*;
     use std::ffi::CString;
+    use std::process::{Command, Output, Stdio};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone)]
+    struct ChunkedWriter {
+        output: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for ChunkedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let written = bytes.len().min(3);
+            self.output
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .extend_from_slice(&bytes[..written]);
+            std::thread::yield_now();
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn output_lock_keeps_each_complete_write_contiguous() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_lock = Arc::new(Mutex::new(()));
+        let barrier = Arc::new(Barrier::new(3));
+        let mut tasks = Vec::new();
+        for byte in [b'a', b'b'] {
+            let writer = ChunkedWriter {
+                output: Arc::clone(&output),
+            };
+            let output_lock = Arc::clone(&output_lock);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(std::thread::spawn(move || {
+                let message = vec![byte; 3_000];
+                barrier.wait();
+                write_all_locked(
+                    &output_lock,
+                    writer,
+                    message.as_ptr(),
+                    message.len() as i64,
+                    true,
+                );
+            }));
+        }
+        barrier.wait();
+        for task in tasks {
+            task.join().unwrap();
+        }
+
+        let output = output.lock().unwrap_or_else(|err| err.into_inner());
+        let first = output[0];
+        let split = output.iter().position(|&byte| byte != first).unwrap();
+        assert_eq!(split, 3_000);
+        assert!(output[..split].iter().all(|&byte| byte == first));
+        assert!(output[split..].iter().all(|&byte| byte != first));
+    }
+
+    extern "C" fn parked_task(_ctx: *mut u8, _result: *mut u8) {
+        loop {
+            std::thread::park();
+        }
+    }
+
+    extern "C" fn fatal_task(_ctx: *mut u8, _result: *mut u8) {
+        runtime_fail(b"worker failure\n");
+    }
+
+    #[test]
+    fn fatal_worker_terminates_the_process_without_waiting_for_other_tasks() {
+        const CHILD_ENV: &str = "YAR_TEST_FATAL_WORKER";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let group = yar_taskgroup_new(0);
+            yar_taskgroup_spawn(group, parked_task as *mut u8, ptr::null_mut());
+            yar_taskgroup_spawn(group, fatal_task as *mut u8, ptr::null_mut());
+            let _ = yar_taskgroup_wait(group);
+            panic!("fatal worker returned");
+        }
+
+        let output = run_test_child(
+            "tests::fatal_worker_terminates_the_process_without_waiting_for_other_tasks",
+            CHILD_ENV,
+        );
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn fatal_worker_never_waits_for_the_stderr_output_lock() {
+        const CHILD_ENV: &str = "YAR_TEST_FATAL_STDERR_CONTENTION";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let _stderr_guard = STDERR_WRITE.lock().unwrap_or_else(|err| err.into_inner());
+            let group = yar_taskgroup_new(0);
+            yar_taskgroup_spawn(group, fatal_task as *mut u8, ptr::null_mut());
+            loop {
+                std::thread::park();
+            }
+        }
+
+        let output = run_test_child(
+            "tests::fatal_worker_never_waits_for_the_stderr_output_lock",
+            CHILD_ENV,
+        );
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+    }
+
+    fn run_test_child(test_name: &str, child_env: &str) -> Output {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg(test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(child_env, "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                return child.wait_with_output().unwrap();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("child test {test_name} did not terminate");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     fn str_from_runtime(value: YarStr) -> String {
         if value.len == 0 {
@@ -1119,7 +1295,7 @@ mod tests {
 
     #[test]
     fn taskgroup_helpers_run_tasks_and_preserve_spawn_order() {
-        let group = yar_taskgroup_new(size_of::<i32>() as i32);
+        let group = yar_taskgroup_new(size_of::<i32>() as i64);
         assert!(!group.is_null());
 
         let mut first = 2_i32;
@@ -1172,7 +1348,7 @@ mod tests {
 
     #[test]
     fn channel_helpers_are_fifo_and_report_closed() {
-        let handle = yar_chan_new(size_of::<i32>() as i32, 2);
+        let handle = yar_chan_new(size_of::<i32>() as i64, 2);
         assert!(!handle.is_null());
 
         let first = 7_i32;
@@ -1216,7 +1392,7 @@ mod tests {
             1
         );
 
-        let handle = yar_chan_new(size_of::<i32>() as i32, 1);
+        let handle = yar_chan_new(size_of::<i32>() as i64, 1);
         assert_eq!(
             yar_chan_send(handle, (&first as *const i32).cast::<u8>()),
             0

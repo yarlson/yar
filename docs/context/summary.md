@@ -75,5 +75,5 @@
 - Rust runtime static library for native linking
 - Embedded Yar standard library compiled through the same frontend as user code
 - Rust tests that validate compiler slices and the runtime crate's exported ABI helpers, plus Rust CLI verifier scripts that native-build and run checked-in `testdata/**/main.yar` fixtures
-- GitHub Actions CI for formatting, linting, Linux/macOS workspace and fixture tests, Windows subprocess-control tests, and release packaging dry runs
+- GitHub Actions CI for formatting, linting, Linux/macOS workspace and fixture tests, Windows subprocess-control and native concurrency fixture tests, and release packaging dry runs
 - GoReleaser-based GitHub Release CD for version tags

@@ -452,14 +452,20 @@ taskgroup []void {
 - result types are unrestricted because results become visible only after join
 - `spawn` is rejected inside a function literal nested under the same taskgroup
 - `return` is rejected inside a taskgroup body
+- `noreturn` expression statements are rejected inside a taskgroup body because they would bypass the mandatory join
 - `?` is rejected inside a taskgroup body because it could bypass the join;
   nested function literals remain separate propagation scopes
 - `break` / `continue` cannot jump out through an enclosing loop outside the taskgroup
 - channels are bounded FIFO values
 - `chan_send` / `chan_recv` report `error.Closed` on closed-channel failure
 - channels support `==` and `!=` identity comparison
-- each successful `spawn` starts one POSIX thread immediately; Windows
-  concurrency calls fail at runtime
+- each successful `spawn` starts one native OS thread immediately on Linux,
+  macOS, and Windows GNU
+- taskgroup joins reclaim their internal handles; unreachable managed channel
+  tokens finalize their synchronized external state and buffered roots
+- task accounting rejects overflow/underflow; runtime stdout/stderr writes are
+  atomic per call; fatal paths omit diagnostics while any task is unjoined,
+  then immediately terminate without waiting or running shutdown handlers
 - arguments and captures are shallow copies, not deep copies; bare `i64`
   handles remain indistinguishable from ordinary scalar integers to the checker
 - runtime-backed `i64` handles are kind-checked, non-reused process-local
@@ -1018,4 +1024,5 @@ Cache: `$HOME/Library/Caches/yar/deps/` on macOS, otherwise
 - No `while` or range-for
 - Methods are not first-class values
 - Raw errorable call expressions must be handled immediately (`?`, `or`, or `return`)
-- `void`/`noreturn` cannot be used in parameters, fields, array elements, or channel elements; `[]void` is used for taskgroup results
+- `void`/`noreturn` cannot be used in parameters, fields, array elements, or channel elements; first-class errorable types cannot be channel elements; `[]void` is used for taskgroup results
+- taskgroup and channel element sizes use a checked signed 64-bit compiler/runtime ABI
