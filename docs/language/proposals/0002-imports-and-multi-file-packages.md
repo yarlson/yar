@@ -1,6 +1,7 @@
 # Proposal: Imports and Multi-File Packages
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -261,12 +262,12 @@ rejected, and lowering preserves origin-safe symbol identity.
 
 ## 14. Implementation Checklist
 
-- parser
-- package/file AST model
-- checker name resolution and visibility
-- import graph and cycle diagnostics
-- codegen package compilation changes
-- CLI/package build model
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] package/file AST model
+- [x] checker name resolution and visibility
+- [x] import graph and cycle diagnostics
+- [x] codegen package compilation changes
+- [x] CLI/package build model
+- [x] tests
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

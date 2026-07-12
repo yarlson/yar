@@ -1,122 +1,78 @@
 # Proposal: <feature name>
 
-Status: exploring | proposed | accepted | rejected | deferred
+Status: exploring | proposed | accepted | rejected | deferred | withdrawn
+
+Implementation: not started | partial | implemented | removed
 
 ## 1. Summary
 
-Briefly describe the feature.
+Briefly describe the feature and its boundary.
 
 ## 2. Motivation
 
 What concrete pain, limitation, inconsistency, or missing capability exists in
-the language today?
-
-Use current language examples where possible.
+the language today? Use current examples where possible.
 
 ## 3. User-Facing Examples
 
-Provide small examples of intended usage.
-
-### Valid examples
-
-```
-// example
-```
-
-### Invalid examples
-
-```
-// example
-```
-
-Explain why each invalid example is invalid.
+Provide small valid and invalid examples and explain every invalid case.
 
 ## 4. Semantics
 
-Describe precisely what the feature means.
-
-Answer:
-
-- what it does
-- when it applies
-- what control flow it causes
-- what values and types are involved
-- what the language guarantees
+Define what the feature does, when it applies, its values and types, control
+flow, guarantees, limits, and failure behavior.
 
 ## 5. Type Rules
 
-Describe:
-
-- what is well-typed
-- what is not well-typed
-- constraints on operands / operands and results
-- restrictions in declarations, statements, and expressions
+Define what is well-typed, what is rejected, and every declaration, statement,
+expression, operand, and result restriction.
 
 ## 6. Grammar / Parsing Shape
 
-Describe the syntax form and any precedence or ambiguity concerns.
+Describe syntax, precedence, ambiguity, and parser impact. Say `None` when the
+feature adds no grammar.
 
 ## 7. Lowering / Implementation Model
 
-Explain how the feature maps into existing compiler structures.
-
-Cover:
-
-- parser impact
-- AST / IR impact
-- checker impact
-- codegen impact
-- runtime impact, if any
+Cover parser, AST/IR, checker, lowering/codegen, runtime, platform, and migration
+impact as applicable. This section is implementation guidance, not current-state
+authority.
 
 ## 8. Interactions
 
-Describe how the feature interacts with existing or likely-future areas:
-
-- errors
-- structs
-- arrays
-- control flow
-- returns
-- builtins
-- future modules/imports
-- future richer type features
+Cover errors, data types, control flow, concurrency, resources, packages,
+standard library, tooling, and likely future features.
 
 ## 9. Alternatives Considered
 
-List at least two alternatives and why they were not chosen.
+Describe at least two plausible alternatives and why they were not selected.
 
 ## 10. Complexity Cost
 
-Evaluate cost in:
-
-- language surface
-- parser complexity
-- checker complexity
-- lowering/codegen complexity
-- runtime complexity
-- diagnostics complexity
-- test burden
-- documentation burden
+Evaluate language surface, parser, checker, lowering/codegen, runtime,
+diagnostics, testing, documentation, platform, and operational cost.
 
 ## 11. Why Now?
 
-Why does this belong in the current milestone instead of later?
+Explain why this belongs in the current plan rather than later.
 
 ## 12. Open Questions
 
-List unresolved questions, if any.
+List unresolved questions. Acceptance requires that none can silently change the
+public contract.
 
 ## 13. Decision
 
-Accepted / Rejected / Deferred, with a short explanation.
+Record Accepted, Rejected, Deferred, or Withdrawn with a concise rationale.
 
-## 14. Implementation Checklist
+## 14. Acceptance and Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- parser / AST / checker / lowering / codegen changes as applicable
+- runtime and platform changes as applicable
+- positive, negative, boundary, and failure-path tests
+- representative `testdata/` update when behavior changes
+- `docs/YAR.md` update for public current behavior
+- affected `docs/context/` updates for internal current behavior
+- `LLM.txt` derived-reference update
+- `decisions.md` update when decision rationale changes
+- synchronized proposal-registry update after all acceptance evidence is complete

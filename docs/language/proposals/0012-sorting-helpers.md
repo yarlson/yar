@@ -1,6 +1,7 @@
 # Proposal: Sorting Helpers
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -193,7 +194,7 @@ programs while staying within the current language model.
 
 ## 13. Decision
 
-Accepted and implemented.
+Accepted. The proposal's delivery state records the implemented baseline.
 
 This is a small library proposal that complements map key extraction and host
 filesystem access in the larger self-hosting track while staying entirely in
@@ -204,5 +205,5 @@ the stdlib.
 - [x] stdlib package implementation
 - [x] integration tests for sorted output
 - [x] documentation updates
-- [x] `current-state.md` update
+- [x] `docs/YAR.md` update
 - [x] `decisions.md` update

@@ -1,6 +1,7 @@
 # Proposal: Minimal Runtime-Managed Memory
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -258,7 +259,7 @@ Without a shared memory story:
 That would create unnecessary redesign pressure and unclear interactions.
 
 The smallest useful move is to decide the common memory baseline now, before the
-first heap-backed feature is accepted and implemented.
+first heap-backed feature is accepted; delivery is tracked independently.
 
 ## 12. Open Questions
 
@@ -276,16 +277,17 @@ first heap-backed feature is accepted and implemented.
 Accepted.
 
 YAR now treats runtime-managed heap memory as the shared foundation for future
-heap-backed features. The internal runtime allocation boundary exists, but this
-proposal still does not imply that any user-visible heap feature is already
-implemented or shipped.
+heap-backed features. The shared allocation and conservative reclamation model
+is implemented and currently backs slices, maps, pointer-supporting storage,
+strings, channels, and other runtime-managed values. Collection remains a
+runtime concern with no user-visible lifetime or deallocation syntax.
 
 ## 14. Implementation Checklist
 
-- proposal cross-references from heap-backed features
-- runtime allocation boundary
-- codegen hooks for heap-allocating operations
-- diagnostics for unrecoverable allocation failure
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] proposal cross-references from heap-backed features
+- [x] runtime allocation boundary
+- [x] codegen hooks for heap-allocating operations
+- [x] diagnostics for unrecoverable allocation failure
+- [x] tests
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

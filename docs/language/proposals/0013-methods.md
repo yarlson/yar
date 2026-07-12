@@ -1,6 +1,7 @@
 # Proposal: Methods
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -170,9 +171,9 @@ appears in examples or downstream ideas.
 
 ## 13. Decision
 
-Accepted and implemented as a small, explicit feature: methods exist only on
-named struct types, use exact receiver matching, and lower to ordinary
-functions.
+Accepted as a small, explicit feature. In the implemented baseline, methods
+exist only on named struct types, use exact receiver matching, and lower to
+ordinary functions.
 
 ## 14. Implementation Checklist
 
@@ -182,5 +183,5 @@ functions.
 - [x] codegen
 - [x] diagnostics
 - [x] tests
-- [x] `current-state.md` update
+- [x] `docs/YAR.md` update
 - [x] `decisions.md` update

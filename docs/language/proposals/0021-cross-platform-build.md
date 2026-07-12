@@ -1,6 +1,7 @@
 # Proposal: Cross-Platform Build and Runtime
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -15,7 +16,7 @@ The implemented version provides:
   windows/amd64
 - host platform detection as default target
 - cross-compilation validation (prevents running cross-compiled binaries)
-- validated target-specific runtime bundles for Win32 and POSIX APIs
+- validated target-specific Rust runtime bundles and native-library metadata
 - platform-aware executable naming (`.exe` suffix for Windows)
 
 Current implementation note: host builds link the Rust runtime. The Rust CLI
@@ -38,9 +39,9 @@ Cross-compilation support requires two things:
 Environment variables were chosen over CLI flags because they compose naturally
 with existing build workflows and can be set once for a session.
 
-Windows support was the primary driver because it required porting all
-host-backed runtime functions (filesystem, process, environment) from POSIX to
-Win32 APIs.
+Windows support was the primary driver because it required the Rust runtime,
+process-control boundary, collector, and native-library contract to build and
+operate correctly for the Windows GNU target.
 
 ## 3. User-Facing Examples
 
@@ -127,16 +128,11 @@ No new syntax. Target selection is entirely through environment variables.
 - compiler orchestration impact: `Target::resolve()` reads environment
   variables, validates the combination, and returns a target containing the
   triple, OS, and architecture; `is_cross()` is checked before execution
-- runtime impact: high; Rust `#[cfg(...)]` platform modules provide conditional
-  implementations:
-  - filesystem: `CreateDirectoryA`, `FindFirstFileA`/`FindNextFileA`,
-    `GetFileAttributesA`, `DeleteFileA`, `RemoveDirectoryA`,
-    `GetTempPathA` on Windows vs `mkdir`, `opendir`/`readdir`, `stat`,
-    `unlink`, `rmdir`, `getenv("TMPDIR")` on POSIX
-  - process: `CreateProcessA` and Win32 handles on Windows vs
-    `fork`/`execvp`/`waitpid` on POSIX
-  - environment: `GetEnvironmentVariableA` on Windows vs `getenv` on POSIX
-  - I/O: Rust standard I/O at the C ABI boundary on both platforms
+- runtime impact: high; one Rust static library builds for every supported
+  target. Rust standard-library filesystem, process, environment, I/O, and
+  networking APIs provide the shared host boundary. Target-specific `#[cfg]`
+  code is limited to behavior that genuinely differs, including stack-root
+  discovery, signal handling, process containment, and native link metadata.
 
 ## 8. Interactions
 
@@ -146,7 +142,7 @@ No new syntax. Target selection is entirely through environment variables.
 - control flow: no interaction
 - returns: no interaction
 - builtins: no interaction
-- testing: `yar test` checks `IsCross()` and refuses to execute cross-compiled
+- testing: `yar test` checks `is_cross()` and refuses to execute cross-compiled
   test binaries
 - future modules/imports: no interaction
 - future richer type features: no interaction
@@ -172,8 +168,8 @@ No new syntax. Target selection is entirely through environment variables.
 - lowering/codegen complexity: low (target triple in IR)
 - compiler orchestration complexity: moderate (target resolution, validation,
   cross-compilation detection)
-- runtime complexity: high (conditional compilation for all host-backed
-  functions across Win32 and POSIX)
+- runtime complexity: high (portable Rust host operations plus focused
+  target-specific runtime and process-control code)
 - diagnostics complexity: low
 - test burden: moderate
 - documentation burden: moderate
@@ -195,7 +191,7 @@ environments.
 
 ## 13. Decision
 
-Accepted and implemented. Cross-compilation uses `YAR_OS` and `YAR_ARCH`
+Accepted. In the implemented baseline, cross-compilation uses `YAR_OS` and `YAR_ARCH`
 environment variables with a fixed target triple mapping. Native builds link a
 validated Rust runtime bundle for the selected target. Bundle format, runtime
 ABI, and compiler compatibility are independent exact-match epochs; bundle

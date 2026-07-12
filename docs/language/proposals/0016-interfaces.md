@@ -1,6 +1,7 @@
 # Proposal: Interfaces
 
-Status: accepted and implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -169,7 +170,7 @@ as a focused follow-on abstraction rather than a speculative placeholder.
 
 ## 13. Decision
 
-Accepted and implemented as a small, explicit interface system:
+Accepted as a small, explicit interface system. The implemented baseline has:
 
 - named interfaces only
 - implicit concrete satisfaction
@@ -178,12 +179,12 @@ Accepted and implemented as a small, explicit interface system:
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- docs/context update
-- `docs/YAR.md` update
-- `docs/language` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] diagnostics
+- [x] tests
+- [x] `docs/context/` update
+- [x] `docs/YAR.md` update
+- [x] `docs/language/` update

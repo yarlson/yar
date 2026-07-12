@@ -1,6 +1,7 @@
 # Proposal: Host Filesystem and Path Utilities
 
-Status: implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -333,20 +334,20 @@ boundary.
   into the runtime?
 ## 13. Decision
 
-Proposed.
-
-This should be evaluated as part of a self-hosting milestone rather than
-accepted in isolation from the rest of the host-bound surface.
+Accepted. The embedded `std/fs` package owns the implemented text-oriented
+filesystem operations and opaque streaming files; `std/path` owns pure path
+composition. Irreducible host operations lower through the Rust runtime while
+composed policy remains in Yar source.
 
 ## 14. Implementation Checklist
 
-- stdlib package API design
-- runtime host I/O boundary
-- lowering/codegen hooks for host calls
-- Yar-level implementation plan for `path`
-- Yar-level implementation plan for recursive/composed `fs` helpers
-- diagnostics for host-failure error names
-- integration tests for file loading and output writing
-- package-loader migration plan
-- `current-state.md` update
-- `decisions.md` update
+- [x] stdlib package API design
+- [x] Rust runtime host I/O boundary
+- [x] lowering/codegen hooks for host calls
+- [x] Yar implementation of `path`
+- [x] Yar wrappers around filesystem host intrinsics
+- [x] diagnostics for host-failure error names
+- [x] integration tests for file loading, streaming, and output writing
+- [x] embedded `std/...` package-loader integration
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

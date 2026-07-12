@@ -1,6 +1,7 @@
 # Proposal: Text and UTF-8 Helpers
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -265,12 +266,12 @@ rather than growing the builtin surface.
 
 ## 14. Implementation Checklist
 
-- `chr` builtin or runtime helper
-- `stdlib/packages/utf8/utf8.yar`
-- `stdlib/packages/strings/strings.yar` additions (`parse_i64`,
+- [x] `chr` builtin or runtime helper
+- [x] `stdlib/packages/utf8/utf8.yar`
+- [x] `stdlib/packages/strings/strings.yar` additions (`parse_i64`,
   `from_byte`)
-- `stdlib/packages/conv/conv.yar`
-- integration tests for each stdlib package
-- `docs/YAR.md` update
-- `docs/context/` update
-- `decisions.md` update
+- [x] `stdlib/packages/conv/conv.yar`
+- [x] integration tests for each stdlib package
+- [x] `docs/YAR.md` update
+- [x] `docs/context/` update
+- [x] `decisions.md` update

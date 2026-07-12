@@ -1,7 +1,7 @@
 # YAR Decisions
 
-This file records accepted, rejected, and deferred design decisions so the same
-questions do not need to be re-litigated repeatedly.
+This file records accepted, rejected, deferred, and withdrawn design decisions
+so the same questions do not need to be re-litigated repeatedly.
 
 Entries should be short and clear.
 
@@ -91,12 +91,15 @@ Status: accepted
 Language sugar is acceptable only when it maps cleanly onto simpler existing
 semantics.
 
-### Current-state docs are descriptive only
+### Documentation authority is explicit
 
 Status: accepted
 
-`current-state.md` documents what the compiler actually implements, not future
-plans.
+`docs/YAR.md` is the public reference for implemented behavior. `docs/context/`
+is the contributor-facing description of the current architecture and its
+operational boundaries. This file records locked decisions. Proposals preserve
+design history and may contain explicitly labeled deferred or superseded work;
+they do not override the implemented reference or current architecture.
 
 ### Heap memory is runtime-managed
 
@@ -320,37 +323,15 @@ package. A targeted git update replaces its reachable graph, preserves nodes
 unrelated to the selected graph, refreshes compatible shared nodes, and prunes
 orphans; a targeted path update requires full `yar lock` reconciliation.
 
----
-
-## Rejected
-
-### `try` / `catch` style default error model
-
-Status: rejected
-
-YAR does not use exception-style primary error handling.
-
-### Hidden exception-like control flow
-
-Status: rejected
-
-The language should not hide non-local control flow behind implicit mechanisms.
-
-### Feature growth without written semantics
-
-Status: rejected
-
-Features should not be added purely from intuition or implementation momentum.
-
----
-
-## Deferred
-
 ### Generics
 
-Status: deferred
+Status: accepted
 
-Too large and too interaction-heavy for the current stage of the language.
+YAR supports generic structs and functions with explicit type parameters and
+explicit type arguments at every use site. A monomorphization pass rewrites
+instantiations before semantic checking and code generation. The current scope
+has no inference, constraints, generic enums, generic methods, or methods on
+instantiated generic types.
 
 ### Basic string operations
 
@@ -380,8 +361,6 @@ Helper functions for text-heavy programs live in stdlib packages (`strings`,
 `i64_to_i32`) provide the minimal compiler-level support needed. The stdlib
 packages provide `utf8.decode`, `utf8.width`, rune classification, integer
 parsing, integer-to-string conversion, and single-byte string construction.
-
----
 
 ### Maps
 
@@ -453,7 +432,51 @@ archive. `YAR_RUNTIME_ARCHIVE` is rejected with migration guidance.
 
 ---
 
+## Rejected
+
+### `try` / `catch` style default error model
+
+Status: rejected
+
+YAR does not use exception-style primary error handling.
+
+### Hidden exception-like control flow
+
+Status: rejected
+
+The language should not hide non-local control flow behind implicit mechanisms.
+
+### Feature growth without written semantics
+
+Status: rejected
+
+Features should not be added purely from intuition or implementation momentum.
+
+---
+
+## Withdrawn
+
+### The original HTTP server contract
+
+Status: withdrawn
+
+The original `std/http` experiment was removed because single-read request
+parsing, ambiguous framing, unvalidated response headers, and an unbounded
+connection lifecycle were not a safe server contract. HTTP serving requires a
+new accepted design with bounded streaming, deadlines, strict framing, resource
+ownership, and adversarial socket tests.
+
+### Routing without a safe HTTP server substrate
+
+Status: withdrawn
+
+The routing proposal depended on the removed server contract. Its routing model
+was not independently rejected; routing can be reconsidered after a safe HTTP
+serving design reaches accepted status and its implementation is complete.
+
+---
+
 ## Decision Update Rule
 
 Any meaningful design decision should be recorded here when it becomes accepted,
-rejected, or explicitly deferred.
+rejected, explicitly deferred, or withdrawn.

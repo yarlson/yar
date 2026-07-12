@@ -1,6 +1,7 @@
 # Proposal: Minimal HTTP Server (`http` stdlib package)
 
 Status: withdrawn
+Implementation: removed
 
 This proposal records a removed experiment, not current behavior. The shipped
 implementation assumed that a complete request head arrived in one TCP read,

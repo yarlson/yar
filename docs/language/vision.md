@@ -124,7 +124,8 @@ For each milestone, prefer:
 - at most one meaningful new control-flow feature set
 - no major feature without written semantics
 - no major feature without interaction analysis
-- no major feature without tests and current-state documentation updates
+- no major feature without tests and updates to its owned public and internal
+  current-state documentation
 
 ## Design Standard
 

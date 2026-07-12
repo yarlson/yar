@@ -1,6 +1,7 @@
 # Proposal: Basic String Operations
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -195,5 +196,5 @@ substring. Out-of-range indexing and slicing trap at runtime.
 - [x] runtime string concat and bounds checks
 - [x] diagnostics
 - [x] tests
-- [x] `current-state.md` update
+- [x] `docs/YAR.md` update
 - [x] `decisions.md` update

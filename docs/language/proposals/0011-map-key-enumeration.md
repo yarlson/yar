@@ -1,6 +1,7 @@
 # Proposal: Map Key Enumeration
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -200,5 +201,5 @@ without expanding the control-flow surface unnecessarily.
 - [x] lowering/codegen hook
 - [x] map integration tests
 - [x] diagnostics for misuse
-- [x] `current-state.md` update
+- [x] `docs/YAR.md` update
 - [x] `decisions.md` update

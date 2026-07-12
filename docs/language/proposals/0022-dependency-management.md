@@ -1,6 +1,7 @@
 # Proposal: Dependency Management
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 

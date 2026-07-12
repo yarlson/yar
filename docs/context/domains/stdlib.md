@@ -337,22 +337,19 @@ Functions:
 - Performance is straightforward and correctness-first. Concatenation-heavy
   functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for
   large inputs, and `sort` uses O(n^2) insertion sort.
-- The Rust `fs`, `process`, and `net` runtime boundaries use `#[cfg(...)]`
-  platform modules to support both POSIX and Windows implementations.
-  On POSIX, the implementations use `stat`, `opendir`, `mkdir`, `remove`,
-  `fork`, `execvp`, `waitpid`, `mkstemp`, and BSD sockets (`socket`, `bind`,
-  `listen`, `accept`, `connect`, `recv`, `send`, `getaddrinfo`). On Windows,
-  the implementations use Win32 APIs (`CreateFileA`, `FindFirstFileA`,
-  `CreateDirectoryA`, `CreateProcessA`, `GetEnvironmentVariableA`, and
-  Winsock2 functions). Windows runtime bundles include the complete ordered
-  native-library contract for the Rust staticlib, including `ws2_32`.
+- The Rust runtime uses `std::fs`, `std::path`, and `std::env` for portable
+  filesystem and environment behavior, `std::net` for TCP, and the shared
+  `yar-process-control` crate for child execution. Platform-specific code owns
+  only the contracts that differ: Unix path bytes, process groups and signals,
+  Windows path conversion and Job Objects, and GC stack discovery. Runtime
+  bundles carry the complete ordered native-library contract for each Rust
+  static library target, including `ws2_32` on Windows.
 - The `net` package exposes typed share-safe references backed by kind-checked,
   non-reused registry IDs. Raw IDs remain internal. Operations block only their
   native task thread. Close wakes blocked socket operations before waiting for
   cleanup. The runtime polls nonblocking sockets with adaptive bounded waits
   against per-operation relative timeouts; this portable native-thread model is
-  not a high-scale readiness poller. SIGPIPE is suppressed on POSIX
-  (`signal(SIGPIPE, SIG_IGN)` and `SO_NOSIGPIPE` on macOS).
+  not a high-scale readiness poller.
 - Process execution requires at least one argv element. Empty command vectors,
   invalid host strings, invalid timeouts, and invalid capture caps surface
   `error.InvalidArgument`.

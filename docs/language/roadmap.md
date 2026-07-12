@@ -1,250 +1,66 @@
 # YAR Roadmap
 
-This document tracks intended language evolution.
+This document contains future planning only. It is aspirational, not an
+implemented-language reference and not a record of accepted decisions.
 
-Unlike `current-state.md`, this document is aspirational. It describes what the
-language is expected to grow toward, not necessarily what the compiler already
-implements today.
+For current behavior, use [`docs/YAR.md`](../YAR.md). For accepted, rejected,
+deferred, or withdrawn rationale, use [`decisions.md`](decisions.md) and the
+[`proposal registry`](README.md).
 
-## Planning Rules
+## Planning rules
 
-- milestones are defined by newly enabled programming capabilities
-- each milestone should stay small
-- accepted scope should be explicit
-- deferred items should be recorded clearly
-- current-state documentation remains separate and descriptive only
+- Roadmap appearance does not imply proposal acceptance.
+- Milestones are defined by newly enabled programming capabilities.
+- Each milestone should remain intentionally small.
+- Accepted scope requires a proposal and explicit decision.
+- Implemented or removed work leaves this roadmap; history remains in proposals,
+  decisions, and version control.
 
----
+## Active proposed work
 
-## v0.1 / current baseline
+### Time values and UTC
 
-Current baseline already includes:
+Proposal [0024](proposals/0024-time.md) explores distinct timestamp, monotonic
+instant, and duration values with a deliberately small UTC-first standard
+library. It remains proposed and not started.
 
-- multi-file packages
-- entry `package main` plus imports
-- origin-scoped package identity and import resolution
-- top-level `struct` and `fn`
-- primitive types plus `error`
-- fixed-size arrays
-- slices
-- typed pointers and recursive data
-- enums with exhaustive `match`
-- explicit generic structs and functions
-- named interfaces with dynamic dispatch
-- `if`, `else`, `for`, `break`, `continue`
-- boolean operators `&&` and `||`
-- explicit error model with `!T`, `?`, and `or |err| { ... }`
-- an explicit checked-program boundary before LLVM generation
-- LLVM-based native code generation
-- validated target runtime bundles for native and cross linking
+Before acceptance it must retain clear type separation, platform semantics,
+overflow behavior, textual formats, and tests that do not depend on mutable
+process-global timezone state.
 
-See `current-state.md` for exact truth.
+## Future candidates
 
----
+These are possible directions, not commitments:
 
-## v0.2 goal
-
-v0.2 should make the language more complete and internally coherent, while
-avoiding a large jump in complexity.
-
-### Candidate focus areas
-
-#### 1. Broader expression completeness
-
-Consider whether additional expression polish is needed, but keep scope tight.
-
-#### 2. Language consistency pass
-
-Tighten rough edges in:
-
-- type rules
-- error restrictions
-- literal behavior
-- diagnostics
-- statement/expression boundaries
-
-The goal is not lots of new features, but a cleaner and more uniform language.
-
-### v0.2 likely non-goals
-
-- methods
-- enums
-- generics
-- pattern matching
-- exceptions
-
----
-
-## v0.3 capability: dependency management (implemented)
-
-Git-based dependency management is now implemented:
-
-- `yar.toml` manifest with alias-based dependency declarations
-- `yar.lock` lock file with exact commit SHAs and content hashes
-- git-based fetching to a global cache with integrity verification
-- transitive dependency resolution with conflict detection
-- nearest-ancestor project discovery and explicit `--manifest-path` selection
-  across compilation and dependency commands
-- recoverable `yar.toml`/`yar.lock` publication with phase-aware interruption
-  recovery and transactional lock deletion
-- CLI commands: `init`, `add`, `remove`, `fetch`, `lock`, `update`
-- CLI process contract: side-effect-free help/version, delimited `run` argv,
-  named missing-tool errors, and shared deadline/descendant containment for
-  native-build, test-binary, and Git subprocesses
-- compiler integration: reserved `std/...` lookup, same-origin packages,
-  owner-declared aliases, and origin-safe package identities
-- lock v1 retains global alias/source uniqueness even though visibility is
-  owner-scoped
-
-### Remaining package ergonomics candidates
-
-- import aliases if they become necessary
-- lock v2 support for different owners reusing one alias for different targets
-- richer diagnostics around package loading
-
----
-
-## v0.3.1 capability: language ergonomics (implemented)
-
-Driven by real-world usage in yar-cli and yar-toml, these improvements reduce
-common boilerplate without adding new semantic models:
-
-- compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`)
-- open-ended slice syntax (`s[i:]`, `s[:j]`)
-- single-field enum positional constructors (`Enum.Case(value)`)
-- stdlib additions: `strings.split`, `strings.trim`, `strings.to_lower`,
-  `strings.to_upper`
-
-## v0.3.2 experiment: tiny native HTTP services (withdrawn)
-
-The former `http` stdlib package attempted a minimal HTTP/1.1 server wrapper
-over `net` with:
-
-- `http.Request` and `http.Response`
-- `http.text(status, body)`
-- `http.serve(net.Addr, fn(http.Request) !http.Response)`
-- one request per connection
-- sequential connection processing
-- handler errors become `500` responses
-
-The experiment was removed from the current standard library. It assumed a
-complete request head arrived in one TCP read, accepted ambiguous framing and
-unvalidated response headers, and had no deadline or bounded connection
-lifecycle. A replacement requires a new accepted design plus adversarial
-socket tests; routing remains withdrawn with its missing server substrate.
-
-## v0.3.3 capability: streaming resources (implemented)
-
-The `io` stdlib package and streaming resource wrappers establish a shared
-blocking stream model:
-
-- `io.Reader`, `io.Writer`, `io.Closer`, and combined stream interfaces
-- `io.copy`, `io.read_all`, and `io.close_quiet`
-- `fs.File` handles from `fs.open_read` and `fs.open_write`
-- `net.Conn` and `net.Listener` wrappers around the existing TCP handles
-
-This is the foundation for future HTTP request/response streaming without
-adding ownership syntax, `defer`, async/await, or allocator controls.
-
----
-
-## Accepted foundation: heap-backed feature memory model
-
-The minimal runtime-managed memory model is now an accepted design foundation.
-
-- future heap-backed features should reuse the shared allocation boundary
-- allocation failure is outside the ordinary `error` model
-- the current Rust runtime reclaims unreachable blocks with conservative,
-  non-moving garbage collection
-- this is already used by slices, pointers, maps, richer string operations, and
-  other heap-backed runtime values
-
----
-
-## v0.4 candidate capability: richer data modeling
-
-Once organization is in place, richer domain modeling may become the next
-priority.
-
-### Candidate focus
-
-- follow-on enum ergonomics once real pressure appears
-- richer data-modeling features beyond the current enum and struct set
-- maybe related pattern work if a small, coherent next step becomes clear
-
-This area should be approached carefully because it has many interactions with:
-
-- arrays
-- structs
-- errors
-- future pattern matching ideas
-
----
-
-## v0.5 candidate capability: self-hosting preparation
-
-The language is now close to being able to express a self-hosted frontend in
-memory. The next likely milestone is to close the remaining boundary gaps so
-compiler and tooling programs become practical end to end.
-
-### Candidate focus
-
-- host filesystem and path access for package loading and artifact output
-- host process, environment, stderr, and argv support for compiler CLI work
-- deterministic sorting helpers for stable diagnostics, package order, and error
-  code assignment
-
-### Candidate proposal set
-
-- `0009-host-filesystem-and-path-utilities.md`
-- `0010-host-process-and-environment.md`
-- `0011-map-key-enumeration.md`
-- `0012-sorting-helpers.md`
-
-### v0.5 likely non-goals
-
-- shell syntax or pipelines
-- full map iterator protocols
-- advanced module or package-manager design
-
----
-
-## Backlog
-
-These are interesting but not currently committed:
-
-- richer builtin library
-- more numeric types
-- explicit conversion syntax
-- pattern matching
-- closures
-- `0015-closures.md`
-- concurrency primitives
-
----
+- lock-format evolution if owner-local dependency alias reuse becomes necessary;
+- import aliases if real programs expose qualifier ambiguity that package names
+  cannot resolve cleanly;
+- additional numeric types and explicit conversions when concrete interop or
+  correctness requirements justify their surface area;
+- pattern matching beyond the current exhaustive enum `match` only when a
+  smaller data-modeling feature cannot solve the same programs;
+- richer data modeling only when concrete programs expose a gap not solved by
+  current structs, enums, interfaces, and generics;
+- a new HTTP design only after bounded streaming, framing, deadlines, resource
+  ownership, and adversarial socket behavior are specified together;
+- additional standard-library capabilities driven by real compiler or tooling
+  pressure;
+- carefully scoped diagnostics and developer-experience improvements.
 
 ## Deferred by default
 
-These items should be considered high-cost and deferred unless a strong case is
-made:
+The following remain high-cost unless concrete pressure justifies a proposal:
 
-- macros
-- operator overloading
-- exceptions
-- implicit conversions
-- hidden control-flow features
-- large metaprogramming systems
+- macros and large metaprogramming systems;
+- operator overloading;
+- exception-style hidden control flow;
+- broad implicit conversions;
+- syntax whose edge cases outweigh its capability gain;
+- async or scheduler machinery without a workload that the native-thread model
+  cannot serve safely.
 
----
+## Promotion rule
 
-## Roadmap Discipline
-
-A roadmap item is not accepted just because it appears here.
-
-For a feature to become accepted work, it should have:
-
-- a proposal doc
-- examples
-- semantics
-- interaction analysis
-- a clear milestone fit
+A candidate becomes accepted work only after it has a proposal with examples,
+semantics, invalid cases, interaction analysis, alternatives, complexity cost,
+acceptance tests, and an explicit decision.

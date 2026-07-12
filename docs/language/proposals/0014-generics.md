@@ -1,6 +1,7 @@
 # Proposal: Generics
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -210,12 +211,12 @@ polymorphism into the language yet.
 
 ## 13. Implementation Checklist
 
-- parser
-- AST updates
-- package lowering updates
-- monomorphization pass
-- checker compatibility updates
-- codegen symbol compatibility updates
-- diagnostics
-- tests
-- current-state documentation updates
+- [x] parser
+- [x] AST updates
+- [x] package lowering updates
+- [x] monomorphization pass
+- [x] checker compatibility updates
+- [x] codegen symbol compatibility updates
+- [x] diagnostics
+- [x] tests
+- [x] `docs/context/` updates

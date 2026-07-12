@@ -11,17 +11,24 @@ For implementation work in this repository, follow this order:
 5. update `testdata/` meaningfully and reasonably when behavior, fixtures, or representative programs change
 6. run `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
 7. fix issues from lint and tests
-8. update `docs/context/`
-9. update `docs/YAR.md`, `LLM.txt`
-10. update `docs/language`
+8. update affected `docs/context/` files when internal architecture or
+   operations changed
+9. update `docs/YAR.md` when public language/API behavior changed, then update
+   the derived `LLM.txt` mirror
+10. update `docs/language` when design status, rationale, proposal evidence,
+    delivery state, process, or future planning changed
 11. use `/review` slash command from `~/.claude/commands/review.md` or `review` skill to review the code
 12. fix all found issues
 13. run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `./scripts/verify-rust-testdata.sh`, and `./scripts/verify-rust-testdata-run.sh`
 14. fix issues from lint and tests
-15. if needed, update `docs/context/`, `docs/YAR.md`, `docs/language`, `LLM.txt`
+15. if needed, repair the affected owned documentation surfaces
 
-Do not skip the documentation updates when implementation changes behavior,
-capabilities, constraints, runtime details, or accepted language design.
+Documentation ownership is defined in `docs/language/process.md`: code and tests
+are behavioral authority, `docs/YAR.md` owns current public behavior,
+`docs/context/` owns current internal behavior, `LLM.txt` is derived, proposals
+preserve design/evidence, decisions preserve rationale, and the roadmap is
+future-only. Do not update unrelated documentation merely to touch every layer,
+and do not skip the surfaces whose owned truth changed.
 
 Do not skip test work for implementation changes. Add or update automated tests at
 the highest-value layer for the change, and keep `testdata/` focused on
