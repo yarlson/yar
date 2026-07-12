@@ -145,8 +145,10 @@
   blocks with a conservative non-moving collector. Allocation failure remains
   an unrecoverable runtime failure rather than a YAR `error`.
 - String-builder and streaming-file handles plus compiler-internal network IDs
-  are process-local registry IDs, never native addresses. The registry validates
-  ID and resource kind and never reuses an issued ID. Typed opaque `net.Conn`
+  are positive process-local opaque `i64` tokens, never native addresses. The
+  registry validates slot generation and resource kind. Vacant slots may be
+  reused only with a new generation and therefore a different full token; stale
+  and wrong-kind attempts do not consume the live entry. Typed opaque `net.Conn`
   and `net.Listener` values are share-safe references; raw network IDs are
   internal.
 - Network close linearizes at registry removal, wakes blocked accept/read/write

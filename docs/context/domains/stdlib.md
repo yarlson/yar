@@ -345,7 +345,9 @@ Functions:
   bundles carry the complete ordered native-library contract for each Rust
   static library target, including `ws2_32` on Windows.
 - The `net` package exposes typed share-safe references backed by kind-checked,
-  non-reused registry IDs. Raw IDs remain internal. Operations block only their
+  generation-tagged registry tokens. Vacant slots may be reused, but their new
+  generation changes the full token and leaves stale generations invalid. Raw
+  IDs remain internal. Operations block only their
   native task thread. Close wakes blocked socket operations before waiting for
   cleanup. The runtime polls nonblocking sockets with adaptive bounded waits
   against per-operation relative timeouts; this portable native-thread model is

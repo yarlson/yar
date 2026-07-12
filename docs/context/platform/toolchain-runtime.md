@@ -212,11 +212,19 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 ### Runtime Handle Registry
 
 - String builders, streaming files, TCP listeners, and TCP connections use
-  positive process-local registry IDs rather than exposed native addresses.
-  Network IDs are internal to typed, share-safe `Conn` and `Listener` values.
-- IDs increase monotonically and are never reused within a process. Registry
-  lookup validates the expected resource kind, so a listener ID cannot be used
-  as a connection, file, or string builder.
+  positive process-local opaque `i64` tokens rather than exposed native
+  addresses. Network tokens are internal to typed, share-safe `Conn` and
+  `Listener` values.
+- A token uses a fixed high marker plus a nonzero 31-bit generation and a
+  one-based 31-bit slot number. The marker keeps handle-shaped integers outside
+  ordinary managed-address ranges used by conservative collection. Removing an
+  entry advances its generation before placing the slot on the free list, so
+  reuse changes the full token and stale generations cannot resolve to a newer
+  resource. A slot is retired after its maximum generation is removed rather
+  than wrapping to a previously issued token.
+- Registry lookup and removal validate both generation and expected resource
+  kind. Stale and wrong-kind attempts do not consume or alter the live entry, so
+  a listener token cannot be used as a connection, file, or string builder.
 - Registry lookup returns synchronized per-resource state and releases the
   registry lock before filesystem or network I/O. Operations on one handle do
   not hold the registry lock across blocking work.
@@ -224,7 +232,8 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   accept/read/write calls with `Closed`, and waits for operation and resource
   release. File close remains non-interrupting and performs no implicit
   durability sync.
-- Unknown, stale, and wrong-kind file or network IDs map to `error.Closed`.
+- Unknown, stale-generation, and wrong-kind file or network tokens map to
+  `error.Closed`.
   Invalid string-builder IDs terminate with
   `runtime failure: invalid string builder`.
 - The string-builder ABI uses `i64` directly: `yar_sb_new()` returns an ID,

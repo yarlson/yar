@@ -153,8 +153,8 @@ fn main() !i32 {
 - Allocation failure remains an unrecoverable runtime failure, not a Yar
   `error`.
 - File stream handles are opaque `i64` values backed by runtime-managed host
-  resources. They are kind-checked, non-reused process-local registry IDs, and
-  their mutable state is synchronized.
+  resources. They are positive, kind-checked, generation-tagged process-local
+  registry tokens, and their mutable state is synchronized.
 - File close removes the registry ID, waits for an operation holding its lock,
   and releases the host file without an implicit durability sync. It does not
   interrupt blocking file I/O.
@@ -179,9 +179,10 @@ The `io` package is pure Yar.
 - `fs.close_handle(handle) !void`
 
 The runtime stores file stream state behind validated registry IDs. Closing
-removes the ID; later lookup of that stale ID reports `error.Closed`. IDs are
-never reused within the process, so a stale handle cannot resolve to a newer
-resource.
+removes the token; later lookup of that stale generation reports `error.Closed`.
+The vacant slot may be reused only after its generation advances, which changes
+the full token and prevents a stale handle from resolving to a newer resource.
+After the maximum generation is removed, the slot is retired instead of wrapped.
 
 The `net` methods lower through compiler-internal networking intrinsics. Socket
 timeouts are relative per-operation timeouts; changing one need not interrupt

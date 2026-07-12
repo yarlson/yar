@@ -468,9 +468,13 @@ taskgroup []void {
   then immediately terminate without waiting or running shutdown handlers
 - arguments and captures are shallow copies, not deep copies; bare `i64`
   handles remain indistinguishable from ordinary scalar integers to the checker
-- runtime-backed `i64` handles are kind-checked, non-reused process-local
-  registry IDs with synchronized state; this prevents invalid pointer
-  dereferences but does not add compile-time nominal types or provenance
+- runtime-backed handles are kind-checked, generation-tagged, positive
+  process-local opaque `i64` tokens with synchronized state; this prevents
+  invalid pointer dereferences but does not add compile-time nominal types or
+  provenance
+- removing an entry advances its slot generation and changes the full token
+  before reuse; stale-generation and wrong-kind access does not consume the
+  current entry, and maximum-generation slots are retired rather than wrapped
 
 ## Standard Library
 
@@ -564,11 +568,11 @@ close() !void
 ```
 
 `fs.File` is a resource struct and cannot cross a spawn boundary.
-Its handle is a kind-checked, non-reused process-local registry ID. Closing
-removes the ID so new lookups fail, then waits for an operation holding the
-file lock before releasing it; close does not interrupt blocking I/O or perform
-an implicit durability sync. Unknown, stale, and wrong-kind IDs produce
-`error.Closed`.
+Its handle is a kind-checked, generation-tagged process-local opaque `i64`
+token. Closing removes the token so new lookups fail, then waits for an
+operation holding the file lock before releasing it; close does not interrupt
+blocking I/O or perform an implicit durability sync. Unknown, stale-generation,
+and wrong-kind tokens produce `error.Closed`.
 
 Errors: `error.NotFound`, `error.PermissionDenied`, `error.AlreadyExists`, `error.InvalidPath`, `error.InvalidArgument`, `error.Closed`, `error.IO`
 
@@ -647,10 +651,11 @@ net.Listener  // opaque typed listener reference
 
 `net.Conn` and `net.Listener` are typed, share-safe registry references and may
 cross spawn boundaries. Raw `i64` network handles are internal intrinsics, not
-public stdlib surface. IDs are kind-checked and never reused. One read and one
-write may run concurrently; same-direction calls serialize. Close removes the
-registry entry, wakes blocked accept/read/write calls with `error.Closed`, and
-waits for in-flight operations and host-resource release.
+public stdlib surface. Tokens are kind-checked and generation-tagged; reusing a
+vacant slot changes the full token, so stale generations remain invalid. One
+read and one write may run concurrently; same-direction calls serialize. Close
+removes the registry entry, wakes blocked accept/read/write calls with
+`error.Closed`, and waits for in-flight operations and host-resource release.
 
 ```
 net.listen_stream(host str, port i32) !net.Listener // "" = IPv4 wildcard
