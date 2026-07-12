@@ -156,8 +156,8 @@
 - Slice elements cannot use `noreturn` or an unknown type. `[]void` is used by
   taskgroup result annotations.
 - Enum payload fields cannot use `void`, `noreturn`, or an unknown type.
-- Channel element types cannot use `void`, `noreturn`, unknown types, or
-  another channel type.
+- Channel element types cannot use `void`, `noreturn`, first-class errorable
+  types, unknown types, or another channel type.
 - Pointer targets cannot use `void`, `noreturn`, or an unknown type.
 - Direct recursive struct or enum containment is rejected, but recursive shapes
   through `*T` and `[]T` remain valid.
@@ -209,6 +209,8 @@
 - `spawn` is only valid inside the lexical body of a `taskgroup`, not inside a
   function literal nested under that body.
 - `return` is not currently allowed inside a taskgroup body.
+- A `noreturn` expression statement is not allowed inside a taskgroup body
+  because it would bypass the mandatory join.
 - `?` is not allowed inside a taskgroup body at the current function-literal
   depth because propagation would bypass the taskgroup join.
 - `break` and `continue` may not exit through an enclosing loop outside the
@@ -229,6 +231,7 @@
 - Taskgroup results preserve spawn order.
 - `taskgroup []!T` is valid and yields first-class errorable values that may be
   handled with `?` or `or |err| { ... }` after indexing or binding.
+- Taskgroup and channel element sizes use a checked signed 64-bit runtime ABI.
 - Payload bindings in `match` arms have a generated payload-struct type, and
   `_` ignores a payload.
 - `nil` is valid only in pointer-typed contexts; `p := nil` is rejected because

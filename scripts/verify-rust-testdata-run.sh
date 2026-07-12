@@ -112,6 +112,7 @@ while IFS= read -r fixture; do
     || [ "$fixture" = "testdata/concurrency_channels/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_errors/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_fs/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_lifecycle/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_share_safe/main.yar" ]; then
     if ! YAR_GC_HEAP_TARGET_BYTES=1024 "$output" >"$stdout" 2>"$stderr"; then
       echo "fixture failed under forced garbage collection: $fixture" >&2

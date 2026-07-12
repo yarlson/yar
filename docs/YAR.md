@@ -125,6 +125,7 @@ Current restrictions:
 - `[]void` is valid and is primarily used as a taskgroup result type
 - channel elements cannot use `void`
 - channel elements cannot use `noreturn`
+- channel elements cannot use first-class errorable types such as `!i32`
 - channel elements cannot use another `chan[U]`
 - enum payload fields cannot use `void`
 - enum payload fields cannot use `noreturn`
@@ -651,6 +652,8 @@ Taskgroup rules:
 - `spawn` is only valid inside the taskgroup body
 - `spawn` is rejected inside a function literal nested under that taskgroup body
 - `return` is not currently allowed inside a taskgroup body
+- `noreturn` expression statements are rejected inside taskgroup bodies because
+  they would bypass the mandatory join
 - `?` is rejected inside a taskgroup body because propagation could bypass the
   taskgroup join; nested function literals may propagate from their own bodies
 - `break` and `continue` may not exit through an enclosing loop outside the taskgroup body
@@ -687,10 +690,19 @@ Channel builtins:
 
 Channel rules:
 
-- channel element types may not be `void`, `noreturn`, or another channel type
+- channel element types may not be `void`, `noreturn`, first-class errorable
+  types, or another channel type
+- taskgroup and channel element sizes use a checked signed 64-bit runtime ABI
 - channels support `==` and `!=` identity comparison
 - `chan_send` and `chan_recv` use `error.Closed` for closed-channel failures
-- the current implementation supports concurrency on POSIX targets; Windows reports a runtime failure if these operations are used
+- the native-thread runtime supports Linux, macOS, and Windows GNU
+- unreachable channel tokens finalize their synchronized external state;
+  buffered values remain collector roots only while the channel is live
+- each taskgroup join consumes its internal handle, and task accounting rejects
+  overflow or underflow
+- concurrent runtime output is atomic per call; fatal paths omit diagnostics
+  while any task is unjoined and immediately terminate the process without
+  waiting for output or running shutdown handlers
 
 ### Integer Literals
 

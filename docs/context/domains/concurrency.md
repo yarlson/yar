@@ -36,6 +36,8 @@
 - `spawn` is also rejected inside a function literal nested under a taskgroup
   body. A nested closure may create and use its own inner taskgroup instead.
 - `return` is rejected inside a taskgroup body in the current implementation.
+- A `noreturn` expression statement is rejected inside a taskgroup body because
+  it would make the mandatory join unreachable.
 - `?` is rejected at the taskgroup body's current function-literal depth
   because propagation would return before the taskgroup join. A nested
   function literal may use `?` for its own errorable return.
@@ -73,7 +75,10 @@
 
 ## Channels
 
-- `chan[T]` element types may not be `void`, `noreturn`, or another `chan[U]`.
+- `chan[T]` element types may not be `void`, `noreturn`, a first-class
+  errorable type `!U`, or another `chan[U]`.
+- Taskgroup and channel element sizes cross the compiler/runtime boundary as
+  signed 64-bit values and are checked before host-size conversion.
 - Channels are identity-comparable with `==` and `!=`.
 - `chan_send` returns `!void` and uses `error.Closed` when the channel has
   been closed.
@@ -82,24 +87,37 @@
 - `chan_close` closes the channel and is non-errorable.
 - Channels are FIFO and bounded; send blocks while the buffer is full and recv
   blocks while it is empty and still open.
+- A channel is a managed opaque token backed by registry-owned synchronized
+  state. Collection finalizes that state when the token becomes unreachable.
 
 ## Runtime Notes
 
-- The current implementation creates one native POSIX thread immediately for
+- The current implementation creates one native OS thread immediately for
   each successful `spawn`; it does not use a thread pool or M:N scheduler.
 - Taskgroup and channel helpers live in `crates/yar-runtime` for native build
   paths.
 - Runtime bundles carry the target's ordered native-library requirements;
   Linux GNU bundles include `pthread`, while Darwin uses its own Rust
   static-library contract.
-- Windows currently has runtime stubs that fail with a clear
-  "concurrency is not supported on windows yet" runtime error.
+- The portable native-thread runtime supports Linux, macOS, and Windows GNU.
+  CI executes the taskgroup, channel, share-safety, filesystem, and collection
+  fixtures on Windows rather than only cross-compiling them.
 - The collector defers marking and sweeping while any spawned task result is
   unjoined. Worker allocations remain registered, and collection resumes only
   after every outstanding result has been joined and copied into managed
   storage.
-- Live channel buffer slots are explicit conservative roots because channel
-  storage lives outside the managed heap. Consumed slots are cleared.
+- Task counts use checked updates; exhaustion or inconsistent decrement is a
+  deterministic runtime failure rather than a wraparound.
+- The mandatory taskgroup wait consumes and reclaims its compiler-internal
+  handle after taking ownership of the tasks to join.
+- Live channel buffer slots are explicit conservative roots while the managed
+  channel token remains live. Consumed slots are cleared; finalization removes
+  unreachable external state and its roots.
+- Runtime stdout and stderr writes are atomic per call. Fatal paths omit their
+  diagnostic whenever any task is unjoined, then immediately terminate the
+  whole process without waiting for output, shutdown handlers, or other tasks.
+  A single-threaded fatal path still writes its diagnostic when the stderr lock
+  is immediately available.
 - Explicit file and network close removes the handle from the runtime registry;
   string-builder handles have no close operation and remain registered for the
   process lifetime.

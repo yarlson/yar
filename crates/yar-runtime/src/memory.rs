@@ -41,6 +41,7 @@ struct Block {
     physical_size: usize,
     layout: Layout,
     marked: bool,
+    finalizer: Option<fn(*mut u8)>,
 }
 
 struct Heap {
@@ -63,7 +64,11 @@ impl Heap {
         }
     }
 
-    fn allocate(&mut self, allocation: AllocationLayout) -> Option<*mut u8> {
+    fn allocate(
+        &mut self,
+        allocation: AllocationLayout,
+        finalizer: Option<fn(*mut u8)>,
+    ) -> Option<*mut u8> {
         // Managed bytes are always initialized before the block enters the heap
         // registry. Conservative traversal may inspect padding or a partially
         // populated aggregate during a later nested allocation.
@@ -86,6 +91,7 @@ impl Heap {
                 physical_size: allocation.physical_size,
                 layout: allocation.layout,
                 marked: false,
+                finalizer,
             },
         );
         if old.is_some() {
@@ -160,6 +166,9 @@ impl Heap {
                 super::runtime_fail(b"runtime failure: collector metadata corrupted\n")
             });
             self.live_bytes -= block.physical_size;
+            if let Some(finalizer) = block.finalizer {
+                finalizer(payload as *mut u8);
+            }
             // SAFETY: base and layout are the exact pair returned by alloc_zeroed
             // for this block, and the block has been removed from the registry.
             unsafe { alloc::dealloc(block.base as *mut u8, block.layout) };
@@ -185,6 +194,9 @@ impl Heap {
 impl Drop for Heap {
     fn drop(&mut self) {
         for block in self.blocks.values() {
+            if let Some(finalizer) = block.finalizer {
+                finalizer((block.base + HEADER_SIZE) as *mut u8);
+            }
             // SAFETY: test-owned heaps drop each still-registered allocation
             // exactly once with its original layout.
             unsafe { alloc::dealloc(block.base as *mut u8, block.layout) };
@@ -239,12 +251,20 @@ pub(crate) fn inhibit_collection() -> CollectionGuard {
 }
 
 pub(crate) fn alloc(size: i64, _zeroed: bool) -> *mut u8 {
+    alloc_with_finalizer(size, None)
+}
+
+pub(crate) fn alloc_finalized(size: i64, finalizer: fn(*mut u8)) -> *mut u8 {
+    alloc_with_finalizer(size, Some(finalizer))
+}
+
+fn alloc_with_finalizer(size: i64, finalizer: Option<fn(*mut u8)>) -> *mut u8 {
     let allocation = allocation_layout(size);
     maybe_collect(allocation.physical_size);
     if let Some(payload) = heap()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .allocate(allocation)
+        .allocate(allocation, finalizer)
     {
         return payload;
     }
@@ -253,7 +273,7 @@ pub(crate) fn alloc(size: i64, _zeroed: bool) -> *mut u8 {
     heap()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
-        .allocate(allocation)
+        .allocate(allocation, finalizer)
         .unwrap_or_else(|| super::yar_trap_oom())
 }
 
@@ -349,12 +369,43 @@ fn allocation_layout(size: i64) -> AllocationLayout {
 mod tests {
     use super::*;
     use std::process::Command;
+    use std::sync::atomic::AtomicUsize;
+
+    static FINALIZED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+
+    fn count_finalized_block(_payload: *mut u8) {
+        FINALIZED_BLOCKS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn finalizes_an_unreachable_block_exactly_once_before_reclaiming_it() {
+        let finalized_before = FINALIZED_BLOCKS.load(Ordering::SeqCst);
+        let mut heap = Heap::new(64);
+        heap.allocate(
+            allocation_layout(8),
+            Some(count_finalized_block as fn(*mut u8)),
+        )
+        .unwrap();
+
+        heap.collect_candidates(&[]);
+
+        assert!(heap.blocks.is_empty());
+        assert_eq!(
+            FINALIZED_BLOCKS.load(Ordering::SeqCst),
+            finalized_before + 1
+        );
+        drop(heap);
+        assert_eq!(
+            FINALIZED_BLOCKS.load(Ordering::SeqCst),
+            finalized_before + 1
+        );
+    }
 
     #[test]
     fn retains_interior_and_unaligned_transitive_roots_then_reclaims_them() {
         let mut heap = Heap::new(64);
-        let parent = heap.allocate(allocation_layout(32)).unwrap();
-        let child = heap.allocate(allocation_layout(8)).unwrap();
+        let parent = heap.allocate(allocation_layout(32), None).unwrap();
+        let child = heap.allocate(allocation_layout(8), None).unwrap();
         // Store the child pointer at offset one to model packed map buckets.
         unsafe {
             ptr::copy_nonoverlapping(
@@ -376,7 +427,7 @@ mod tests {
     #[test]
     fn rejects_header_and_one_past_end_as_roots() {
         let mut heap = Heap::new(64);
-        let payload = heap.allocate(allocation_layout(8)).unwrap();
+        let payload = heap.allocate(allocation_layout(8), None).unwrap();
         heap.collect_candidates(&[payload as usize - 1, payload as usize + 8]);
         assert!(heap.blocks.is_empty());
     }
@@ -384,7 +435,7 @@ mod tests {
     #[test]
     fn zero_sized_allocations_have_one_retainable_payload_byte() {
         let mut heap = Heap::new(1);
-        let payload = heap.allocate(allocation_layout(0)).unwrap();
+        let payload = heap.allocate(allocation_layout(0), None).unwrap();
         heap.collect_candidates(&[payload as usize]);
         assert_eq!(heap.blocks.len(), 1);
         assert_eq!(heap.live_bytes, 1);

@@ -154,9 +154,10 @@ operand width. Invalid division and remainder terminate deterministically.
   mandatory join; handle errors locally or propagate after the group yields.
 - `chan[T]` is a bounded typed channel created with `chan_new[T](capacity)`.
 - `chan_send`, `chan_recv`, and `chan_close` provide the channel operations.
-- Each successful `spawn` starts one POSIX thread immediately.
-- Windows builds compile, but concurrency operations currently fail at runtime
-  with an unsupported message.
+- Each successful `spawn` starts one native OS thread immediately on Linux,
+  macOS, and Windows GNU.
+- Runtime output is atomic per call. Taskgroup joins reclaim their internal
+  handles, and unreachable managed channel tokens finalize external state.
 
 ## Standard library
 
@@ -470,8 +471,9 @@ cargo test --workspace
 CI runs those gates on pull requests and pushes to `main`, with Linux and macOS
 coverage for the native `clang` build boundary, the Rust workspace, and Rust
 CLI native builds plus successful fixture execution for every checked-in
-`testdata/**/main.yar` fixture that is expected to exit successfully. A targeted
-Windows job exercises the subprocess Job Object lifecycle. Release packaging is
+`testdata/**/main.yar` fixture that is expected to exit successfully. Targeted
+Windows jobs exercise subprocess Job Object lifecycle plus native GNU
+taskgroup, channel, and forced-collection behavior. Release packaging is
 validated with a GoReleaser snapshot dry run; each artifact carries exactly one
 target-keyed runtime bundle.
 

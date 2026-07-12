@@ -190,52 +190,52 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_map_has(ptr, ptr)\n");
         out.push_str("declare void @yar_map_delete(ptr, ptr)\n");
         out.push_str("declare i32 @yar_map_len(ptr)\n");
-        out.push_str("declare %yar.slice @yar_map_keys(ptr)\n");
+        out.push_str("declare void @yar_map_keys(ptr, ptr)\n");
         out.push_str("declare void @yar_array_index_check(i64, i64)\n");
         out.push_str("declare void @yar_slice_index_check(i64, i64)\n");
         out.push_str("declare void @yar_slice_range_check(i64, i64, i64)\n");
         out.push_str("declare void @yar_str_index_check(i64, i64)\n");
         out.push_str("declare i32 @yar_str_equal(ptr, i64, ptr, i64)\n");
-        out.push_str("declare %yar.str @yar_str_concat(ptr, i64, ptr, i64)\n");
-        out.push_str("declare %yar.str @yar_str_from_byte(i32)\n");
-        out.push_str("declare %yar.str @yar_to_str_i32(i32)\n");
-        out.push_str("declare %yar.str @yar_to_str_i64(i64)\n");
+        out.push_str("declare void @yar_str_concat(ptr, i64, ptr, i64, ptr)\n");
+        out.push_str("declare void @yar_str_from_byte(i32, ptr)\n");
+        out.push_str("declare void @yar_to_str_i32(i32, ptr)\n");
+        out.push_str("declare void @yar_to_str_i64(i64, ptr)\n");
         out.push_str("declare i64 @yar_sb_new()\n");
         out.push_str("declare void @yar_sb_write(i64, ptr, i64)\n");
-        out.push_str("declare %yar.str @yar_sb_string(i64)\n");
-        out.push_str("declare i32 @yar_fs_read_file(%yar.str, ptr)\n");
-        out.push_str("declare i32 @yar_fs_write_file(%yar.str, %yar.str)\n");
-        out.push_str("declare i32 @yar_fs_read_dir(%yar.str, ptr)\n");
-        out.push_str("declare i32 @yar_fs_stat(%yar.str, ptr)\n");
-        out.push_str("declare i32 @yar_fs_mkdir_all(%yar.str)\n");
-        out.push_str("declare i32 @yar_fs_remove_all(%yar.str)\n");
-        out.push_str("declare i32 @yar_fs_temp_dir(%yar.str, ptr)\n");
-        out.push_str("declare i32 @yar_fs_open_read(%yar.str, ptr)\n");
-        out.push_str("declare i32 @yar_fs_open_write(%yar.str, ptr)\n");
+        out.push_str("declare void @yar_sb_string(i64, ptr)\n");
+        out.push_str("declare i32 @yar_fs_read_file(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_write_file(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_read_dir(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_stat(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_mkdir_all(ptr)\n");
+        out.push_str("declare i32 @yar_fs_remove_all(ptr)\n");
+        out.push_str("declare i32 @yar_fs_temp_dir(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_open_read(ptr, ptr)\n");
+        out.push_str("declare i32 @yar_fs_open_write(ptr, ptr)\n");
         out.push_str("declare i32 @yar_fs_read_handle(i64, i32, ptr)\n");
-        out.push_str("declare i32 @yar_fs_write_handle(i64, %yar.str, ptr)\n");
+        out.push_str("declare i32 @yar_fs_write_handle(i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_fs_close_handle(i64)\n");
-        out.push_str("declare i32 @yar_net_listen(%yar.str, i32, ptr)\n");
+        out.push_str("declare i32 @yar_net_listen(ptr, i32, ptr)\n");
         out.push_str("declare i32 @yar_net_accept(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_listener_addr(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_close_listener(i64)\n");
-        out.push_str("declare i32 @yar_net_connect(%yar.str, i32, ptr)\n");
+        out.push_str("declare i32 @yar_net_connect(ptr, i32, ptr)\n");
         out.push_str("declare i32 @yar_net_read(i64, i32, ptr)\n");
-        out.push_str("declare i32 @yar_net_write(i64, %yar.str, ptr)\n");
+        out.push_str("declare i32 @yar_net_write(i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_net_close(i64)\n");
         out.push_str("declare i32 @yar_net_local_addr(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_remote_addr(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_set_read_deadline(i64, i32)\n");
         out.push_str("declare i32 @yar_net_set_write_deadline(i64, i32)\n");
-        out.push_str("declare i32 @yar_net_resolve(%yar.str, i32, ptr)\n");
+        out.push_str("declare i32 @yar_net_resolve(ptr, i32, ptr)\n");
         out.push_str("declare void @yar_process_args(ptr)\n");
         out.push_str("declare i32 @yar_process_run(ptr, ptr)\n");
         out.push_str("declare i32 @yar_process_run_inherit(ptr, ptr)\n");
-        out.push_str("declare i32 @yar_env_lookup(%yar.str, ptr)\n");
-        out.push_str("declare ptr @yar_taskgroup_new(i32)\n");
+        out.push_str("declare i32 @yar_env_lookup(ptr, ptr)\n");
+        out.push_str("declare ptr @yar_taskgroup_new(i64)\n");
         out.push_str("declare void @yar_taskgroup_spawn(ptr, ptr, ptr)\n");
-        out.push_str("declare %yar.slice @yar_taskgroup_wait(ptr)\n");
-        out.push_str("declare ptr @yar_chan_new(i32, i32)\n");
+        out.push_str("declare void @yar_taskgroup_wait(ptr, ptr)\n");
+        out.push_str("declare ptr @yar_chan_new(i64, i32)\n");
         out.push_str("declare i32 @yar_chan_send(ptr, ptr)\n");
         out.push_str("declare i32 @yar_chan_recv(ptr, ptr)\n");
         out.push_str("declare void @yar_chan_close(ptr)\n");
@@ -720,10 +720,12 @@ main.err:
     }
 
     fn emit_task_fs_read_file_wrapper_result(&self, out: &mut String) -> Result<(), CodegenError> {
+        out.push_str("  %fs.read_file.arg = alloca %yar.str\n");
+        out.push_str("  store %yar.str %arg.0, ptr %fs.read_file.arg\n");
         out.push_str("  %fs.read_file.out = alloca %yar.str\n");
         out.push_str("  store %yar.str zeroinitializer, ptr %fs.read_file.out\n");
         out.push_str(
-            "  %fs.read_file.status = call i32 @yar_fs_read_file(%yar.str %arg.0, ptr %fs.read_file.out)\n",
+            "  %fs.read_file.status = call i32 @yar_fs_read_file(ptr %fs.read_file.arg, ptr %fs.read_file.out)\n",
         );
         out.push_str("  %fs.read_file.value = load %yar.str, ptr %fs.read_file.out\n");
         out.push_str("  %host.ok = icmp eq i32 %fs.read_file.status, 0\n");
@@ -1431,17 +1433,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return Err(CodegenError::unsupported("taskgroup result type"));
         };
         let elem_size = if element_type == "void" {
-            "0".to_string()
+            0
         } else {
-            self.emit_type_size(&element_type)?
+            self.type_size(&element_type)?
         };
-        let elem_size32 = self.temp("taskgroup.elem_size");
-        self.body.push_str(&format!(
-            "  %{elem_size32} = trunc i64 {elem_size} to i32\n"
-        ));
         let handle = self.temp("taskgroup");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_taskgroup_new(i32 %{elem_size32})\n"
+            "  %{handle} = call ptr @yar_taskgroup_new(i64 {elem_size})\n"
         ));
 
         let previous = self.taskgroup.replace(TaskgroupContext {
@@ -1455,9 +1453,15 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         }
         self.taskgroup = previous;
 
+        let result_slot = self.temp("taskgroup.result.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.slice\n"));
+        self.body.push_str(&format!(
+            "  call void @yar_taskgroup_wait(ptr %{handle}, ptr %{result_slot})\n"
+        ));
         let result = self.temp("taskgroup.result");
         self.body.push_str(&format!(
-            "  %{result} = call %yar.slice @yar_taskgroup_wait(ptr %{handle})\n"
+            "  %{result} = load %yar.slice, ptr %{result_slot}\n"
         ));
         Ok(Value {
             type_: result_type,
@@ -2591,8 +2595,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             "  %{right_len} = extractvalue %yar.str {}, 1\n",
             right.repr
         ));
+        let result_slot = self.temp("str.concat.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
         self.body.push_str(&format!(
-            "  %{result} = call %yar.str @yar_str_concat(ptr %{left_ptr}, i64 %{left_len}, ptr %{right_ptr}, i64 %{right_len})\n"
+            "  call void @yar_str_concat(ptr %{left_ptr}, i64 %{left_len}, ptr %{right_ptr}, i64 %{right_len}, ptr %{result_slot})\n"
+        ));
+        self.body.push_str(&format!(
+            "  %{result} = load %yar.str, ptr %{result_slot}\n"
         ));
         Ok(Value {
             type_: "str".to_string(),
@@ -3322,10 +3332,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return Err(CodegenError::unsupported("chr arity"));
         };
         let arg = self.emit_expression_as(arg, "i32")?;
+        let result_slot = self.temp("chr.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
+        self.body.push_str(&format!(
+            "  call void @yar_str_from_byte(i32 {}, ptr %{result_slot})\n",
+            arg.repr
+        ));
         let result = self.temp("chr");
         self.body.push_str(&format!(
-            "  %{result} = call %yar.str @yar_str_from_byte(i32 {})\n",
-            arg.repr
+            "  %{result} = load %yar.str, ptr %{result_slot}\n"
         ));
         Ok(Value {
             type_: "str".to_string(),
@@ -3405,10 +3421,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             return Err(CodegenError::unsupported("sb_string arity"));
         };
         let handle = self.emit_expression_as(handle, "i64")?;
+        let result_slot = self.temp("sb.result.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
+        self.body.push_str(&format!(
+            "  call void @yar_sb_string(i64 {}, ptr %{result_slot})\n",
+            handle.repr
+        ));
         let result = self.temp("sb.result");
         self.body.push_str(&format!(
-            "  %{result} = call %yar.str @yar_sb_string(i64 {})\n",
-            handle.repr
+            "  %{result} = load %yar.str, ptr %{result_slot}\n"
         ));
         Ok(Value {
             type_: "str".to_string(),
@@ -3511,10 +3533,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let Some((key_type, _)) = parse_map_type(&map.type_) else {
             return Err(CodegenError::unsupported("keys non-map argument"));
         };
+        let result_slot = self.temp("map.keys.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.slice\n"));
+        self.body.push_str(&format!(
+            "  call void @yar_map_keys(ptr {}, ptr %{result_slot})\n",
+            map.repr
+        ));
         let result = self.temp("map.keys");
         self.body.push_str(&format!(
-            "  %{result} = call %yar.slice @yar_map_keys(ptr {})\n",
-            map.repr
+            "  %{result} = load %yar.slice, ptr %{result_slot}\n"
         ));
         Ok(Value {
             type_: format!("[]{key_type}"),
@@ -3541,14 +3569,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 capacity.type_
             )));
         }
-        let elem_size = self.emit_type_size(&element_type)?;
-        let elem_size32 = self.temp("chan.elem_size");
-        self.body.push_str(&format!(
-            "  %{elem_size32} = trunc i64 {elem_size} to i32\n"
-        ));
+        let elem_size = self.type_size(&element_type)?;
         let handle = self.temp("chan.new");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_chan_new(i32 %{elem_size32}, i32 {})\n",
+            "  %{handle} = call ptr @yar_chan_new(i64 {elem_size}, i32 {})\n",
             capacity.repr
         ));
         Ok(Value {
@@ -3824,10 +3848,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let arg = self.emit_expression(arg)?;
         match arg.type_.as_str() {
             "i32" => {
+                let result_slot = self.temp("to_str.slot");
+                self.body
+                    .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
+                self.body.push_str(&format!(
+                    "  call void @yar_to_str_i32(i32 {}, ptr %{result_slot})\n",
+                    arg.repr
+                ));
                 let result = self.temp("to_str");
                 self.body.push_str(&format!(
-                    "  %{result} = call %yar.str @yar_to_str_i32(i32 {})\n",
-                    arg.repr
+                    "  %{result} = load %yar.str, ptr %{result_slot}\n"
                 ));
                 Ok(Value {
                     type_: "str".to_string(),
@@ -3835,10 +3865,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 })
             }
             "i64" => {
+                let result_slot = self.temp("to_str.slot");
+                self.body
+                    .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
+                self.body.push_str(&format!(
+                    "  call void @yar_to_str_i64(i64 {}, ptr %{result_slot})\n",
+                    arg.repr
+                ));
                 let result = self.temp("to_str");
                 self.body.push_str(&format!(
-                    "  %{result} = call %yar.str @yar_to_str_i64(i64 {})\n",
-                    arg.repr
+                    "  %{result} = load %yar.str, ptr %{result_slot}\n"
                 ));
                 Ok(Value {
                     type_: "str".to_string(),
@@ -3961,14 +3997,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
     ) -> Result<Value, CodegenError> {
         match signature.full_name.as_str() {
             "fs.read_file" => {
+                let path = self.emit_str_abi_input("fs.read_file.path", &args[0]);
                 let out = self.temp("fs.read_file.out");
                 self.body.push_str(&format!("  %{out} = alloca %yar.str\n"));
                 self.body
                     .push_str(&format!("  store %yar.str zeroinitializer, ptr %{out}\n"));
                 let status = self.temp("fs.read_file.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_read_file(%yar.str {}, ptr %{out})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_read_file(ptr {path}, ptr %{out})\n"
                 ));
                 let value = self.temp("fs.read_file.value");
                 self.body
@@ -3981,10 +4017,11 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.write_file" => {
+                let path = self.emit_str_abi_input("fs.write_file.path", &args[0]);
+                let data = self.emit_str_abi_input("fs.write_file.data", &args[1]);
                 let status = self.temp("fs.write_file.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_write_file(%yar.str {}, %yar.str {})\n",
-                    args[0].repr, args[1].repr
+                    "  %{status} = call i32 @yar_fs_write_file(ptr {path}, ptr {data})\n"
                 ));
                 self.emit_host_status_result(
                     &signature.full_name,
@@ -3994,6 +4031,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.read_dir" => {
+                let path = self.emit_str_abi_input("fs.read_dir.path", &args[0]);
                 let out = self.temp("fs.read_dir.out");
                 self.body
                     .push_str(&format!("  %{out} = alloca %yar.slice\n"));
@@ -4001,8 +4039,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                     .push_str(&format!("  store %yar.slice zeroinitializer, ptr %{out}\n"));
                 let status = self.temp("fs.read_dir.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_read_dir(%yar.str {}, ptr %{out})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_read_dir(ptr {path}, ptr %{out})\n"
                 ));
                 let value = self.temp("fs.read_dir.value");
                 self.body
@@ -4015,13 +4052,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.stat" => {
+                let path = self.emit_str_abi_input("fs.stat.path", &args[0]);
                 let out = self.temp("fs.stat.out");
                 self.body.push_str(&format!("  %{out} = alloca i32\n"));
                 self.body.push_str(&format!("  store i32 0, ptr %{out}\n"));
                 let status = self.temp("fs.stat.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_stat(%yar.str {}, ptr %{out})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_stat(ptr {path}, ptr %{out})\n"
                 ));
                 let tag = self.temp("fs.stat.tag");
                 self.body
@@ -4035,10 +4072,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.mkdir_all" => {
+                let path = self.emit_str_abi_input("fs.mkdir_all.path", &args[0]);
                 let status = self.temp("fs.mkdir_all.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_mkdir_all(%yar.str {})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_mkdir_all(ptr {path})\n"
                 ));
                 self.emit_host_status_result(
                     &signature.full_name,
@@ -4048,10 +4085,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.remove_all" => {
+                let path = self.emit_str_abi_input("fs.remove_all.path", &args[0]);
                 let status = self.temp("fs.remove_all.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_remove_all(%yar.str {})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_remove_all(ptr {path})\n"
                 ));
                 self.emit_host_status_result(
                     &signature.full_name,
@@ -4061,14 +4098,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.temp_dir" => {
+                let prefix = self.emit_str_abi_input("fs.temp_dir.prefix", &args[0]);
                 let out = self.temp("fs.temp_dir.out");
                 self.body.push_str(&format!("  %{out} = alloca %yar.str\n"));
                 self.body
                     .push_str(&format!("  store %yar.str zeroinitializer, ptr %{out}\n"));
                 let status = self.temp("fs.temp_dir.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_temp_dir(%yar.str {}, ptr %{out})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_fs_temp_dir(ptr {prefix}, ptr %{out})\n"
                 ));
                 let value = self.temp("fs.temp_dir.value");
                 self.body
@@ -4113,13 +4150,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "fs.write_handle" => {
+                let data = self.emit_str_abi_input("fs.write_handle.data", &args[1]);
                 let out = self.temp("fs.write_handle.out");
                 self.body.push_str(&format!("  %{out} = alloca i32\n"));
                 self.body.push_str(&format!("  store i32 0, ptr %{out}\n"));
                 let status = self.temp("fs.write_handle.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_fs_write_handle(i64 {}, %yar.str {}, ptr %{out})\n",
-                    args[0].repr, args[1].repr
+                    "  %{status} = call i32 @yar_fs_write_handle(i64 {}, ptr {data}, ptr %{out})\n",
+                    args[0].repr
                 ));
                 let value = self.temp("fs.write_handle.value");
                 self.body
@@ -4215,14 +4253,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 )
             }
             "env.lookup" => {
+                let name = self.emit_str_abi_input("env.lookup.name", &args[0]);
                 let out = self.temp("env.lookup.out");
                 self.body.push_str(&format!("  %{out} = alloca %yar.str\n"));
                 self.body
                     .push_str(&format!("  store %yar.str zeroinitializer, ptr %{out}\n"));
                 let status = self.temp("env.lookup.status");
                 self.body.push_str(&format!(
-                    "  %{status} = call i32 @yar_env_lookup(%yar.str {}, ptr %{out})\n",
-                    args[0].repr
+                    "  %{status} = call i32 @yar_env_lookup(ptr {name}, ptr %{out})\n"
                 ));
                 let value = self.temp("env.lookup.value");
                 self.body
@@ -4253,13 +4291,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                     repr: String::new(),
                 })
             }
-            "net.listen" => self.emit_host_out_call(
-                signature,
-                "net.listen",
-                "i64",
-                "yar_net_listen",
-                format!("%yar.str {}, i32 {}", args[0].repr, args[1].repr),
-            ),
+            "net.listen" => {
+                let host = self.emit_str_abi_input("net.listen.host", &args[0]);
+                self.emit_host_out_call(
+                    signature,
+                    "net.listen",
+                    "i64",
+                    "yar_net_listen",
+                    format!("ptr {host}, i32 {}", args[1].repr),
+                )
+            }
             "net.accept" => self.emit_host_out_call(
                 signature,
                 "net.accept",
@@ -4283,13 +4324,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 "yar_net_close_listener",
                 format!("i64 {}", args[0].repr),
             ),
-            "net.connect" => self.emit_host_out_call(
-                signature,
-                "net.connect",
-                "i64",
-                "yar_net_connect",
-                format!("%yar.str {}, i32 {}", args[0].repr, args[1].repr),
-            ),
+            "net.connect" => {
+                let host = self.emit_str_abi_input("net.connect.host", &args[0]);
+                self.emit_host_out_call(
+                    signature,
+                    "net.connect",
+                    "i64",
+                    "yar_net_connect",
+                    format!("ptr {host}, i32 {}", args[1].repr),
+                )
+            }
             "net.read" => self.emit_host_out_call(
                 signature,
                 "net.read",
@@ -4297,13 +4341,16 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 "yar_net_read",
                 format!("i64 {}, i32 {}", args[0].repr, args[1].repr),
             ),
-            "net.write" => self.emit_host_out_call(
-                signature,
-                "net.write",
-                "i32",
-                "yar_net_write",
-                format!("i64 {}, %yar.str {}", args[0].repr, args[1].repr),
-            ),
+            "net.write" => {
+                let data = self.emit_str_abi_input("net.write.data", &args[1]);
+                self.emit_host_out_call(
+                    signature,
+                    "net.write",
+                    "i32",
+                    "yar_net_write",
+                    format!("i64 {}, ptr {data}", args[0].repr),
+                )
+            }
             "net.close" => self.emit_host_status_call(
                 signature,
                 "net.close",
@@ -4343,13 +4390,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 format!("i64 {}, i32 {}", args[0].repr, args[1].repr),
             ),
             "net.resolve" => {
+                let host = self.emit_str_abi_input("net.resolve.host", &args[0]);
                 let out_type = self.llvm_type(&signature.return_type)?.to_string();
                 self.emit_host_out_call(
                     signature,
                     "net.resolve",
                     &out_type,
                     "yar_net_resolve",
-                    format!("%yar.str {}, i32 {}", args[0].repr, args[1].repr),
+                    format!("ptr {host}, i32 {}", args[1].repr),
                 )
             }
             _ => Err(CodegenError::unsupported(format!(
@@ -4387,6 +4435,15 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         )
     }
 
+    fn emit_str_abi_input(&mut self, temp_prefix: &str, value: &Value) -> String {
+        let slot = self.temp(temp_prefix);
+        self.body
+            .push_str(&format!("  %{slot} = alloca %yar.str\n"));
+        self.body
+            .push_str(&format!("  store %yar.str {}, ptr %{slot}\n", value.repr));
+        format!("%{slot}")
+    }
+
     fn emit_host_status_call(
         &mut self,
         signature: &Signature,
@@ -4413,13 +4470,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         runtime_name: &str,
         args: Vec<Value>,
     ) -> Result<Value, CodegenError> {
+        let path = self.emit_str_abi_input(&format!("{temp_prefix}.path"), &args[0]);
         let out = self.temp(&format!("{temp_prefix}.out"));
         self.body.push_str(&format!("  %{out} = alloca i64\n"));
         self.body.push_str(&format!("  store i64 0, ptr %{out}\n"));
         let status = self.temp(&format!("{temp_prefix}.status"));
         self.body.push_str(&format!(
-            "  %{status} = call i32 @{runtime_name}(%yar.str {}, ptr %{out})\n",
-            args[0].repr
+            "  %{status} = call i32 @{runtime_name}(ptr {path}, ptr %{out})\n"
         ));
         let value = self.temp(&format!("{temp_prefix}.value"));
         self.body
@@ -5876,6 +5933,12 @@ fn collect_map_result_types_from_expression(
     match expression {
         Expression::TypeApplication(expr) => {
             collect_map_result_types_from_expression(&expr.inner, result_types);
+            if matches!(&expr.inner, Expression::Ident(ident) if ident.name == "chan_new")
+                && let [element_type] = expr.type_args.as_slice()
+            {
+                result_types.push("void".to_string());
+                result_types.push(element_type.to_string());
+            }
             for type_arg in &expr.type_args {
                 collect_map_result_types_from_type_ref(type_arg, result_types);
             }
@@ -6171,6 +6234,7 @@ mod tests {
         "testdata/concurrency_channels/main.yar",
         "testdata/concurrency_errors/main.yar",
         "testdata/concurrency_fs/main.yar",
+        "testdata/concurrency_lifecycle/main.yar",
         "testdata/concurrency_share_safe/main.yar",
         "testdata/deps_local/main.yar",
         "testdata/divide/main.yar",
@@ -6284,12 +6348,12 @@ mod tests {
             "declare void @yar_process_args(ptr)",
             "declare i32 @yar_process_run(ptr, ptr)",
             "declare i32 @yar_process_run_inherit(ptr, ptr)",
-            "declare i32 @yar_env_lookup(%yar.str, ptr)",
+            "declare i32 @yar_env_lookup(ptr, ptr)",
             "declare void @yar_eprint(ptr, i64)",
             "call void @yar_process_args(ptr %",
             "call i32 @yar_process_run(ptr %",
             "call i32 @yar_process_run_inherit(ptr %",
-            "call i32 @yar_env_lookup(%yar.str ",
+            "call i32 @yar_env_lookup(ptr %",
             "call void @yar_eprint(ptr %",
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
@@ -6302,10 +6366,10 @@ mod tests {
         for expected in [
             "declare i64 @yar_sb_new()",
             "declare void @yar_sb_write(i64, ptr, i64)",
-            "declare %yar.str @yar_sb_string(i64)",
+            "declare void @yar_sb_string(i64, ptr)",
             "call i64 @yar_sb_new()",
             "call void @yar_sb_write(i64 %",
-            "call %yar.str @yar_sb_string(i64 %",
+            "call void @yar_sb_string(i64 %",
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
         }
@@ -6314,31 +6378,58 @@ mod tests {
     }
 
     #[test]
+    fn runtime_aggregate_values_always_cross_explicit_pointers() {
+        let ir = emit_fixture("testdata/concurrency_lifecycle/main.yar");
+        for declaration in [
+            "declare void @yar_taskgroup_wait(ptr, ptr)",
+            "declare void @yar_map_keys(ptr, ptr)",
+            "declare void @yar_str_concat(ptr, i64, ptr, i64, ptr)",
+            "declare void @yar_str_from_byte(i32, ptr)",
+            "declare void @yar_to_str_i32(i32, ptr)",
+            "declare void @yar_to_str_i64(i64, ptr)",
+            "declare void @yar_sb_string(i64, ptr)",
+        ] {
+            assert!(
+                ir.contains(declaration),
+                "missing {declaration:?} in IR:\n{ir}"
+            );
+        }
+        assert!(!ir.contains("declare %yar.str @yar_"), "{ir}");
+        assert!(!ir.contains("declare %yar.slice @yar_"), "{ir}");
+        assert!(
+            !ir.lines().any(|line| {
+                line.starts_with("declare ") && line.contains("@yar_") && line.contains("%yar.")
+            }),
+            "runtime aggregate arguments must be pointers:\n{ir}"
+        );
+    }
+
+    #[test]
     fn lowers_net_intrinsics_to_runtime_calls() {
         let ir = emit_fixture("testdata/stdlib_net/main.yar");
         for expected in [
-            "declare i32 @yar_net_listen(%yar.str, i32, ptr)",
+            "declare i32 @yar_net_listen(ptr, i32, ptr)",
             "declare i32 @yar_net_accept(i64, ptr)",
             "declare i32 @yar_net_listener_addr(i64, ptr)",
             "declare i32 @yar_net_close_listener(i64)",
-            "declare i32 @yar_net_connect(%yar.str, i32, ptr)",
+            "declare i32 @yar_net_connect(ptr, i32, ptr)",
             "declare i32 @yar_net_read(i64, i32, ptr)",
-            "declare i32 @yar_net_write(i64, %yar.str, ptr)",
+            "declare i32 @yar_net_write(i64, ptr, ptr)",
             "declare i32 @yar_net_close(i64)",
             "declare i32 @yar_net_local_addr(i64, ptr)",
             "declare i32 @yar_net_remote_addr(i64, ptr)",
-            "declare i32 @yar_net_resolve(%yar.str, i32, ptr)",
-            "call i32 @yar_net_listen(%yar.str ",
+            "declare i32 @yar_net_resolve(ptr, i32, ptr)",
+            "call i32 @yar_net_listen(ptr %",
             "call i32 @yar_net_accept(i64 ",
             "call i32 @yar_net_listener_addr(i64 ",
             "call i32 @yar_net_close_listener(i64 ",
-            "call i32 @yar_net_connect(%yar.str ",
+            "call i32 @yar_net_connect(ptr %",
             "call i32 @yar_net_read(i64 ",
             "call i32 @yar_net_write(i64 ",
             "call i32 @yar_net_close(i64 ",
             "call i32 @yar_net_local_addr(i64 ",
             "call i32 @yar_net_remote_addr(i64 ",
-            "call i32 @yar_net_resolve(%yar.str ",
+            "call i32 @yar_net_resolve(ptr %",
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
         }
@@ -6365,6 +6456,63 @@ fn main() i32 {
 
         assert!(ir.contains("icmp eq ptr"), "{ir}");
         assert!(ir.contains("icmp ne ptr"), "{ir}");
+        assert!(ir.contains("call ptr @yar_chan_new(i64 4, i32 1)"), "{ir}");
+        assert!(!ir.contains("chan.elem_size"), "{ir}");
+    }
+
+    #[test]
+    fn declares_channel_result_types_for_inferred_chan_new_values() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn main() i32 {
+    ch := chan_new[str](1)
+    chan_send(ch, "value") or |_| {
+        return 1
+    }
+    value := chan_recv(ch) or |_| {
+        return 1
+    }
+    if value != "value" {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        assert!(ir.contains("%yar.result.void = type { i1, i32 }"), "{ir}");
+        assert!(
+            ir.contains("%yar.result.str = type { i1, i32, %yar.str }"),
+            "{ir}"
+        );
+    }
+
+    #[test]
+    fn passes_checked_taskgroup_element_sizes_without_truncation() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn work() i64 {
+    return 1
+}
+
+fn main() i32 {
+    values := taskgroup []i64 {
+        spawn work()
+    }
+    if len(values) != 1 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        assert!(ir.contains("call ptr @yar_taskgroup_new(i64 8)"), "{ir}");
+        assert!(!ir.contains("taskgroup.elem_size"), "{ir}");
     }
 
     #[test]

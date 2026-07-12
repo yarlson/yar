@@ -792,6 +792,12 @@ impl Checker {
                         "errorable value cannot be used as a statement",
                     );
                 }
+                if expr_type.base == TYPE_NORETURN && self.current_taskgroup().is_some() {
+                    self.diag.add(
+                        stmt.expr.pos(),
+                        "noreturn expression cannot be used inside a taskgroup body because it would skip the taskgroup join",
+                    );
+                }
             }
             Statement::Spawn(stmt) => self.check_spawn(stmt),
         }
@@ -2010,6 +2016,7 @@ impl Checker {
         let elem_type = self.resolve_type_ref(&applied.type_args[0]);
         if matches!(elem_type.as_str(), TYPE_VOID | TYPE_NORETURN | TYPE_INVALID)
             || parse_chan_type(&elem_type).is_some()
+            || parse_errorable_type(&elem_type).is_some()
         {
             self.diag.add(
                 applied.type_args[0].pos.clone(),
@@ -2020,7 +2027,6 @@ impl Checker {
             );
             return Some(ExprType::invalid());
         }
-
         let mut capacity = self.check_expression(&call.args[0]);
         if capacity.errorable {
             self.diag.add(
@@ -3599,6 +3605,7 @@ impl Checker {
                 let elem_type = self.resolve_type_ref(elem);
                 if matches!(elem_type.as_str(), TYPE_VOID | TYPE_NORETURN | TYPE_INVALID)
                     || elem_type.starts_with("chan[")
+                    || elem_type.starts_with('!')
                 {
                     self.diag.add(
                         ref_.pos.clone(),
@@ -5081,6 +5088,37 @@ fn main() i32 {
             "spawn does not currently support builtin \"len\" directly; wrap it in an inline function literal",
         );
         assert_has(&diagnostics, "break cannot exit a taskgroup body");
+    }
+
+    #[test]
+    fn rejects_concurrency_constructs_that_cannot_reach_join_or_nest_errors() {
+        let program = parse_ok(
+            r#"
+package main
+
+fn stop() noreturn {
+    panic("stop")
+}
+
+fn main() i32 {
+    taskgroup []void {
+        stop()
+    }
+
+    direct := chan_new[!i32](1)
+    var declared chan[!str]
+    return 0
+}
+"#,
+        );
+
+        let (_info, diagnostics) = check_program(&program);
+        assert_has(
+            &diagnostics,
+            "noreturn expression cannot be used inside a taskgroup body because it would skip the taskgroup join",
+        );
+        assert_has(&diagnostics, "channel element type \"!i32\" is not allowed");
+        assert_has(&diagnostics, "channel element type \"!str\" is not allowed");
     }
 
     #[test]
