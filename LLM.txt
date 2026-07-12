@@ -678,47 +678,11 @@ set_write_deadline(millis i32) !void
 
 Errors: `error.ConnectionRefused`, `error.Timeout`, `error.AddrInUse`, `error.ConnectionReset`, `error.NotFound` (DNS), `error.PermissionDenied`, `error.InvalidArgument`, `error.IO`, `error.Closed`
 
-### http
+### HTTP serving
 
-Types:
-
-```
-http.Request { method str, path str, headers map[str]str, body str }
-http.Response { status i32, headers map[str]str, body str }
-```
-
-Functions:
-
-```
-http.text(status i32, body str) http.Response
-http.serve(addr net.Addr, handler fn(http.Request) !http.Response) !void
-```
-
-`http.serve` listens on a TCP address and processes connections sequentially.
-It reads one HTTP/1.1 request per connection, calls the handler, writes one
-response, and closes the connection before accepting the next one. Handler
-errors become `500 Internal Server Error` responses and the server keeps
-accepting. Malformed requests receive `400 Bad Request`. Header names in
-`Request.headers` are lowercase. There is no keep-alive, router, query parser,
-middleware, auth, TLS, or stdlib session/JWT support.
-
-Example:
-
-```yar
-import "std/http"
-import "std/net"
-
-fn handle(req http.Request) !http.Response {
-    return http.text(200, "hello\n")
-}
-
-fn main() !i32 {
-    http.serve(net.Addr{host: "127.0.0.1", port: 8080}, fn(req http.Request) !http.Response {
-        return handle(req)
-    })?
-    return 0
-}
-```
+There is no `std/http` package. The earlier server experiment was
+withdrawn because it lacked bounded incremental framing, strict request and
+response validation, connection deadlines, and a safe resource lifecycle.
 
 ### testing
 

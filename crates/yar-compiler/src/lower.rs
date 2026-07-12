@@ -1154,7 +1154,7 @@ mod tests {
     fn lowers_stdlib_import_graph_to_one_program() {
         let root = repo_root();
         let (graph, diagnostics) =
-            load_package_graph(root.join("testdata/stdlib_http/main.yar"), false).unwrap();
+            load_package_graph(root.join("testdata/stdlib_io/main.yar"), false).unwrap();
         assert_eq!(diagnostics, Vec::new());
 
         let (program, diagnostics) = lower_package_graph(&graph);
@@ -1164,36 +1164,19 @@ mod tests {
             program
                 .functions
                 .iter()
-                .any(|function| function.name == "http.serve")
+                .any(|function| function.name == "io.copy")
         );
         assert!(
             program
                 .functions
                 .iter()
-                .any(|function| function.name == "net.listen")
+                .any(|function| function.name == "fs.open_read")
         );
-        assert_eq!(
+        assert!(
             program
                 .structs
                 .iter()
-                .filter(|decl| decl.resource)
-                .map(|decl| decl.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["net.Conn", "net.Listener"],
-        );
-        assert!(
-            program
-                .functions
-                .iter()
-                .find(|decl| decl.name == "net.listen")
-                .is_some_and(|decl| decl.host_intrinsic)
-        );
-        assert!(
-            program
-                .functions
-                .iter()
-                .find(|decl| decl.name == "net.listen_stream")
-                .is_some_and(|decl| !decl.host_intrinsic)
+                .any(|decl| decl.name == "fs.File" && decl.resource)
         );
     }
 
