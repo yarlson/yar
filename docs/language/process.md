@@ -1,234 +1,150 @@
 # YAR Design Process
 
-This document defines how language design work is done.
+This document defines how language design work is proposed, decided, delivered,
+and documented. It owns process and document roles, not language semantics.
 
-It is about process, not language semantics.
+## Truth and document ownership
 
-## Goals
+Use the narrowest authoritative source for the question:
 
-The process exists to ensure that language evolution is:
+1. Compiler/runtime code and executable tests are the behavioral authority.
+2. [`docs/YAR.md`](../YAR.md) is the canonical public reference for the
+   currently implemented language, CLI, and standard library.
+3. [`docs/context/`](../context/context-map.md) is the canonical current internal
+   architecture, operational, and contributor context.
+4. [`LLM.txt`](../../LLM.txt) is a compact derived mirror. It is never an
+   independent authority.
+5. [`decisions.md`](decisions.md) records concise design rationale so accepted,
+   rejected, deferred, and withdrawn choices are not repeatedly re-litigated.
+6. Proposal documents preserve design and implementation evidence for one
+   bounded change. They do not override current code, tests, `docs/YAR.md`, or
+   `docs/context/` when implementation later changes.
+7. [`roadmap.md`](roadmap.md) contains future planning only.
+8. [`vision.md`](vision.md) defines stable language identity and principles.
 
-- deliberate
-- coherent
-- incremental
-- documented
-- testable
-- resistant to feature drift
+When two current-state documents disagree, verify behavior in code and tests,
+then repair the owned public, internal, and derived surfaces together.
 
-## Document Roles
+## Proposal registry
 
-### `vision.md`
+Each proposal's `Status` and `Implementation` fields are its canonical metadata.
+[`README.md`](README.md) is the synchronized navigable registry of that metadata.
+Update both in the same change; neither may disagree with the other.
 
-Defines the stable identity and design principles of the language.
+## Two independent state axes
 
-### `roadmap.md`
+Design status and implementation delivery are separate. Never combine them in
+one status phrase such as `accepted and implemented`.
 
-Defines planned milestones and candidate future directions.
+### Design `Status`
 
-### `current-state.md`
+Every proposal has exactly one design status:
 
-Describes only what the compiler implements today.
+- `exploring` — alternatives and constraints are still being investigated.
+- `proposed` — a complete design is ready for a decision.
+- `accepted` — the design is approved for implementation.
+- `rejected` — the design was considered and intentionally declined.
+- `deferred` — the design may be useful, but is not appropriate now.
+- `withdrawn` — its author or maintainers retired the proposal before or after
+  acceptance because its premise, substrate, or chosen design no longer holds.
 
-### `decisions.md`
+Changing design status requires a short rationale in the proposal and, for a
+meaningful language choice, a matching entry in `decisions.md`.
 
-Records important accepted, rejected, and deferred decisions.
+### Delivery `Implementation`
 
-### proposal docs
+Every proposal records one independent delivery state:
 
-Describe specific features under consideration.
+- `not started` — no accepted implementation is present.
+- `partial` — some accepted behavior exists, but the proposal is not complete.
+- `implemented` — current code, tests, and current-state documentation cover the
+  accepted design.
+- `removed` — previously implemented behavior is no longer shipped.
 
-## Feature Lifecycle
+`removed` is a delivery fact, not a design decision. A withdrawn proposal may
+be `not started`, `partial`, `implemented`, or `removed` depending on history.
+Code and executable tests settle disputed implementation state.
 
-A feature moves through these states:
-
-1. idea
-2. exploring
-3. proposed
-4. accepted
-5. implemented
-6. shipped
-
-A feature may also end as:
-
-- rejected
-- deferred
-
-## Meaning of Each State
-
-### idea
-
-A raw thought or possible direction.
-
-### exploring
-
-The problem space and alternatives are being examined.
-
-### proposed
-
-There is a written proposal with examples, semantics, and tradeoffs.
-
-### accepted
-
-The feature is approved for implementation.
-
-### implemented
-
-The compiler supports the feature.
-
-### shipped
-
-The feature is documented in `current-state.md` and considered part of the
-language baseline.
-
-### rejected
-
-The feature is intentionally not part of the language.
-
-### deferred
-
-The feature may be worthwhile later, but is not appropriate now.
-
-## Design Workflow
-
-For each feature:
+## Design workflow
 
 ### 1. Capture the problem
 
-Write down the concrete limitation or friction in the current language.
+Describe the concrete limitation or friction in the current language.
 
 ### 2. Explore alternatives
 
-Consider at least two plausible designs, not just one.
+Consider at least two plausible designs and record meaningful tradeoffs.
 
 ### 3. Evaluate fit
 
-Check whether the feature matches YAR’s principles.
+Check the design against `vision.md`, current semantics, and interaction costs.
 
 ### 4. Choose the smallest viable version
 
-Prefer the smallest design that solves the actual problem.
+Prefer the smallest coherent design that solves the actual problem.
 
-### 5. Write a proposal
+### 5. Write the proposal
 
-Use `proposal-template.md`.
+Start from [`proposal-template.md`](proposal-template.md). Include valid and
+invalid examples, exact semantics, interactions, alternatives, costs, and an
+acceptance plan.
 
 ### 6. Decide
 
-Mark the proposal as accepted, rejected, or deferred.
+Set one design `Status` and record the decision rationale. Acceptance authorizes
+implementation; it does not claim delivery.
 
-### 7. Implement
+### 7. Implement and test
 
-Implementation should follow the accepted proposal, not replace it.
+Implementation follows the accepted contract. Add automated tests at the
+highest-value boundary and keep the proposal checklist as evidence, not as the
+current language reference.
 
-### 8. Test
+### 8. Update owned current truth
 
-Add parser, checker, lowering/codegen, and diagnostic tests as needed.
+When behavior changes:
 
-### 9. Update docs
+- update `docs/YAR.md` for public language/API behavior;
+- update only the affected `docs/context/` files for internal architecture or
+  operations;
+- update `LLM.txt` as the compact derived mirror;
+- update `decisions.md` only when rationale or decision state changes;
+- update `roadmap.md` only when future planning changes.
 
-After implementation, update:
+### 9. Record delivery
 
-- `current-state.md`
-- `decisions.md`
+Update the proposal metadata and synchronized registry `Implementation` value
+only after code, tests, and the owned current-state documentation agree. Use
+`removed` when shipped behavior is deleted.
 
-## Required Questions for Every Proposal
+## Acceptance gates
 
-A proposal is not complete until it answers:
+Before accepting a proposal, verify:
 
-- what problem does this solve?
-- why is the existing language insufficient?
-- what does the feature look like in valid code?
-- what code is intentionally invalid?
-- what are the exact semantics?
-- how does it interact with current features?
-- what does it cost?
-- why is it worth doing now?
+- the problem is real and current;
+- the design fits YAR's identity;
+- semantics and invalid cases are explicit;
+- interactions with existing features are understood;
+- the design is the smallest coherent version;
+- test and documentation obligations are concrete;
+- unresolved questions do not change the public contract.
 
-## Design Gates
+Before marking implementation complete, verify:
 
-Before accepting a proposal, check:
+- code implements every accepted guarantee;
+- automated tests cover behavior, edge cases, and failure paths;
+- `docs/YAR.md` and affected `docs/context/` files describe reality;
+- `LLM.txt` matches those current sources;
+- the proposal registry and decision log are accurate.
 
-### Identity fit
+## Scope discipline
 
-Does it fit the language’s character?
+Roadmap appearance is not acceptance. Proposal acceptance is not implementation.
+Implementation is not current truth until code, tests, and owned documentation
+agree.
 
-### Real pressure
+No meaningful feature should be implemented without written semantics,
+examples, invalid examples, interaction notes, a decision state, and an
+acceptance plan.
 
-Does it solve a real current problem?
-
-### Interaction clarity
-
-Are interactions with existing features understood?
-
-### Minimality
-
-Is this the smallest version worth shipping?
-
-### Milestone fit
-
-Does it belong in the current planned milestone?
-
-## Sugar Rule
-
-A sugar feature is acceptable only if:
-
-- it desugars cleanly
-- the desugared form is already conceptually understood
-- diagnostics remain understandable
-- control flow remains visible
-- it does not create a separate semantic world
-
-## Capability-Based Planning
-
-Milestones should be framed by newly enabled capabilities, not random isolated
-features.
-
-Good examples:
-
-- complete basic boolean/control-flow expression writing
-- organize programs across multiple files
-- model richer domain data
-- improve code reuse boundaries
-
-Poor examples:
-
-- add one operator
-- add one keyword
-- add one syntax form
-
-A feature can be small, but the milestone should still answer:
-“What new kind of program becomes practical?”
-
-## Scope Discipline
-
-Each milestone should stay intentionally small.
-
-A milestone should not include multiple large interaction-heavy features unless
-they are tightly connected and justified together.
-
-## Implementation Rule
-
-No meaningful feature should be implemented without:
-
-- written semantics
-- examples
-- invalid examples
-- interaction notes
-- a decision state
-
-## Documentation Rule
-
-- `current-state.md` must describe reality only
-- `roadmap.md` must not be treated as implemented truth
-- proposal docs must not silently become canonical without an explicit decision
-
-## Decision Rule
-
-Any significant accepted, rejected, or deferred language choice should be
-recorded in `decisions.md`.
-
-## Process Review Rule
-
-When the design process itself feels too heavy or too loose, update this file.
-The process is allowed to evolve, but changes to process should also be
-deliberate.
+When this process is too heavy or too loose, update this file deliberately.

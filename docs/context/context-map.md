@@ -1,5 +1,10 @@
 # Context Map
 
+This map indexes current contributor-facing internal context. For public
+implemented behavior, use [docs/YAR.md](../YAR.md). For design process,
+decisions, future planning, and the proposal registry, use the
+[language-design index](../language/README.md).
+
 ## Core
 
 - [summary.md](summary.md) — Project-wide view of the compiler, package model,

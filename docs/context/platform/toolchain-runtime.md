@@ -92,8 +92,10 @@
   relative regular file; system-library names are validated while order and
   duplicates are preserved. Legacy `YAR_RUNTIME_ARCHIVE` configuration is
   rejected with migration guidance.
-- The Rust runtime uses `#[cfg(...)]` platform modules and branches to select
-  POSIX or Win32 implementations at compile time.
+- The runtime uses portable Rust standard-library filesystem, environment, and
+  TCP APIs where their contracts match Yar. Platform-specific Rust branches are
+  limited to behavior that actually differs, including path byte conversion,
+  GC stack discovery, Unix process groups and signals, and Windows Job Objects.
 - Source-level child execution uses explicit argument-owned deadlines and
   cancellation. Captured runs drain both pipes under independent byte caps.
   Timeout, cancellation, or a cap breach synchronously terminates ordinary
@@ -260,10 +262,9 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - Runtime filesystem status codes map in code generation to stable YAR error
   names: `NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidPath`,
   `InvalidArgument`, `Closed`, and `IO`.
-- On POSIX, the implementation uses `stat`, `opendir`, `mkdir`, `remove`, and
-  `mkstemp`. On Windows, the implementation uses Win32 APIs
-  (`CreateFileA`, `FindFirstFileA`, `CreateDirectoryA`,
-  `GetEnvironmentVariableA`, and related functions).
+- Filesystem operations are implemented with Rust `std::fs`, `std::path`, and
+  `std::env` APIs. The small platform-specific boundary converts Yar path bytes
+  to and from Unix `OsString` bytes or Windows UTF-8 strings.
 - Path normalization relies on the `path` stdlib package rather than a
   platform-specific separator API. The runtime adjusts separator handling
   per-platform where needed.
@@ -332,13 +333,11 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   to stable YAR error names: `ConnectionRefused`, `Timeout`, `AddrInUse`,
   `ConnectionReset`, `NotFound`, `PermissionDenied`, `InvalidArgument`, `IO`,
   and `Closed`.
-- On POSIX, the implementation uses BSD sockets (`socket`, `bind`, `listen`,
-  `accept`, `connect`, `recv`, `send`, `getaddrinfo`, `getsockname`,
-  `getpeername`). SIGPIPE is suppressed via `signal(SIGPIPE, SIG_IGN)` and
-  `SO_NOSIGPIPE` on macOS. On Windows, the implementation uses Winsock2
-  (`WSAStartup`, `socket`, `bind`, `listen`, `accept`, `connect`, `recv`,
-  `send`, `getaddrinfo`, `closesocket`).
-- Windows builds link `-lws2_32` for Winsock2 support.
+- Networking is implemented with Rust `std::net`. Listener and connection
+  sockets are nonblocking internally; the runtime provides the blocking Yar
+  contract through adaptive polling of readiness, close state, and
+  operation-local timeouts. Windows runtime bundles include `ws2_32` in the
+  Rust static library's ordered native-library contract.
 
 ### Map Runtime
 

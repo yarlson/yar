@@ -1,6 +1,7 @@
 # Proposal: TCP Networking (`net` stdlib package)
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -236,12 +237,15 @@ high-connection-count multiplexing remains deferred.
 
 - **Language surface**: zero (no grammar changes)
 - **Parser complexity**: zero
-- **Checker complexity**: minimal (2 switch cases added)
+- **Checker complexity**: minimal (host-intrinsic metadata and stable error
+  registration)
 - **Codegen complexity**: moderate (14 new intrinsic cases, follows existing
   patterns exactly)
-- **Runtime complexity**: moderate (~400 lines of C, cross-platform sockets)
+- **Runtime complexity**: moderate (Rust socket state, nonblocking polling,
+  close coordination, and cross-platform behavior)
 - **Diagnostics complexity**: zero
-- **Test burden**: 1 integration test
+- **Test burden**: runtime ABI/unit tests plus concurrent native integration on
+  Unix and Windows
 - **Documentation burden**: moderate (stdlib docs, error model, runtime docs)
 
 ## 11. Why Now?
@@ -263,8 +267,8 @@ and networked tools.
 
 ## 13. Decision
 
-Accepted. TCP networking fills the most impactful gap in Yar's stdlib with
-minimal compiler complexity, following established patterns.
+Accepted. In the implemented baseline, TCP networking fills the most impactful gap in Yar's
+stdlib with minimal compiler complexity, following established patterns.
 
 ## 14. Implementation Checklist
 
@@ -274,7 +278,9 @@ minimal compiler complexity, following established patterns.
 - [x] `crates/yar-compiler/src/codegen.rs` — LLVM declarations, intrinsic codegen, error
       mapping
 - [x] `crates/yar-runtime/src/net.rs` — Rust runtime implementation
-- [x] `crates/yar-compiler/src/compile.rs` — Windows `-lws2_32` linking
+- [x] `runtime-bundles/x86_64-pc-windows-gnu/yar-runtime.toml` and
+      `crates/yar-cli/src/runtime_bundle.rs` — validated Windows native-library
+      metadata including `ws2_32`
 - [x] `testdata/stdlib_net/main.yar` — integration test fixture
 - [x] Rust compiler and CLI tests — test function
 - [x] `docs/context/domains/stdlib.md` — net package documentation

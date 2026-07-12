@@ -1,6 +1,7 @@
 # Proposal: Boolean Operators `&&` and `||`
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -107,13 +108,13 @@ None currently.
 
 ## 13. Decision
 
-Accepted and implemented.
+Accepted. The proposal's delivery state records the implemented baseline.
 
 ## 14. Implementation Checklist
 
-- parser
-- checker
-- lowering/codegen
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] checker
+- [x] lowering/codegen
+- [x] tests
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

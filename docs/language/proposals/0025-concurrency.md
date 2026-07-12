@@ -1,6 +1,7 @@
 # Proposal: Structured Concurrency (`taskgroup` and `chan`)
 
-Status: accepted and implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -1340,7 +1341,8 @@ code.
 
 ## 14. Decision
 
-Accepted and implemented as the current structured-concurrency surface for Yar.
+Accepted as Yar's structured-concurrency design. The delivery state records the
+implemented baseline.
 The shipped implementation includes:
 
 - `taskgroup []R { ... }`
@@ -1432,7 +1434,7 @@ The shipped baseline instead has:
       reclamation under forced collection
 - [x] `testdata/concurrency_share_safe/main.yar` — transitive share-safety and
       unrestricted result test
-- [ ] `testdata/concurrency_net/main.yar` — concurrent TCP server test
+- [x] `testdata/stdlib_net/main.yar` — concurrent typed TCP server/client test
 - [ ] `testdata/concurrency_race/main.yar` — race detector validation
 - [x] Rust compiler and CLI tests — concurrency test functions
 - [x] `docs/context/domains/concurrency.md` — concurrency documentation

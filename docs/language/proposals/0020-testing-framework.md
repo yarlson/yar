@@ -1,6 +1,7 @@
 # Proposal: Testing Framework
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -220,7 +221,7 @@ self-hosting.
 
 ## 13. Decision
 
-Accepted and implemented. The `yar test` command discovers `test_*` functions
+Accepted. In the implemented baseline, `yar test` discovers `test_*` functions
 in the selected entry package's `_test.yar` files, diagnoses malformed
 candidates, generates a synthetic runner, and reports pass/fail results.
 Imported packages and dependencies are loaded without test files. The

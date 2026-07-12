@@ -1,6 +1,7 @@
 # Proposal: `to_str` Builtin
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -166,7 +167,7 @@ with the generic approach used elsewhere.
 
 ## 13. Decision
 
-Accepted and implemented. `to_str` is a compiler-provided polymorphic builtin
+Accepted. In the implemented baseline, `to_str` is a compiler-provided polymorphic builtin
 supporting `i32`, `i64`, `bool`, `str`, and `error`. It eliminated
 `print_int` and unified the testing assertion surface.
 

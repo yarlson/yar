@@ -1081,9 +1081,8 @@ Filesystem errors surface through ordinary YAR errors using the names:
 - `error.Closed`
 - `error.IO`
 
-Current implementation note: the host filesystem runtime uses POSIX APIs on
-Unix-like systems and Win32 APIs on Windows. `fs.temp_dir` uses `TMPDIR` or
-`/tmp` on Unix and `GetTempPath` on Windows.
+`fs.temp_dir` uses `TMPDIR` or `/tmp` on Unix and the system temporary
+directory on Windows.
 
 ### `io`
 
@@ -1245,9 +1244,6 @@ Networking errors surface through ordinary YAR errors using the names:
 - `error.InvalidArgument`
 - `error.IO`
 - `error.Closed`
-
-Current implementation note: the host networking runtime uses BSD sockets on
-Unix-like systems and Winsock2 on Windows. SIGPIPE is suppressed on POSIX.
 
 ### HTTP serving
 

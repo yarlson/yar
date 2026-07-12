@@ -1,6 +1,7 @@
 # Proposal: Host Process and Environment
 
-Status: implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 

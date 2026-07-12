@@ -1,6 +1,7 @@
 # Proposal: Streaming Resource Model (`io`, `fs`, and `net`)
 
-Status: accepted and implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 

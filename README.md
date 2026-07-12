@@ -465,7 +465,8 @@ rather than treated as bundle-compatible.
 
 - [The Yar Code](docs/language/the-yar-code.md) -- how to write Yar programs
 - [Language reference](docs/YAR.md) -- what the compiler implements today
-- [Language design docs](docs/language/) -- proposals, decisions, and process
+- [Language design docs](docs/language/README.md) -- proposal registry, decisions,
+  roadmap, and process
 - [Context docs](docs/context/) -- architecture, runtime, and compiler internals
 
 ## Development

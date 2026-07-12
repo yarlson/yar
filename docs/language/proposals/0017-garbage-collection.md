@@ -1,6 +1,7 @@
 # Proposal: Garbage Collection
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -158,7 +159,7 @@ the runtime is still small enough to evolve deliberately.
 
 ## 13. Decision
 
-Accepted and implemented in the Rust runtime.
+Accepted. The delivery state records its implementation in the Rust runtime.
 
 The language surface stays unchanged:
 

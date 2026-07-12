@@ -1,6 +1,7 @@
 # Proposal: Pointers and Recursive Data
 
-Status: accepted and implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -201,11 +202,11 @@ imports, enums, and slices still do not let YAR model its own AST cleanly.
 
 ## 12. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- runtime allocation support
-- diagnostics
-- tests
-- documentation updates
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] runtime allocation support
+- [x] diagnostics
+- [x] tests
+- [x] documentation updates

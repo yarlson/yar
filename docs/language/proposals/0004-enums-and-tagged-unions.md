@@ -1,6 +1,7 @@
 # Proposal: Enums / Tagged Unions
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -258,7 +259,7 @@ mandatory exhaustiveness, and no default arm or general pattern system.
 
 ## 13. Decision
 
-Accepted and implemented.
+Accepted. The proposal's delivery state records the implemented baseline.
 
 The shipped version includes:
 
@@ -277,11 +278,11 @@ The first implementation intentionally does not include:
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] diagnostics
+- [x] tests
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

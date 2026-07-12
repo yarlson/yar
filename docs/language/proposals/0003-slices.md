@@ -1,6 +1,7 @@
 # Proposal: Slices
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -203,7 +204,7 @@ language now implements the smallest useful slice surface described here.
 
 ## 13. Decision
 
-Accepted and implemented.
+Accepted. The proposal's delivery state records the implemented baseline.
 
 YAR now supports slice types, slice literals, indexing, index assignment,
 slicing, `len(slice)`, and `append(slice, value)` with runtime bounds checks and
@@ -211,12 +212,12 @@ runtime-managed allocation.
 
 ## 14. Implementation Checklist
 
-- parser
-- AST / IR updates
-- checker
-- codegen
-- runtime sequence support
-- diagnostics
-- tests
-- `current-state.md` update
-- `decisions.md` update
+- [x] parser
+- [x] AST / IR updates
+- [x] checker
+- [x] codegen
+- [x] runtime sequence support
+- [x] diagnostics
+- [x] tests
+- [x] `docs/YAR.md` update
+- [x] `decisions.md` update

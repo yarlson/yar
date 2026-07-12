@@ -1,6 +1,7 @@
 # Proposal: Closures
 
-Status: accepted and implemented
+Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -165,9 +166,9 @@ runtime decisions honest.
 
 ## 13. Decision
 
-Accepted and implemented as a small, explicit closure system: function literals
-and function types are first-class, captures are by value, and captured outer
-bindings remain read-only inside closure bodies.
+Accepted as a small, explicit closure system. In the implemented baseline,
+function literals and function types are first-class, captures are by value,
+and captured outer bindings remain read-only inside closure bodies.
 
 ## 14. Implementation Checklist
 
@@ -177,5 +178,5 @@ bindings remain read-only inside closure bodies.
 - [x] codegen
 - [x] diagnostics
 - [x] tests
-- [x] `current-state.md` update
+- [x] `docs/YAR.md` update
 - [x] `decisions.md` update

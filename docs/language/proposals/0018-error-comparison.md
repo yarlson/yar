@@ -1,6 +1,7 @@
 # Proposal: Error Comparison and Error Expressions
 
 Status: accepted
+Implementation: implemented
 
 ## 1. Summary
 
@@ -165,7 +166,7 @@ None. The feature is implemented and stable.
 
 ## 13. Decision
 
-Accepted and implemented. Error values support `==` and `!=` comparison, and
+Accepted. In the implemented baseline, error values support `==` and `!=` comparison, and
 `error.Name` expressions are valid in any expression position. The internal
 representation remains `i32` codes with `icmp` comparison.
 
