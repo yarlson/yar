@@ -738,7 +738,10 @@ testing.fail(t, msg) void
 
 ### Test Files
 
-Files ending in `_test.yar` in the same package. Excluded from `build`/`run`/`check`.
+Files ending in `_test.yar` are excluded from `build`/`run`/`check`. `yar test`
+includes them only from the selected entry package, never imported packages or
+dependencies. Every entry test-file `test_*` declaration must match the test
+function contract; malformed candidates are diagnostics rather than skipped.
 
 ### Test Functions
 

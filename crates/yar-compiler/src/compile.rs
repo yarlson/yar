@@ -8,7 +8,7 @@ use crate::{
     ast::{FunctionDecl, PackageGraph, PackageImport, Program, SourceId, TypeRefKind},
     checker::{Info, check_program},
     codegen::{CodegenError, emit_llvm_with_options},
-    diag::Diagnostic,
+    diag::{Diagnostic, List},
     lower::lower_package_graph,
     mono::monomorphize_program,
     package::{LoadError, load_package_graph_with_root},
@@ -115,7 +115,12 @@ pub fn compile_test_path(
         return Ok((None, diagnostics));
     }
 
-    inject_test_runner(&mut graph)?;
+    let (tests, diagnostics) = discover_test_functions(&graph);
+    if !diagnostics.is_empty() {
+        return Ok((None, diagnostics));
+    }
+
+    inject_test_runner(&mut graph, &tests)?;
     compile_graph(&graph, options)
 }
 
@@ -162,28 +167,30 @@ struct TestFunction {
     name: String,
 }
 
-fn discover_test_functions(graph: &PackageGraph) -> Vec<TestFunction> {
+fn discover_test_functions(graph: &PackageGraph) -> (Vec<TestFunction>, Vec<Diagnostic>) {
     let Some(entry) = graph.packages.get(&graph.entry) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    if !entry.imports.iter().any(is_testing_import) {
-        return Vec::new();
-    }
+    let has_testing_import = entry.imports.iter().any(is_testing_import);
 
     let mut tests = Vec::new();
+    let mut diagnostics = List::default();
     for file in &entry.files {
         if !is_test_file(file) {
             continue;
         }
         for function in &file.functions {
-            if is_test_function(function) {
+            if !function.name.starts_with("test_") {
+                continue;
+            }
+            if validate_test_function(function, has_testing_import, &mut diagnostics) {
                 tests.push(TestFunction {
                     name: function.name.clone(),
                 });
             }
         }
     }
-    tests
+    (tests, diagnostics.items())
 }
 
 fn is_testing_import(import: &PackageImport) -> bool {
@@ -196,34 +203,92 @@ fn is_test_file(program: &Program) -> bool {
     program.package_pos.file.ends_with("_test.yar")
 }
 
-fn is_test_function(function: &FunctionDecl) -> bool {
-    if !function.name.starts_with("test_") {
-        return false;
-    }
+fn validate_test_function(
+    function: &FunctionDecl,
+    has_testing_import: bool,
+    diagnostics: &mut List,
+) -> bool {
+    let mut valid = true;
+    let diagnostic = |message: String, diagnostics: &mut List| {
+        diagnostics.add(function.name_pos.clone(), message);
+    };
     if function.receiver.is_some() {
-        return false;
+        valid = false;
+        diagnostic(
+            format!("test function {:?} must not have a receiver", function.name),
+            diagnostics,
+        );
     }
     if !function.type_params.is_empty() {
-        return false;
+        valid = false;
+        diagnostic(
+            format!(
+                "test function {:?} must not have type parameters",
+                function.name
+            ),
+            diagnostics,
+        );
     }
     if function.params.len() != 1 {
-        return false;
+        valid = false;
+        diagnostic(
+            format!(
+                "test function {:?} must have exactly one parameter",
+                function.name
+            ),
+            diagnostics,
+        );
+    } else if !is_testing_parameter(&function.params[0].type_ref) {
+        valid = false;
+        diagnostic(
+            format!(
+                "test function {:?} parameter must have type *testing.T",
+                function.name
+            ),
+            diagnostics,
+        );
     }
+    if !is_void_type(&function.return_type) {
+        valid = false;
+        diagnostic(
+            format!("test function {:?} must return void", function.name),
+            diagnostics,
+        );
+    }
+    if function.return_is_bang {
+        valid = false;
+        diagnostic(
+            format!("test function {:?} must not be errorable", function.name),
+            diagnostics,
+        );
+    }
+    if !has_testing_import {
+        valid = false;
+        diagnostic(
+            format!(
+                "test function {:?} requires import \"std/testing\"",
+                function.name
+            ),
+            diagnostics,
+        );
+    }
+    valid
+}
 
-    let param_type = &function.params[0].type_ref;
+fn is_testing_parameter(param_type: &crate::ast::TypeRef) -> bool {
     if param_type.kind != TypeRefKind::Pointer {
         return false;
     }
     let Some(elem) = param_type.elem.as_deref() else {
         return false;
     };
-    if elem.kind != TypeRefKind::Named || elem.name != "testing.T" {
-        return false;
-    }
-    if function.return_type.kind != TypeRefKind::Named || function.return_type.name != "void" {
-        return false;
-    }
-    !function.return_is_bang
+    elem.kind == TypeRefKind::Named && elem.name == "testing.T" && elem.type_args.is_empty()
+}
+
+fn is_void_type(return_type: &crate::ast::TypeRef) -> bool {
+    return_type.kind == TypeRefKind::Named
+        && return_type.name == "void"
+        && return_type.type_args.is_empty()
 }
 
 fn generate_test_main(package_name: &str, tests: &[TestFunction]) -> String {
@@ -272,8 +337,10 @@ fn generate_test_main(package_name: &str, tests: &[TestFunction]) -> String {
     src
 }
 
-fn inject_test_runner(graph: &mut PackageGraph) -> Result<(), CompileError> {
-    let tests = discover_test_functions(graph);
+fn inject_test_runner(
+    graph: &mut PackageGraph,
+    tests: &[TestFunction],
+) -> Result<(), CompileError> {
     if tests.is_empty() {
         return Err(CompileError::Internal(
             "no test functions found".to_string(),
@@ -286,7 +353,7 @@ fn inject_test_runner(graph: &mut PackageGraph) -> Result<(), CompileError> {
             "entry package {entry_path:?} not found"
         )));
     };
-    let runner_src = generate_test_main(&entry_package.name, &tests);
+    let runner_src = generate_test_main(&entry_package.name, tests);
     let (runner, diagnostics) = parse_file("<generated test runner>", &runner_src);
     if !diagnostics.is_empty() {
         return Err(CompileError::Internal(format!(
@@ -422,6 +489,7 @@ name = "inner"
 
         assert_eq!(diagnostics, Vec::new());
         let names = discover_test_functions(&graph)
+            .0
             .into_iter()
             .map(|test| test.name)
             .collect::<Vec<_>>();
@@ -471,7 +539,15 @@ pub struct T {}
         let (graph, diagnostics) = load_package_graph(&root, true).unwrap();
 
         assert_eq!(diagnostics, Vec::new());
-        assert!(discover_test_functions(&graph).is_empty());
+        let (tests, diagnostics) = discover_test_functions(&graph);
+        assert!(tests.is_empty());
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["test function \"test_local\" requires import \"std/testing\""]
+        );
     }
 
     #[test]
@@ -507,6 +583,61 @@ pub struct T {}
         let unit = unit.unwrap();
         assert!(unit.ir.contains("define i32 @main(i32 %argc, ptr %argv)"));
         assert!(unit.ir.contains("PASS: test_add"));
+    }
+
+    #[test]
+    fn diagnoses_every_malformed_test_declaration() {
+        let root = temp_dir("yar-rust-malformed-tests");
+        write_source(
+            &root.join("main.yar"),
+            "package main\n\nstruct Suite {}\n\nfn main() i32 { return 0 }\n",
+        );
+        write_source(
+            &root.join("main_test.yar"),
+            r#"package main
+
+import "std/testing"
+
+fn test_valid(t *testing.T) void { return }
+fn (s *Suite) test_method(t *testing.T) void { return }
+fn test_generic[V](t *testing.T) void { return }
+fn test_no_parameter() void { return }
+fn test_wrong_parameter(value i32) void { return }
+fn test_generic_parameter(t *testing.T[i32]) void { return }
+fn test_wrong_return(t *testing.T) i32 { return 0 }
+fn test_generic_return(t *testing.T) void[i32] { return }
+fn test_errorable(t *testing.T) !void { return error.Failed }
+fn (s *Suite) test_many_problems[V]() !i32 { return error.Failed }
+"#,
+        );
+
+        let (unit, diagnostics) = compile_test_path(&root, &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "test function \"test_method\" must not have a receiver",
+                "test function \"test_generic\" must not have type parameters",
+                "test function \"test_no_parameter\" must have exactly one parameter",
+                "test function \"test_wrong_parameter\" parameter must have type *testing.T",
+                "test function \"test_generic_parameter\" parameter must have type *testing.T",
+                "test function \"test_wrong_return\" must return void",
+                "test function \"test_generic_return\" must return void",
+                "test function \"test_errorable\" must not be errorable",
+                "test function \"test_many_problems\" must not have a receiver",
+                "test function \"test_many_problems\" must not have type parameters",
+                "test function \"test_many_problems\" must have exactly one parameter",
+                "test function \"test_many_problems\" must return void",
+                "test function \"test_many_problems\" must not be errorable",
+            ]
+        );
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.pos.file.ends_with("main_test.yar") && diagnostic.pos.column > 0
+        }));
     }
 
     #[test]

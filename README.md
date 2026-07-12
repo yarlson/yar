@@ -286,7 +286,11 @@ lifetime, and its numeric exit status becomes the `yar run` exit status.
 
 ## Testing
 
-Test files end in `_test.yar`. Test functions take `*testing.T` and return `void`:
+Test files end in `_test.yar`. `yar test` includes them only from the selected
+entry package; imported packages and dependencies are compiled without their
+test files. Every entry test-file function whose name starts with `test_` must
+take exactly one `*testing.T` parameter, return non-errorable `void`, and have
+no receiver or type parameters. Malformed declarations are diagnostics.
 
 ```
 package main
@@ -307,7 +311,7 @@ fn test_add(t *testing.T) void {
 $ yar test .
 PASS: test_add
 
-2 passed, 0 failed
+1 passed, 0 failed
 ```
 
 ## Dependencies

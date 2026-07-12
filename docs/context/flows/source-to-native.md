@@ -118,8 +118,10 @@
 - Resolves the entry file or package directory.
 - Rejects cross-compilation targets; `YAR_OS`/`YAR_ARCH` must match the host
   platform or be unset.
-- Loads the package graph with `_test.yar` files included (normally excluded).
-- Scans test files for functions matching `fn test_*(t *testing.T) void`.
+- Loads `_test.yar` files only for the selected entry package; imported package
+  and dependency test files stay excluded.
+- Validates every entry test-file `test_*` declaration and stops with
+  source-positioned diagnostics if any candidate is malformed.
 - Generates a synthetic test runner that replaces the user `main()`, creates a
   `testing.T` instance for each discovered test, calls each test function, and
   reports PASS/FAIL results to stdout.

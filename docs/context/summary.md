@@ -17,7 +17,7 @@
 - `emit-ir` runs the same frontend, explicitly continues through LLVM generation, and writes the IR to stdout.
 - `build` compiles the entry package graph, writes IR and a selected runtime input into a temporary directory, and invokes `clang` to produce a native binary under one configurable build deadline shared with any Cargo runtime build.
 - `run` builds a temporary binary under the build deadline, then executes it without a default runtime deadline; values after `--` are forwarded unchanged and the program inherits stdin, stdout, and stderr.
-- `test` loads a package with `_test.yar` files included, discovers `test_*` functions, generates a synthetic test runner, compiles it under the build deadline, and executes the test binary under a separate configurable deadline.
+- `test` includes `_test.yar` only for the selected entry package, diagnoses every malformed `test_*` declaration, generates a synthetic runner for valid tests, compiles it under the build deadline, and executes it under a separate configurable deadline.
 - Project-aware commands accept a prefix-only `--manifest-path` override; otherwise compilation discovers from the entry directory and dependency commands from the invocation directory. The selected manifest directory anchors lock state, recovery, and relative dependency paths without changing the process working directory.
 - `init` creates a `yar.toml` in the invocation directory or at an explicit target without discovering ancestors.
 - `add` and `remove` resolve and serialize the complete target dependency state, then publish `yar.toml` with the target lock contents or absence as one recoverable transition.

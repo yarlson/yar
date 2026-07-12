@@ -218,11 +218,13 @@ implementation.
 Status: accepted
 
 YAR provides a `testing` stdlib package and a `yar test` CLI command. Test files
-use the `_test.yar` suffix and are excluded from normal builds. Test functions
-follow the `fn test_*(t *testing.T) void` convention and are discovered at
-compile time. Assertions use generic standalone functions (`testing.equal[V]`)
-with rich failure messages via the `to_str` builtin. The test runner is a
-generated Yar `main()` injected at compile time.
+use the `_test.yar` suffix and are excluded from normal builds and imported
+packages. `yar test` includes only the selected entry package's test files and
+diagnoses every malformed `test_*` declaration. Valid tests follow the
+`fn test_*(t *testing.T) void` convention without receivers, type parameters,
+or an errorable return. Assertions use generic standalone functions
+(`testing.equal[V]`) with rich failure messages via the `to_str` builtin. The
+test runner is a generated Yar `main()` injected at compile time.
 
 ### `to_str` builtin
 

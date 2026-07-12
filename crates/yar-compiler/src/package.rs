@@ -56,26 +56,19 @@ impl From<ManifestError> for LoadError {
 
 pub fn load_package_graph(
     path: impl AsRef<Path>,
-    include_tests: bool,
+    include_entry_tests: bool,
 ) -> Result<(PackageGraph, Vec<Diagnostic>), LoadError> {
-    load_package_graph_with_root(path, None, include_tests)
+    load_package_graph_with_root(path, None, include_entry_tests)
 }
 
 pub(crate) fn load_package_graph_with_root(
     path: impl AsRef<Path>,
     project_root: Option<&Path>,
-    include_tests: bool,
+    include_entry_tests: bool,
 ) -> Result<(PackageGraph, Vec<Diagnostic>), LoadError> {
     let entry_dir = resolve_entry_dir(path.as_ref())?;
     let (root_dir, entry_subpath) = resolve_project_root(&entry_dir, project_root)?;
     let dependency_index = DependencyIndex::load(&root_dir)?;
-    let mut loader = PackageLoader {
-        packages: BTreeMap::new(),
-        diag: List::default(),
-        include_tests,
-        dependency_index,
-    };
-
     let entry_location = PackageLocation {
         id: PackageId {
             source: SourceId::Entry,
@@ -84,11 +77,17 @@ pub(crate) fn load_package_graph_with_root(
         dir: Some(entry_dir),
         import_path: String::new(),
     };
+    let mut loader = PackageLoader {
+        packages: BTreeMap::new(),
+        diag: List::default(),
+        test_package: include_entry_tests.then(|| entry_location.id.clone()),
+        dependency_index,
+    };
     match loader.load_package(entry_location)? {
         Some(entry) => {
             if let Some(pkg) = loader.packages.get(&entry)
                 && pkg.name != "main"
-                && !include_tests
+                && !include_entry_tests
                 && let Some(file) = pkg.files.first()
             {
                 loader
@@ -210,7 +209,7 @@ fn invalid_project_root(message: String) -> LoadError {
 struct PackageLoader {
     packages: BTreeMap<PackageId, Package>,
     diag: List,
-    include_tests: bool,
+    test_package: Option<PackageId>,
     dependency_index: DependencyIndex,
 }
 
@@ -268,7 +267,7 @@ impl PackageLoader {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !self.include_tests && name.ends_with("_test.yar") {
+            if name.ends_with("_test.yar") && self.test_package.as_ref() != Some(id) {
                 continue;
             }
             file_names.push(name);
@@ -1663,6 +1662,121 @@ pub fn add(a i32, b i32) i32 {
         }
 
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn includes_test_files_only_for_the_entry_package() {
+        let root = temp_dir("yar-package-entry-tests-only");
+        let entry = root.join("cmd/app");
+        let shared = root.join("shared");
+        fs::create_dir_all(&entry).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "[package]\nname = \"entry_tests_only\"\n",
+        )
+        .unwrap();
+        fs::write(
+            entry.join("main.yar"),
+            "package main\n\nimport \"shared\"\n\nfn main() i32 { return shared.value() }\n",
+        )
+        .unwrap();
+        fs::write(
+            entry.join("main_test.yar"),
+            "package main\n\nfn test_entry() void { return }\n",
+        )
+        .unwrap();
+        fs::write(
+            shared.join("shared.yar"),
+            "package shared\n\npub fn value() i32 { return 0 }\n",
+        )
+        .unwrap();
+        fs::write(
+            shared.join("shared_test.yar"),
+            "this imported test file must not be parsed\n",
+        )
+        .unwrap();
+
+        let (production_graph, production_diagnostics) = load_package_graph(&entry, false).unwrap();
+        assert_eq!(production_diagnostics, Vec::new());
+        assert!(
+            production_graph.packages[&entry_package_id("cmd/app")]
+                .files
+                .iter()
+                .all(|file| !file.package_pos.file.ends_with("_test.yar"))
+        );
+
+        let (graph, diagnostics) = load_package_graph(&entry, true).unwrap();
+
+        assert_eq!(diagnostics, Vec::new());
+        let entry_files = &graph.packages[&entry_package_id("cmd/app")].files;
+        assert!(
+            entry_files
+                .iter()
+                .any(|file| file.package_pos.file.ends_with("main_test.yar"))
+        );
+        let shared_files = &graph.packages[&entry_package_id("shared")].files;
+        assert!(
+            shared_files
+                .iter()
+                .all(|file| !file.package_pos.file.ends_with("_test.yar"))
+        );
+    }
+
+    #[test]
+    fn excludes_test_files_from_path_dependencies() {
+        let root = temp_dir("yar-package-path-dependency-tests");
+        let app = root.join("app");
+        let dependency = root.join("dependency");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&dependency).unwrap();
+        fs::write(
+            app.join(MANIFEST_FILE),
+            r#"[package]
+name = "app"
+
+[dependencies]
+dependency = { path = "../dependency" }
+"#,
+        )
+        .unwrap();
+        fs::write(
+            app.join("main.yar"),
+            "package main\n\nimport \"dependency\"\n\nfn main() i32 { return dependency.value() }\n",
+        )
+        .unwrap();
+        fs::write(
+            app.join("main_test.yar"),
+            "package main\n\nfn test_entry() void { return }\n",
+        )
+        .unwrap();
+        fs::write(
+            dependency.join(MANIFEST_FILE),
+            "[package]\nname = \"dependency\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dependency.join("dependency.yar"),
+            "package dependency\n\npub fn value() i32 { return 0 }\n",
+        )
+        .unwrap();
+        fs::write(dependency.join("dependency_test.yar"), "package wrong\n").unwrap();
+
+        let (graph, diagnostics) = load_package_graph(&app, true).unwrap();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "../dependency".to_owned(),
+            },
+            subpath: String::new(),
+        };
+
+        assert_eq!(diagnostics, Vec::new());
+        assert!(
+            graph.packages[&dependency_id]
+                .files
+                .iter()
+                .all(|file| !file.package_pos.file.ends_with("_test.yar"))
+        );
     }
 
     fn repo_root() -> PathBuf {
