@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -288,11 +289,11 @@ fn emit_ir_prints_rust_codegen_output() {
 #[test]
 fn run_executes_testdata_fixture() {
     let dir = temp_dir("yar-cli-run");
-    let runtime_archive = build_runtime_archive(&dir);
+    let runtime_bundle = build_runtime_bundle(&dir);
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .args(["run", fixture("testdata/hello/main.yar").to_str().unwrap()])
-        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
         .output()
         .unwrap();
 
@@ -327,7 +328,7 @@ fn main() i32 {
 "#,
     )
     .unwrap();
-    let runtime_archive = build_runtime_archive(&dir);
+    let runtime_bundle = build_runtime_bundle(&dir);
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .arg("run")
@@ -337,7 +338,7 @@ fn main() i32 {
         .arg("--help")
         .arg("")
         .arg("--")
-        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
         .output()
         .unwrap();
 
@@ -362,10 +363,11 @@ fn main() i32 {
 
 #[cfg(unix)]
 #[test]
-fn build_uses_explicit_runtime_archive_without_cargo() {
+fn build_uses_explicit_runtime_bundle_without_cargo() {
     let dir = temp_dir("yar-cli-runtime-archive");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let cc = fake_cc(&dir);
     let output_path = dir.join("program");
 
@@ -378,7 +380,7 @@ fn build_uses_explicit_runtime_archive_without_cargo() {
         ])
         .env("CC", &cc)
         .env("PATH", &dir)
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .output()
         .unwrap();
 
@@ -393,14 +395,169 @@ fn build_uses_explicit_runtime_archive_without_cargo() {
         cc_args.contains(archive.to_str().unwrap()),
         "cc args did not include explicit runtime archive: {cc_args}"
     );
+    let mut expected = vec![archive.to_string_lossy().into_owned()];
+    expected.extend(
+        expected_runtime_libraries(host_runtime_target())
+            .iter()
+            .map(|library| format!("-l{library}")),
+    );
+    assert_args_in_order(
+        &cc_args,
+        &expected.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_runtime_uses_the_configured_cargo_target_dir() {
+    let dir = temp_dir("yar-cli-custom-cargo-target");
+    let cargo_target = dir.join("cargo-target");
+    let cc = fake_cc(&dir);
+    let output_path = dir.join("program");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("CARGO_TARGET_DIR", &cargo_target)
+        .env_remove("YAR_RUNTIME_BUNDLE")
+        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let archive = cargo_target.join("release/libyar_runtime.a");
+    assert!(archive.is_file(), "missing {}", archive.display());
+    let cc_args = fs::read_to_string(dir.join("cc-args")).unwrap();
+    assert!(
+        cc_args.contains(archive.to_str().unwrap()),
+        "cc args did not use configured target dir: {cc_args}"
+    );
+    fs::remove_dir_all(cargo_target).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_runtime_rejects_an_empty_cargo_target_dir() {
+    let dir = temp_dir("yar-cli-empty-cargo-target");
+    let cc = fake_cc(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("CARGO_TARGET_DIR", "")
+        .env_remove("YAR_RUNTIME_BUNDLE")
+        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CARGO_TARGET_DIR must not be empty"),
+        "stderr: {stderr}"
+    );
+    assert!(!dir.join("cc-args").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_runtime_archive_configuration_is_rejected() {
+    let dir = temp_dir("yar-cli-legacy-runtime-archive");
+    let archive = dir.join("libyar_runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
+    let cc = fake_cc(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
+        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("YAR_RUNTIME_ARCHIVE was replaced"),
+        "stderr: {stderr}"
+    );
+    assert!(!dir.join("cc-args").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_explicit_runtime_bundle_does_not_fall_back() {
+    let dir = temp_dir("yar-cli-invalid-runtime-bundle");
+    let archive = dir.join("libyar_runtime.a");
+    fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
+    let manifest = fs::read_to_string(dir.join("yar-runtime.toml"))
+        .unwrap()
+        .replace(host_runtime_target(), "mismatched-target");
+    fs::write(dir.join("yar-runtime.toml"), manifest).unwrap();
+    let cc = fake_cc(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("selected target"), "stderr: {stderr}");
+    assert!(!dir.join("cc-args").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_explicit_runtime_bundle_does_not_fall_back() {
+    let dir = temp_dir("yar-cli-empty-runtime-bundle");
+    let cc = fake_cc(&dir);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            fixture("testdata/hello/main.yar").to_str().unwrap(),
+        ])
+        .env("CC", &cc)
+        .env("YAR_RUNTIME_BUNDLE", "")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("must point at"), "stderr: {stderr}");
+    assert!(!dir.join("cc-args").exists());
 }
 
 #[cfg(unix)]
 #[test]
 fn build_timeout_terminates_the_compiler_process() {
     let dir = temp_dir("yar-cli-build-timeout");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let compiler = dir.join("slow-cc");
     write_executable(&compiler, "#!/bin/sh\nsleep 2\nexit 0\n");
 
@@ -413,7 +570,7 @@ fn build_timeout_terminates_the_compiler_process() {
         ])
         .env("CC", &compiler)
         .env("YAR_BUILD_TIMEOUT_SECS", "1")
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .output()
         .unwrap();
 
@@ -427,14 +584,15 @@ fn build_timeout_terminates_the_compiler_process() {
 #[test]
 fn test_timeout_terminates_the_test_binary() {
     let dir = temp_dir("yar-cli-test-timeout");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let compiler = fake_program_cc(&dir, "test-cc", "sleep 2");
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .args(["test", fixture("testdata/testing_basic").to_str().unwrap()])
         .env("CC", &compiler)
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .env("YAR_TEST_TIMEOUT_SECS", "1")
         .output()
         .unwrap();
@@ -448,15 +606,16 @@ fn test_timeout_terminates_the_test_binary() {
 #[test]
 fn run_program_has_no_default_timeout() {
     let dir = temp_dir("yar-cli-run-without-timeout");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let compiler = fake_program_cc(&dir, "run-cc", "sleep 6\nexit 0");
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .args(["run", fixture("testdata/hello/main.yar").to_str().unwrap()])
         .env("CC", &compiler)
         .env("YAR_BUILD_TIMEOUT_SECS", "5")
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .output()
         .unwrap();
 
@@ -471,8 +630,9 @@ fn run_program_has_no_default_timeout() {
 #[test]
 fn invalid_build_timeout_fails_before_starting_the_compiler() {
     let dir = temp_dir("yar-cli-invalid-build-timeout");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let compiler = fake_cc(&dir);
 
     for value in ["0", "18446744073709551615"] {
@@ -485,7 +645,7 @@ fn invalid_build_timeout_fails_before_starting_the_compiler() {
             ])
             .env("CC", &compiler)
             .env("YAR_BUILD_TIMEOUT_SECS", value)
-            .env("YAR_RUNTIME_ARCHIVE", &archive)
+            .env("YAR_RUNTIME_BUNDLE", &dir)
             .output()
             .unwrap();
 
@@ -504,8 +664,9 @@ fn invalid_build_timeout_fails_before_starting_the_compiler() {
 #[test]
 fn missing_external_tools_are_named() {
     let dir = temp_dir("yar-cli-missing-tools");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, host_runtime_target());
     let missing_compiler = dir.join("missing-cc");
 
     let compiler_output = Command::new(env!("CARGO_BIN_EXE_yar"))
@@ -516,7 +677,7 @@ fn missing_external_tools_are_named() {
             dir.join("program").to_str().unwrap(),
         ])
         .env("CC", &missing_compiler)
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .output()
         .unwrap();
     assert!(!compiler_output.status.success());
@@ -534,7 +695,7 @@ fn missing_external_tools_are_named() {
             dir.join("program").to_str().unwrap(),
         ])
         .env("PATH", "")
-        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .env_remove("YAR_RUNTIME_BUNDLE")
         .output()
         .unwrap();
     assert!(!cargo_output.status.success());
@@ -667,13 +828,14 @@ dep = { git = "https://example.com/dep.git", tag = "v1" }
 
 #[cfg(unix)]
 #[test]
-fn build_allows_cross_target_with_explicit_runtime_archive() {
+fn build_allows_cross_target_with_explicit_runtime_bundle() {
     let dir = temp_dir("yar-cli-cross-runtime-archive");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
     let cc = fake_cc(&dir);
     let output_path = dir.join("program");
     let (target_os, target_arch, target_triple) = non_host_unix_target();
+    write_runtime_bundle_manifest(&dir, target_triple);
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .args([
@@ -684,7 +846,7 @@ fn build_allows_cross_target_with_explicit_runtime_archive() {
         ])
         .env("CC", &cc)
         .env("PATH", &dir)
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .env("YAR_OS", target_os)
         .env("YAR_ARCH", target_arch)
         .output()
@@ -709,7 +871,7 @@ fn build_allows_cross_target_with_explicit_runtime_archive() {
 
 #[cfg(unix)]
 #[test]
-fn build_rejects_cross_target_without_explicit_runtime_archive() {
+fn build_rejects_cross_target_without_explicit_runtime_bundle() {
     let dir = temp_dir("yar-cli-cross-missing-runtime-archive");
     let cc = fake_cc(&dir);
     let output_path = dir.join("program");
@@ -724,7 +886,7 @@ fn build_rejects_cross_target_without_explicit_runtime_archive() {
         ])
         .env("CC", &cc)
         .env("PATH", &dir)
-        .env_remove("YAR_RUNTIME_ARCHIVE")
+        .env_remove("YAR_RUNTIME_BUNDLE")
         .env("YAR_OS", target_os)
         .env("YAR_ARCH", target_arch)
         .output()
@@ -733,7 +895,7 @@ fn build_rejects_cross_target_without_explicit_runtime_archive() {
     assert!(!output.status.success(), "expected cross build to fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("requires YAR_RUNTIME_ARCHIVE"),
+        stderr.contains("requires an installed") && stderr.contains("YAR_RUNTIME_BUNDLE"),
         "stderr did not explain runtime archive requirement: {stderr}"
     );
     assert!(!output_path.exists());
@@ -744,8 +906,9 @@ fn build_rejects_cross_target_without_explicit_runtime_archive() {
 #[test]
 fn build_windows_target_uses_gnu_triple_and_windows_link_flags() {
     let dir = temp_dir("yar-cli-windows-target");
-    let archive = dir.join("runtime.a");
+    let archive = dir.join("libyar_runtime.a");
     fs::write(&archive, b"not a real archive").unwrap();
+    write_runtime_bundle_manifest(&dir, "x86_64-pc-windows-gnu");
     let cc = fake_cc(&dir);
     let output_path = dir.join("program.exe");
 
@@ -758,7 +921,7 @@ fn build_windows_target_uses_gnu_triple_and_windows_link_flags() {
         ])
         .env("CC", &cc)
         .env("PATH", &dir)
-        .env("YAR_RUNTIME_ARCHIVE", &archive)
+        .env("YAR_RUNTIME_BUNDLE", &dir)
         .env("YAR_OS", "windows")
         .env("YAR_ARCH", "amd64")
         .output()
@@ -783,6 +946,17 @@ fn build_windows_target_uses_gnu_triple_and_windows_link_flags() {
         !cc_args.contains("-pthread"),
         "cc args should not include POSIX pthread for Windows target: {cc_args}"
     );
+    assert_args_in_order(
+        &cc_args,
+        &[
+            archive.to_str().unwrap(),
+            "-lkernel32",
+            "-lntdll",
+            "-luserenv",
+            "-lws2_32",
+            "-ldbghelp",
+        ],
+    );
 }
 
 #[cfg(unix)]
@@ -799,7 +973,7 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
         &inherit_script,
         "#!/bin/sh\nprintf 'inherit stdout\\n'\nprintf 'inherit stderr\\n' >&2\nexit 3\n",
     );
-    let runtime_archive = build_runtime_archive(&dir);
+    let runtime_bundle = build_runtime_bundle(&dir);
 
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
         .arg("run")
@@ -807,7 +981,7 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
         .arg("--")
         .arg(&capture_script)
         .arg(&inherit_script)
-        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
         .env("YAR_PROCESS_ENV_TEST", "env ok")
         .output()
         .unwrap();
@@ -839,7 +1013,7 @@ fn build_process_env_fixture_runs_with_rust_runtime() {
 #[test]
 fn build_net_fixture_runs_with_rust_runtime() {
     let dir = temp_dir("yar-cli-net");
-    let runtime_archive = build_runtime_archive(&dir);
+    let runtime_bundle = build_runtime_bundle(&dir);
     let program = dir.join("net");
 
     let build = Command::new(env!("CARGO_BIN_EXE_yar"))
@@ -849,7 +1023,7 @@ fn build_net_fixture_runs_with_rust_runtime() {
             "-o",
             program.to_str().unwrap(),
         ])
-        .env("YAR_RUNTIME_ARCHIVE", &runtime_archive)
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
         .output()
         .unwrap();
 
@@ -3432,6 +3606,49 @@ fn non_host_unix_target() -> (&'static str, &'static str, &'static str) {
     }
 }
 
+fn host_runtime_target() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-gnu",
+        (os, arch) => panic!("unsupported test host {os}/{arch}"),
+    }
+}
+
+fn write_runtime_bundle_manifest(dir: &Path, target: &str) {
+    fs::copy(
+        repo_root()
+            .join("runtime-bundles")
+            .join(target)
+            .join("yar-runtime.toml"),
+        dir.join("yar-runtime.toml"),
+    )
+    .unwrap();
+}
+
+fn expected_runtime_libraries(target: &str) -> &'static [&'static str] {
+    match target {
+        "x86_64-apple-darwin" | "aarch64-apple-darwin" => &["System", "c", "m"],
+        "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" => {
+            &["gcc_s", "util", "rt", "pthread", "m", "dl", "c"]
+        }
+        "x86_64-pc-windows-gnu" => &["kernel32", "ntdll", "userenv", "ws2_32", "dbghelp"],
+        _ => panic!("missing test runtime libraries for {target}"),
+    }
+}
+
+fn assert_args_in_order(arguments: &str, expected: &[&str]) {
+    let mut offset = 0;
+    for value in expected {
+        let Some(index) = arguments[offset..].find(value) else {
+            panic!("missing {value:?} in compiler arguments: {arguments}");
+        };
+        offset += index + value.len();
+    }
+}
+
 #[cfg(unix)]
 fn write_executable(path: &std::path::Path, content: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -3453,34 +3670,43 @@ fn wait_for_file(path: &Path) {
     panic!("timed out waiting for {}", path.display());
 }
 
-fn build_runtime_archive(dir: &std::path::Path) -> PathBuf {
-    let target_dir = dir.join("cargo-target");
-    let output = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "yar-runtime",
-            "--release",
-            "--target-dir",
-            target_dir.to_str().unwrap(),
-        ])
-        .current_dir(repo_root())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn build_runtime_bundle(dir: &std::path::Path) -> PathBuf {
+    static ARCHIVE: OnceLock<PathBuf> = OnceLock::new();
 
-    let archive_name = if cfg!(windows) {
-        "yar_runtime.lib"
-    } else {
-        "libyar_runtime.a"
-    };
-    let archive = target_dir.join("release").join(archive_name);
-    assert!(archive.is_file(), "missing {}", archive.display());
-    archive
+    let archive = ARCHIVE.get_or_init(|| {
+        let target_dir = repo_root().join("target/cli-test-runtime");
+        let output = Command::new("cargo")
+            .args([
+                "build",
+                "-p",
+                "yar-runtime",
+                "--release",
+                "--target-dir",
+                target_dir.to_str().unwrap(),
+            ])
+            .current_dir(repo_root())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let archive_name = if cfg!(all(target_os = "windows", target_env = "msvc")) {
+            "yar_runtime.lib"
+        } else {
+            "libyar_runtime.a"
+        };
+        let archive = target_dir.join("release").join(archive_name);
+        assert!(archive.is_file(), "missing {}", archive.display());
+        archive
+    });
+
+    let bundle = dir.join("runtime-bundle");
+    fs::create_dir(&bundle).unwrap();
+    fs::copy(archive, bundle.join(archive.file_name().unwrap())).unwrap();
+    write_runtime_bundle_manifest(&bundle, host_runtime_target());
+    bundle
 }
 
 #[cfg(unix)]

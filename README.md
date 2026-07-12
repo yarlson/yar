@@ -202,14 +202,25 @@ The Rust 2024 CLI is the shipped `yar` command:
 
 The CLI supports `check`, `emit-ir`, `build`, host `run`, host `test`, `init`,
 and dependency manifest, lock, fetch, and update commands. It links the Rust
-runtime static library for native build/run/test paths, using
-`YAR_RUNTIME_ARCHIVE` when set, a runtime archive next to the `yar` executable
-when present, or the workspace `target/release` archive after building
-`crates/yar-runtime`. Cross builds require
-`YAR_RUNTIME_ARCHIVE` to point at a runtime archive for the selected target.
-GoReleaser release artifacts now package the Rust CLI with a sibling Rust
-runtime archive. The legacy embedded C runtime has been removed; native builds
-use the Rust runtime only.
+runtime static library for native build/run/test paths. `YAR_RUNTIME_BUNDLE`
+may select a directory containing `yar-runtime.toml` and its static archive;
+the CLI validates the bundle's target triple, runtime ABI, compiler
+compatibility, archive path, and ordered system libraries before invoking
+`clang`. Release installations discover `runtimes/<target-triple>/` next to the
+`yar` executable, while source-tree host builds use the same checked-in bundle
+manifest with a Cargo-built archive. Cross builds require a matching explicit
+or installed bundle. `YAR_RUNTIME_ARCHIVE` is rejected with migration guidance.
+
+A bundle is one target directory:
+
+```text
+yar-runtime.toml
+libyar_runtime.a
+```
+
+The v1 manifest declares `format`, `target`, `runtime_abi`,
+`compiler_compatibility`, `archive`, and `[link].system_libraries`. Library
+names are data, not raw clang arguments; the CLI preserves their declared order.
 
 Override the C compiler if needed:
 
@@ -426,8 +437,12 @@ Supported targets:
 | `windows` | `amd64`    |
 
 Cross-compilation requires a `clang` that can target the requested platform
-(appropriate sysroot and system libraries). `yar run` and `yar test` only
-support the host platform.
+(appropriate sysroot and system libraries) and a matching runtime bundle. For
+example, `YAR_RUNTIME_BUNDLE=/opt/yar-runtime` selects one validated bundle.
+`yar run` and `yar test` only support the host platform.
+The Windows target and release compiler use `x86_64-pc-windows-gnu`. Host ABIs
+outside the exact supported little-endian Darwin and GNU triples are rejected
+rather than treated as bundle-compatible.
 
 ## Documentation
 
@@ -451,7 +466,8 @@ coverage for the native `clang` build boundary, the Rust workspace, and Rust
 CLI native builds plus successful fixture execution for every checked-in
 `testdata/**/main.yar` fixture that is expected to exit successfully. A targeted
 Windows job exercises the subprocess Job Object lifecycle. Release packaging is
-validated with a GoReleaser snapshot dry run.
+validated with a GoReleaser snapshot dry run; each artifact carries exactly one
+target-keyed runtime bundle.
 
 Version tags matching `v*` publish GitHub Release assets through GoReleaser.
 Manual release workflow runs are snapshot-only and do not publish.

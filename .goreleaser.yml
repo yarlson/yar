@@ -3,7 +3,8 @@ version: 2
 project_name: yar
 
 builds:
-  - id: yar
+  - &yar-build
+    id: yar-darwin-amd64
     builder: rust
     binary: yar
     command: zigbuild
@@ -14,29 +15,94 @@ builds:
       - -p=yar-cli
     targets:
       - x86_64-apple-darwin
+    hooks:
+      pre:
+        - cmd: ./scripts/build-release-runtime.sh x86_64-apple-darwin
+          output: true
+  - <<: *yar-build
+    id: yar-darwin-arm64
+    targets:
       - aarch64-apple-darwin
+    hooks:
+      pre:
+        - cmd: ./scripts/build-release-runtime.sh aarch64-apple-darwin
+          output: true
+  - <<: *yar-build
+    id: yar-linux-amd64
+    targets:
       - x86_64-unknown-linux-gnu
+    hooks:
+      pre:
+        - cmd: ./scripts/build-release-runtime.sh x86_64-unknown-linux-gnu
+          output: true
+  - <<: *yar-build
+    id: yar-linux-arm64
+    targets:
       - aarch64-unknown-linux-gnu
+    hooks:
+      pre:
+        - cmd: ./scripts/build-release-runtime.sh aarch64-unknown-linux-gnu
+          output: true
+  - <<: *yar-build
+    id: yar-windows-amd64
+    targets:
       - x86_64-pc-windows-gnu
     hooks:
       pre:
-        - cmd: ./scripts/build-release-runtime.sh {{ .Target }}
+        - cmd: ./scripts/build-release-runtime.sh x86_64-pc-windows-gnu
           output: true
 
 archives:
-  - id: yar
+  - &yar-archive
+    id: yar-darwin-amd64
     ids:
-      - yar
+      - yar-darwin-amd64
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - src: "dist/runtime/{{ .Target }}/libyar_runtime.a"
-        dst: libyar_runtime.a
+      - src: "dist/runtime/x86_64-apple-darwin/libyar_runtime.a"
+        dst: runtimes/x86_64-apple-darwin/libyar_runtime.a
+      - src: "dist/runtime/x86_64-apple-darwin/yar-runtime.toml"
+        dst: runtimes/x86_64-apple-darwin/yar-runtime.toml
     formats:
       - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
+  - <<: *yar-archive
+    id: yar-darwin-arm64
+    ids:
+      - yar-darwin-arm64
+    files:
+      - src: "dist/runtime/aarch64-apple-darwin/libyar_runtime.a"
+        dst: runtimes/aarch64-apple-darwin/libyar_runtime.a
+      - src: "dist/runtime/aarch64-apple-darwin/yar-runtime.toml"
+        dst: runtimes/aarch64-apple-darwin/yar-runtime.toml
+  - <<: *yar-archive
+    id: yar-linux-amd64
+    ids:
+      - yar-linux-amd64
+    files:
+      - src: "dist/runtime/x86_64-unknown-linux-gnu/libyar_runtime.a"
+        dst: runtimes/x86_64-unknown-linux-gnu/libyar_runtime.a
+      - src: "dist/runtime/x86_64-unknown-linux-gnu/yar-runtime.toml"
+        dst: runtimes/x86_64-unknown-linux-gnu/yar-runtime.toml
+  - <<: *yar-archive
+    id: yar-linux-arm64
+    ids:
+      - yar-linux-arm64
+    files:
+      - src: "dist/runtime/aarch64-unknown-linux-gnu/libyar_runtime.a"
+        dst: runtimes/aarch64-unknown-linux-gnu/libyar_runtime.a
+      - src: "dist/runtime/aarch64-unknown-linux-gnu/yar-runtime.toml"
+        dst: runtimes/aarch64-unknown-linux-gnu/yar-runtime.toml
+  - <<: *yar-archive
+    id: yar-windows-amd64
+    ids:
+      - yar-windows-amd64
+    files:
+      - src: "dist/runtime/x86_64-pc-windows-gnu/libyar_runtime.a"
+        dst: runtimes/x86_64-pc-windows-gnu/libyar_runtime.a
+      - src: "dist/runtime/x86_64-pc-windows-gnu/yar-runtime.toml"
+        dst: runtimes/x86_64-pc-windows-gnu/yar-runtime.toml
+    formats:
+      - zip
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"

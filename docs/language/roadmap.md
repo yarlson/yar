@@ -36,6 +36,7 @@ Current baseline already includes:
 - explicit error model with `!T`, `?`, and `or |err| { ... }`
 - an explicit checked-program boundary before LLVM generation
 - LLVM-based native code generation
+- validated target runtime bundles for native and cross linking
 
 See `current-state.md` for exact truth.
 

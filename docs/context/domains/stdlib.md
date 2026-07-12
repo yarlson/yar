@@ -369,14 +369,15 @@ Functions:
 - Performance is straightforward and correctness-first. Concatenation-heavy
   functions like `repeat`, `replace`, `itoa`, and `itoa64` are O(n^2) for
   large inputs, and `sort` uses O(n^2) insertion sort.
-- The `fs`, `process`, and `net` runtime boundaries use `#ifdef _WIN32`
-  conditionals to support both POSIX and Windows from a single C source file.
+- The Rust `fs`, `process`, and `net` runtime boundaries use `#[cfg(...)]`
+  platform modules to support both POSIX and Windows implementations.
   On POSIX, the implementations use `stat`, `opendir`, `mkdir`, `remove`,
   `fork`, `execvp`, `waitpid`, `mkstemp`, and BSD sockets (`socket`, `bind`,
   `listen`, `accept`, `connect`, `recv`, `send`, `getaddrinfo`). On Windows,
   the implementations use Win32 APIs (`CreateFileA`, `FindFirstFileA`,
   `CreateDirectoryA`, `CreateProcessA`, `GetEnvironmentVariableA`, and
-  Winsock2 functions). Windows builds link `-lws2_32` for networking.
+  Winsock2 functions). Windows runtime bundles include the complete ordered
+  native-library contract for the Rust staticlib, including `ws2_32`.
 - The `net` package uses opaque `i64` handles for listeners and connections.
   They are kind-checked, non-reused process-local registry IDs, and their state
   is synchronized. Explicit close removes the ID so new lookups fail, then

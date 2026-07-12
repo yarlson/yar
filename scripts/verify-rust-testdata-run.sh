@@ -4,6 +4,7 @@ set -eu
 target_dir="${CARGO_TARGET_DIR:-target}"
 yar_bin="$target_dir/debug/yar"
 runtime_archive="$target_dir/release/libyar_runtime.a"
+runtime_bundle="$target_dir/release/runtime-bundle"
 
 cargo build -p yar-cli
 cargo build -p yar-runtime --release
@@ -16,6 +17,10 @@ if [ ! -f "$runtime_archive" ]; then
   echo "runtime archive not found at $runtime_archive" >&2
   exit 1
 fi
+host_target="$(rustc -vV | sed -n 's/^host: //p')"
+mkdir -p "$runtime_bundle"
+cp "$runtime_archive" "$runtime_bundle/libyar_runtime.a"
+cp "runtime-bundles/$host_target/yar-runtime.toml" "$runtime_bundle/yar-runtime.toml"
 
 tmp_dir="$(mktemp -d)"
 fixtures="$tmp_dir/fixtures"
@@ -64,7 +69,7 @@ while IFS= read -r fixture; do
   esac
 
   output="$(mktemp "$tmp_dir/yar-rust-fixture.XXXXXX")"
-  YAR_RUNTIME_ARCHIVE="$runtime_archive" "$yar_bin" build "$fixture" -o "$output"
+  YAR_RUNTIME_BUNDLE="$runtime_bundle" "$yar_bin" build "$fixture" -o "$output"
 
   stdout="$tmp_dir/stdout"
   stderr="$tmp_dir/stderr"

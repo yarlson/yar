@@ -9,5 +9,7 @@ name = "yar"
 path = "src/main.rs"
 
 [dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
 yar-compiler = { path = "../yar-compiler" }
 yar-process-control = { path = "../yar-process-control" }

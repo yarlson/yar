@@ -5,8 +5,9 @@
 - `crates/yar-cli` is the shipped CLI wiring. It parses command names and global
   project selection, resolves an entry file or package directory separately
   from its project root, compiles through `crates/yar-compiler`, formats
-  diagnostics, resolves runtime archives, forwards delimited `run` arguments,
-  and assigns operation deadlines to external build, test, and Git work.
+  diagnostics, resolves and validates runtime bundles, forwards delimited `run`
+  arguments, and assigns operation deadlines to external build, test, and Git
+  work.
 - `crates/yar-process-control` is the shared subprocess boundary used by the CLI
   and dependency resolver. It owns typed start/timeout errors, concurrent output
   draining, deadline polling, timed descendant containment, cleanup, and Unix
@@ -148,11 +149,13 @@
 - Pointer-taking of locals and parameters is implemented conservatively by
   storing local slots in runtime-managed storage so returned or retained
   addresses stay valid without a separate escape-analysis pass.
-- Native linking happens after IR generation by writing `main.ll`, selecting a
-  Rust runtime archive, and invoking `clang`.
+- Native linking happens after IR generation by writing `main.ll`, validating a
+  target runtime bundle, and invoking `clang` with its archive and ordered
+  system-library metadata.
 - When a cross-compilation target is specified via `YAR_OS`/`YAR_ARCH`, the
   generated IR includes a `target triple` directive and `clang` receives a
-  `--target=<triple>` flag. Cross builds require `YAR_RUNTIME_ARCHIVE`.
+  `--target=<triple>` flag. Cross builds require a matching explicit or
+  installed target runtime bundle.
 
 ## Generated Entry Boundary
 

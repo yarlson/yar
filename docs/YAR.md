@@ -28,13 +28,14 @@ It enforces package export visibility for imported declarations and exported
 API types, and its LLVM emitter has clang-accepted coverage for
 every current `testdata/**/main.yar` entry program, including host-backed `fs`,
 `process`, `env`, `stdio`, and `net` runtime calls. Native paths link a Rust
-runtime archive resolved from `YAR_RUNTIME_ARCHIVE`, a
-`libyar_runtime.a`/`yar_runtime.lib` file next to the `yar` executable, or the
-workspace `target/release` archive after building `crates/yar-runtime`. Cross
-builds require
-`YAR_RUNTIME_ARCHIVE` to point at a runtime archive for the selected target;
-the sibling and workspace runtime archive fallbacks are host-only. Native builds
-use the Rust runtime only.
+runtime bundle. `YAR_RUNTIME_BUNDLE` selects a directory containing a strict
+`yar-runtime.toml` manifest and one static archive. The CLI validates the target
+triple, bundle format, runtime ABI, compiler compatibility epoch, archive path,
+and ordered system-library list before invoking `clang`. Packaged compilers
+discover `runtimes/<target-triple>/` beside the executable; source-tree host
+builds use the same checked-in manifests with a Cargo-built archive. Cross
+builds require a matching explicit or installed bundle. Native builds use the
+Rust runtime only.
 
 ## File Shape
 

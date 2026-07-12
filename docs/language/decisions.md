@@ -428,6 +428,19 @@ that deliberately create a new session remain outside process-group
 containment. Missing executables are preserved as typed errors with the named
 tool rather than flattened into generic I/O failures.
 
+### Target runtime bundle contract
+
+Status: accepted
+
+Native builds consume one strict target runtime bundle rather than an untyped
+archive path. The bundle declares an exact target triple, bundle-format epoch,
+runtime-ABI epoch, compiler-compatibility epoch, one relative static archive,
+and ordered native-library names. All metadata is validated before `clang`
+runs; raw linker arguments are not bundle surface. `YAR_RUNTIME_BUNDLE` selects
+an explicit bundle, release installations use `runtimes/<target-triple>/`, and
+host source builds reuse the same checked-in manifests with a Cargo-built
+archive. `YAR_RUNTIME_ARCHIVE` is rejected with migration guidance.
+
 ---
 
 ## Decision Update Rule
