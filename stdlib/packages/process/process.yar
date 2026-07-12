@@ -1,9 +1,9 @@
 package process
 
 pub struct Result {
-    exit_code i32
-    stdout str
-    stderr str
+    pub exit_code i32
+    pub stdout str
+    pub stderr str
 }
 
 pub struct Limits {

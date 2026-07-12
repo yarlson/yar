@@ -6294,6 +6294,7 @@ mod tests {
         "testdata/divide/main.yar",
         "testdata/enum_positional/main.yar",
         "testdata/enums/main.yar",
+        "testdata/field_visibility/main.yar",
         "testdata/garbage_collection/main.yar",
         "testdata/generics/main.yar",
         "testdata/generics_imports/main.yar",

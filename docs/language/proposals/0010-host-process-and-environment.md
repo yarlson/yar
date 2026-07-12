@@ -27,9 +27,9 @@ process.run_inherit(argv []str, timeout_milliseconds i64, cancellation process.C
 
 ```yar
 pub struct Result {
-    exit_code i32
-    stdout str
-    stderr str
+    pub exit_code i32
+    pub stdout str
+    pub stderr str
 }
 
 pub struct Limits {
@@ -45,6 +45,8 @@ pub struct Cancellation {
 
 `Cancellation` is a share-safe, close-only signal. Copies refer to the same
 signal. `cancel` is idempotent and never sends or consumes a channel value.
+`Limits` and `Cancellation` have private fields and are constructed through
+`limits(...)` and `cancellation()`; `Result` exposes its output fields.
 
 ## 3. Process Arguments
 
@@ -65,8 +67,9 @@ environment. Captured `run` uses null stdin; `run_inherit` inherits stdin.
 - stderr cap: 0 through 67,108,864 bytes (64 MiB)
 
 A zero capture cap allows exactly zero bytes; it does not mean unlimited.
-`process.run` validates `Limits` again because struct fields are directly
-constructible.
+`process.run` validates `Limits` again as a host-boundary defense and because
+zero-value or aggregate initialization can still produce invalid `Limits`
+values even though its fields are now private.
 
 The cancellation signal is checked before launch. After the host creates and
 contains the child, the deadline and cancellation signal cover execution,

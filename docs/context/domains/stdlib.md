@@ -127,9 +127,10 @@ Host-backed text-oriented filesystem helpers.
 
 Types:
 
-- `DirEntry { name str, is_dir bool }`
+- `DirEntry { pub name str, pub is_dir bool }`
 - `EntryKind { File, Directory, Other }`
-- `File { handle i64 }` — resource wrapper; it cannot cross a spawn boundary
+- `File` — package-owned resource wrapper with a private handle; it cannot cross
+  a spawn boundary
 
 Functions:
 
@@ -199,9 +200,10 @@ Host-backed process and argv helpers.
 
 Types:
 
-- `Result { exit_code i32, stdout str, stderr str }`
-- `Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }`
-- `Cancellation { signal chan[bool] }` — share-safe close-only signal
+- `Result { pub exit_code i32, pub stdout str, pub stderr str }`
+- `Limits` — package-owned validated limits with private fields
+- `Cancellation` — package-owned share-safe close-only signal with a private
+  channel field
 
 Functions:
 
@@ -258,9 +260,11 @@ Host-backed TCP networking primitives.
 
 Types:
 
-- `Addr { host str, port i32 }`
-- `Conn` — opaque typed, share-safe registry reference
-- `Listener` — opaque typed, share-safe registry reference
+- `Addr { pub host str, pub port i32 }`
+- `Conn` — package-owned typed, share-safe registry reference with a private
+  handle field
+- `Listener` — package-owned typed, share-safe registry reference with a private
+  handle field
 
 Functions:
 
@@ -316,16 +320,20 @@ Test framework for `yar test`.
 
 Types:
 
-- `T { name str, failed bool, messages []str }`
+- `T` — package-owned test state with private fields
 
 Methods:
 
 - `fail(msg str) void` — mark test failed with message
 - `log(msg str) void` — record a message
 - `has_failed() bool` — check failure status
+- `message_count() i32` — return the number of recorded messages
+- `message(index i32) str` — return one recorded message
 
 Functions:
 
+- `new(name str) *T` — construct the private test state used by the generated
+  runner
 - `equal[V](t *T, got V, want V) void` — equality assertion with "got X, want Y" message via `to_str`
 - `not_equal[V](t *T, got V, want V) void` — inequality assertion
 - `is_true(t *T, value bool) void`

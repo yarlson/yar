@@ -6,6 +6,10 @@ pub struct T {
     messages []str
 }
 
+pub fn new(name str) *T {
+    return &T{name: name, failed: false, messages: []str{}}
+}
+
 fn mark_failed(t *T) void {
     (*t).failed = true
 }
@@ -25,6 +29,14 @@ pub fn (t *T) log(msg str) void {
 
 pub fn (t *T) has_failed() bool {
     return (*t).failed
+}
+
+pub fn (t *T) message_count() i32 {
+    return len((*t).messages)
+}
+
+pub fn (t *T) message(index i32) str {
+    return (*t).messages[index]
 }
 
 pub fn equal[V](t *T, got V, want V) void {

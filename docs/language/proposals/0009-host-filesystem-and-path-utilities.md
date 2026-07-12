@@ -136,9 +136,9 @@ composition should stay in Yar source where practical.
 `fs` exposes ordinary functions with explicit `error` behavior.
 
 ```
-struct DirEntry {
-    name str
-    is_dir bool
+pub struct DirEntry {
+    pub name str
+    pub is_dir bool
 }
 
 enum EntryKind {

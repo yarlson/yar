@@ -68,7 +68,7 @@ fn main() i32 {
 | `chan[T]` | `chan[i32]` |
 | `fn(T) R` | `fn(i32) i32` |
 | `!T` | errorable value / return |
-| struct | `struct S { field T }` |
+| struct | `struct S { private_field T; pub public_field U }` |
 | enum | `enum E { A, B { val i32 } }` |
 | interface | `interface I { method() T }` |
 
@@ -91,7 +91,7 @@ Locals are block-scoped, reassignable, cannot be redeclared in same scope.
 ```yar
 struct User {
     id i32
-    name str
+    pub name str
 }
 
 // Usage
@@ -101,6 +101,22 @@ empty := User{}
 ```
 
 No embedding, no tags. Recursive only through pointers: `next *Node`.
+
+Struct fields are package-private by default; `pub field Type` exports one
+field. There is no `opaque` keyword. Outside the declaring package, only public
+fields support read, assignment, compound assignment, or address-of. Any private
+field makes all struct-literal construction package-owned, even `{}` or a
+literal naming only public fields. Same-package code has full access. Generic
+instantiations preserve declared field visibility and declaration-package
+ownership. Function literals retain their defining package's authority. Private
+fields may use private types; public fields may not expose them. Enum payload
+fields are unchanged and inherently public.
+
+This does not yet close zero-value construction: `var value imported.Type` and
+aggregate zero-initialization remain valid for a type with private fields. Those
+loopholes belong to separate zero-value/initialization design work. `pub` on an
+enum payload field is a targeted parse error because enum payload fields are
+inherently public.
 
 ## Enums
 
@@ -545,7 +561,7 @@ path.ext(p) str
 
 ### fs
 
-Types: `fs.DirEntry { name str, is_dir bool }`, `fs.EntryKind { File, Directory, Other }`
+Types: `fs.DirEntry { pub name str, pub is_dir bool }`, `fs.EntryKind { File, Directory, Other }`
 
 ```
 fs.read_file(path) !str
@@ -559,7 +575,7 @@ fs.open_read(path) !fs.File
 fs.open_write(path) !fs.File
 ```
 
-`fs.File { handle i64 }` has methods:
+`fs.File` has a private runtime-handle field and these methods:
 
 ```
 read(max_bytes i32) !str
@@ -602,9 +618,9 @@ io.close_quiet(c io.Closer) void
 Types:
 
 ```
-process.Result { exit_code i32, stdout str, stderr str }
-process.Limits { timeout_milliseconds i64, max_stdout_bytes i64, max_stderr_bytes i64 }
-process.Cancellation { signal chan[bool] }
+process.Result { pub exit_code i32, pub stdout str, pub stderr str }
+process.Limits       // package-owned validated limits; private fields
+process.Cancellation // package-owned share-safe signal; private field
 ```
 
 ```
@@ -644,9 +660,9 @@ stdio.eprint(msg) void  // write to stderr
 Types:
 
 ```
-net.Addr { host str, port i32 }
-net.Conn      // opaque typed connection reference
-net.Listener  // opaque typed listener reference
+net.Addr { pub host str, pub port i32 }
+net.Conn      // package-owned typed connection reference; private handle
+net.Listener  // package-owned typed listener reference; private handle
 ```
 
 `net.Conn` and `net.Listener` are typed, share-safe registry references and may
@@ -699,13 +715,17 @@ response validation, connection deadlines, and a safe resource lifecycle.
 
 ### testing
 
-Type: `testing.T { name str, failed bool, messages []str }`
+Type: `testing.T` (package-owned state with private fields)
+
+Runner construction: `testing.new(name str) *testing.T`
 
 Methods on `*testing.T`:
 ```
 t.fail(msg) void
 t.log(msg) void
 t.has_failed() bool
+t.message_count() i32
+t.message(index i32) str
 ```
 
 Assertions:

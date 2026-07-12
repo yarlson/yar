@@ -67,8 +67,17 @@
 - Top-level declarations may be `struct`, `interface`, `enum`, `fn`, or
   receiver-style method declarations, optionally prefixed with `pub`.
 - Cross-package references may use only exported top-level declarations.
-- Exported declarations may not expose package-local struct, interface, or enum
-  types in their public surface.
+- Struct fields are package-private unless prefixed with `pub`. External
+  selector operations require public fields, and any private field makes
+  struct-literal construction package-owned. Same-package code retains full
+  access; enum payload field visibility is unchanged.
+- Exported declarations and public fields may not expose package-local struct,
+  interface, or enum types. Private fields may use them.
+- Generic instantiation preserves field visibility and declaration-package
+  ownership. Function literals retain their defining package's private-field
+  authority. Zero-value declarations and aggregate zero-initialization of
+  imported private-field structs remain separate zero-value/initialization
+  design work.
 - Import cycles are rejected.
 - Package lowering rewrites package-local and imported declarations to
   canonical origin-safe names before checking and code generation. Equal
@@ -175,7 +184,9 @@
   parses the portable fixture without parse-failure nodes, and validates its own
   negative, recovery, tree-shape, and query contracts before claiming parity.
 - The `yar test` command generates a synthetic test runner `main()` that
-  replaces the user `main()`, compiles the result, and executes it.
+  replaces the user `main()`, creates package-owned `testing.T` state through
+  `testing.new`, reads results through methods, compiles the result, and executes
+  it.
 - `error.Name` expressions are valid both in return statements and as general
   expressions that produce values of type `error`.
 - Error values support `==` and `!=` comparison.

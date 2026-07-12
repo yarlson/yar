@@ -5,7 +5,7 @@ pub interface Labeler {
 }
 
 pub struct Record[T] {
-    value T
+    pub value T
 }
 
 struct namedValue {

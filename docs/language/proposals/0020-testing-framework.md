@@ -14,7 +14,7 @@ The implemented version provides:
 - test function discovery via `test_*` naming convention
 - required signature: `fn test_*(t *testing.T) void`
 - synthetic test runner generation that replaces user `main()`
-- `testing.T` struct with failure tracking and message accumulation
+- package-owned `testing.T` state with failure tracking and message accumulation
 - generic assertion helpers: `testing.equal[V]`, `testing.not_equal[V]`,
   `testing.is_true`, `testing.is_false`
 - pass/fail reporting with exit code indication
@@ -113,10 +113,11 @@ Invalid because test functions must not have type parameters.
 - the `yar test` command discovers all test functions in the target package,
   generates a synthetic `main()` that calls each one, and replaces any
   user-defined `main()`
-- each test receives a fresh `*testing.T` value
-- `testing.T` tracks a `failed` flag and accumulated `messages`
-- after each test function returns, the runner checks the `failed` flag and
-  prints `PASS: <name>` or `FAIL: <name>` with any accumulated messages
+- each test receives a fresh `*testing.T` value constructed through
+  `testing.new`
+- private `testing.T` fields track failure state and accumulated messages
+- after each test function returns, the runner reads failure state and messages
+  through exported methods and prints `PASS: <name>` or `FAIL: <name>`
 - after all tests run, the runner prints a summary line
   (`"<N> passed, <N> failed"`) and exits with code 1 if any test failed
 - test execution only works on native targets (cross-compiled test binaries
@@ -156,9 +157,9 @@ The synthetic runner generation:
 1. loads the package graph with test files included only for the entry package
 2. validates every entry test-file `test_*` declaration and discovers valid
    functions
-3. generates a Yar source string containing a `main()` that creates a
-   `testing.T` for each test, calls the test function, checks the `failed`
-   flag, and prints results
+3. generates a Yar source string containing a `main()` that calls `testing.new`
+   for each test, calls the test function, checks `has_failed()` and reads
+   messages through methods, and prints results
 4. removes any existing user `main()` from the entry package
 5. adds the generated source as a file in the entry package
 6. ensures the `testing` package import is registered
@@ -168,10 +169,11 @@ The synthetic runner generation:
 
 - errors: test functions can test error-returning functions using `or |err|`
   and `testing.equal[error]`
-- structs: `testing.T` is a regular struct with methods
+- structs: `testing.T` is a package-owned struct with private state, an exported
+  constructor, and exported methods
 - arrays: no special interaction
 - control flow: test functions run sequentially; no concurrent test execution
-- returns: test functions return `void`; the runner checks `t.failed` after
+- returns: test functions return `void`; the runner calls `t.has_failed()` after
   return
 - builtins: the generated runner uses `to_str` for integer-to-string
   conversion in summary output; `testing.equal[V]` uses `to_str` for failure

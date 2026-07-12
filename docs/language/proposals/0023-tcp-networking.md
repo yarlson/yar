@@ -137,9 +137,11 @@ All functions and methods that can fail return errorable types.
 
 ## 5. Type Rules
 
-- `Addr` is a public struct: `pub struct Addr { host str, port i32 }`.
-- Listener and connection values use opaque named `Listener` and `Conn` types;
-  their registry fields are package-private.
+- `Addr` is a public transparent struct with `pub host str` and `pub port i32`.
+- Listener and connection values use public named `Listener` and `Conn` structs
+  whose private registry fields make external selector access and literal
+  construction invalid under ordinary struct visibility rules. Other zero-value
+  creation paths are outside this proposal's field-visibility guarantee.
 - Port must be `i32` (valid range 0–65535, validated at runtime).
 - Host must be `str`.
 - `max_bytes` for `read` must be 1 through 67,108,864 inclusive.
@@ -196,8 +198,9 @@ All error handling works through standard `?` and `or |err| { ... }`.
 
 ### Structs
 
-`Addr`, `Conn`, and `Listener` are public named structs. The two resource types
-are explicitly share-safe despite containing internal registry tokens.
+`Addr`, `Conn`, and `Listener` are public named structs. `Addr` exposes its data;
+the two resource types are package-owned and explicitly share-safe despite
+containing internal registry tokens.
 
 ### Control flow
 

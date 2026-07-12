@@ -304,18 +304,18 @@ fn generate_test_main(package_name: &str, tests: &[TestFunction]) -> String {
     for (index, test) in tests.iter().enumerate() {
         let test_var = format!("t{index}");
         src.push_str(&format!(
-            "    {test_var} := &testing.T{{name: \"{}\", failed: false, messages: []str{{}}}}\n",
+            "    {test_var} := testing.new(\"{}\")\n",
             test.name
         ));
         src.push_str(&format!("    {}({test_var})\n", test.name));
-        src.push_str(&format!("    if (*{test_var}).failed {{\n"));
+        src.push_str(&format!("    if {test_var}.has_failed() {{\n"));
         src.push_str(&format!("        print(\"FAIL: {}\\n\")\n", test.name));
         src.push_str(&format!("        i{index} := 0\n"));
         src.push_str(&format!(
-            "        for i{index} < len((*{test_var}).messages) {{\n"
+            "        for i{index} < {test_var}.message_count() {{\n"
         ));
         src.push_str(&format!(
-            "            print(\"    \" + (*{test_var}).messages[i{index}] + \"\\n\")\n"
+            "            print(\"    \" + {test_var}.message(i{index}) + \"\\n\")\n"
         ));
         src.push_str(&format!("            i{index} = i{index} + 1\n"));
         src.push_str("        }\n");
@@ -812,13 +812,14 @@ fn main() !i32 {
     }
 
     #[test]
-    fn compile_path_rejects_external_opaque_resource_fields_and_literals() {
-        let root = temp_dir("yar-rust-opaque-resource-handles");
+    fn compile_path_rejects_external_private_resource_fields_and_literals() {
+        let root = temp_dir("yar-rust-private-resource-handles");
         write_source(
             &root.join("main.yar"),
             r#"package main
 
 import "std/fs"
+import "std/net"
 
 fn main() i32 {
     file := fs.open_read("missing") or |_| {
@@ -829,6 +830,10 @@ fn main() i32 {
     file.handle += 1
     ptr := &file.handle
     forged := fs.File{handle: raw}
+    var conn net.Conn
+    conn_raw := conn.handle
+    forged_conn := net.Conn{handle: conn_raw}
+    forged_listener := net.Listener{}
     return 0
 }
 "#,
@@ -840,25 +845,37 @@ fn main() i32 {
         assert!(unit.is_none());
         assert_diag_contains(
             &diagnostics,
-            "field \"handle\" of opaque type \"fs.File\" is not accessible outside package \"fs\"",
+            "field \"handle\" of struct \"fs.File\" is not exported by package \"fs\"",
         );
         assert_eq!(
             diagnostics
                 .iter()
                 .filter(|diagnostic| diagnostic.message.contains(
-                    "field \"handle\" of opaque type \"fs.File\" is not accessible outside package \"fs\""
+                    "field \"handle\" of struct \"fs.File\" is not exported by package \"fs\""
                 ))
                 .count(),
             4,
         );
         assert_diag_contains(
             &diagnostics,
-            "opaque type \"fs.File\" cannot be constructed outside package \"fs\"",
+            "struct literal for \"fs.File\" is not allowed outside package \"fs\" because it has package-private fields",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "field \"handle\" of struct \"net.Conn\" is not exported by package \"net\"",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "struct literal for \"net.Conn\" is not allowed outside package \"net\" because it has package-private fields",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "struct literal for \"net.Listener\" is not allowed outside package \"net\" because it has package-private fields",
         );
     }
 
     #[test]
-    fn compile_path_keeps_ordinary_imported_struct_fields_transparent() {
+    fn compile_path_allows_exported_imported_struct_fields() {
         let root = temp_dir("yar-rust-transparent-imported-struct");
         write_source(
             &root.join("main.yar"),
@@ -868,7 +885,8 @@ import "model"
 
 fn main() i32 {
     value := model.Value{number: 7}
-    return value.number
+    reader := model.secret_reader(4)
+    return value.number + reader()
 }
 "#,
         );
@@ -877,7 +895,18 @@ fn main() i32 {
             r#"package model
 
 pub struct Value {
-    number i32
+    pub number i32
+}
+
+struct Secret {
+    value i32
+}
+
+pub fn secret_reader(value i32) fn() i32 {
+    return fn() i32 {
+        secret := Secret{value: value}
+        return secret.value
+    }
 }
 "#,
         );
@@ -887,6 +916,87 @@ pub struct Value {
 
         assert!(unit.is_some(), "unexpected diagnostics: {diagnostics:?}");
         assert_eq!(diagnostics, Vec::new());
+    }
+
+    #[test]
+    fn compile_path_enforces_package_owned_struct_fields_and_construction() {
+        let root = temp_dir("yar-rust-package-owned-fields");
+        write_source(
+            &root.join("main.yar"),
+            r#"package main
+
+import "model"
+
+fn main() i32 {
+    open := model.Open{value: 1}
+    open.value = 2
+    open.value += 3
+    open_ptr := &open.value
+
+    mixed := model.make_mixed("ok", 7)
+    mixed.label = "changed"
+    label_ptr := &mixed.label
+    hidden := mixed.secret
+    mixed.secret = hidden
+    mixed.secret += 1
+    hidden_ptr := &mixed.secret
+    hidden_reader := fn() i32 { return mixed.secret }
+    forged_mixed := model.Mixed{label: "forged"}
+    forged_secret := model.Secret{}
+    return *open_ptr + len(*label_ptr)
+}
+"#,
+        );
+        write_source(
+            &root.join("model/model.yar"),
+            r#"package model
+
+pub struct Open {
+    pub value i32
+}
+
+pub struct Mixed {
+    pub label str
+    secret i32
+}
+
+pub struct Secret {
+    value i32
+}
+
+pub fn make_mixed(label str, secret i32) Mixed {
+    value := Mixed{label: label, secret: secret}
+    value.secret += 1
+    return value
+}
+
+pub fn make_secret(value i32) Secret {
+    return Secret{value: value}
+}
+"#,
+        );
+
+        let (unit, diagnostics) =
+            compile_path(root.join("main.yar"), &CompileOptions::default()).unwrap();
+
+        assert!(unit.is_none());
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.message ==
+                    "field \"secret\" of struct \"model.Mixed\" is not exported by package \"model\"")
+                .count(),
+            5,
+            "unexpected diagnostics: {diagnostics:?}",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "struct literal for \"model.Mixed\" is not allowed outside package \"model\" because it has package-private fields",
+        );
+        assert_diag_contains(
+            &diagnostics,
+            "struct literal for \"model.Secret\" is not allowed outside package \"model\" because it has package-private fields",
+        );
     }
 
     #[test]
@@ -921,7 +1031,7 @@ fn main() i32 {
             r#"package fs
 
 pub struct File {
-    handle i64
+    pub handle i64
 }
 
 pub fn make_file(handle i64) File {
@@ -1042,6 +1152,11 @@ enum hiddenEnum {
 }
 
 pub struct Wrapper {
+    pub inner hidden
+    private hidden
+}
+
+pub struct PrivateWrapper {
     inner hidden
 }
 
@@ -1070,6 +1185,11 @@ pub fn make_enum() hiddenEnum {
         assert_diag_contains(
             &diagnostics,
             "exported function \"make_enum\" cannot use non-exported type \"hiddenEnum\"",
+        );
+        assert_eq!(
+            diagnostics.len(),
+            3,
+            "unexpected diagnostics: {diagnostics:?}"
         );
     }
 
