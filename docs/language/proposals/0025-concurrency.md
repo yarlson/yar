@@ -22,13 +22,13 @@ native thread, not other task threads.
 Before this proposal, Yar was single-threaded. All blocking calls (networking,
 sleep, file I/O) halted the entire program. This prevented:
 
-- **Concurrent servers**: a TCP server cannot handle more than one connection
-  at a time because `net.accept` and `net.read` block the program.
-- **Parallel computation**: CPU-bound work cannot use multiple cores.
-- **Background work with I/O overlap**: a program cannot download a file while
-  processing another.
-- **Timed operations**: there is no way to race a timeout against a blocking
-  operation.
+- **Concurrent servers**: TCP servers need a way to handle more than one
+  connection while individual `net.accept` and `net.read` calls block.
+- **Parallel computation**: CPU-bound work needs a way to use multiple cores.
+- **Background work with I/O overlap**: programs need a way to overlap blocking
+  I/O with other work.
+- **Timed operations**: racing a timeout against a blocking operation remains a
+  separate design problem.
 
 The `net` proposal (0023) anticipated this: "If Yar adds concurrency
 primitives, the blocking socket model naturally extends to per-task blocking.
