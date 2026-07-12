@@ -44,6 +44,18 @@ jobs:
       - name: Install cargo-zigbuild
         run: cargo install --locked cargo-zigbuild
 
+      - name: Verify release snapshot
+        if: github.event_name != 'workflow_dispatch'
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+
+      - name: Verify release runtime bundles
+        if: github.event_name != 'workflow_dispatch'
+        run: ./scripts/verify-release-bundles.sh
+
   snapshot:
     name: Release snapshot
     if: github.event_name == 'workflow_dispatch'
@@ -58,6 +70,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
 
@@ -70,6 +87,9 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+
+      - name: Verify release runtime bundles
+        run: ./scripts/verify-release-bundles.sh
 
   publish:
     name: Publish release

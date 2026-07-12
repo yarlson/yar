@@ -138,7 +138,8 @@
   accesses their functionality through the `conv` stdlib package.
 - Map indexing returns an errorable value and uses `error.MissingKey` when the
   key is absent. `keys(map)` returns a snapshot slice of the current keys.
-- Native builds link the Rust runtime archive from `crates/yar-runtime`.
+- Native builds link `crates/yar-runtime` through a validated target bundle;
+  bundle metadata owns the archive name and ordered native-library contract.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
   storage, and other heap-backed features. The current Rust runtime retains
   allocations until process exit. Allocation failure is still an unrecoverable

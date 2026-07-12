@@ -89,7 +89,9 @@
   each successful `spawn`; it does not use a thread pool or M:N scheduler.
 - Taskgroup and channel helpers live in `crates/yar-runtime` for native build
   paths.
-- Non-Windows builds pass `-pthread` during linking.
+- Runtime bundles carry the target's ordered native-library requirements;
+  Linux GNU bundles include `pthread`, while Darwin uses its own Rust
+  static-library contract.
 - Windows currently has runtime stubs that fail with a clear
   "concurrency is not supported on windows yet" runtime error.
 - The current Rust runtime does not collect heap storage while workers run (or

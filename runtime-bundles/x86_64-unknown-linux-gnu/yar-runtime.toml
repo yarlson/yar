@@ -1,0 +1,8 @@
+format = 1
+target = "x86_64-unknown-linux-gnu"
+runtime_abi = 1
+compiler_compatibility = 1
+archive = "libyar_runtime.a"
+
+[link]
+system_libraries = ["gcc_s", "util", "rt", "pthread", "m", "dl", "c"]

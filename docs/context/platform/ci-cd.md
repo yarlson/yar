@@ -35,8 +35,8 @@ The release workflow can also be run manually. Manual runs execute the same
 verification and a local GoReleaser snapshot, but they do not publish a GitHub
 Release.
 
-Release artifacts package the Rust `yar` CLI plus a sibling Rust runtime static
-archive for:
+Release artifacts package the Rust `yar` CLI plus one target-keyed runtime
+bundle for:
 
 - `darwin/amd64`
 - `darwin/arm64`
@@ -44,9 +44,13 @@ archive for:
 - `linux/arm64`
 - `windows/amd64`
 
-The artifacts contain the compiler CLI and `libyar_runtime.a`. The Windows
-artifact targets Rust's `x86_64-pc-windows-gnu` target and also packages
-`libyar_runtime.a`; the Rust CLI accepts that GNU archive name on Windows.
+The bundle is stored under `runtimes/<target-triple>/` and contains
+`yar-runtime.toml` plus `libyar_runtime.a`. The Windows artifact targets Rust's
+`x86_64-pc-windows-gnu` target. Snapshot CI validates every packaged path and
+manifest, then uses the extracted Linux AMD64 compiler and its discovered
+bundle for a native smoke build without environment overrides. Runtime staging
+also checks each manifest's ordered libraries against the target's
+`rustc --print native-static-libs` output.
 Users still need `clang` available on `PATH` when they use commands that
 produce or execute native Yar programs: `yar build`, `yar run`, and `yar test`.
 

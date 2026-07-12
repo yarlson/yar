@@ -77,14 +77,15 @@
 - Builds `crates/yar-runtime` with `cargo build -p yar-runtime --release` and
   links the generated IR with the Rust runtime static library. This host-build
   path requires Cargo.
-- The Rust CLI always uses the Rust runtime and resolves its archive by first
-  checking `YAR_RUNTIME_ARCHIVE`, then a `libyar_runtime.a`/`yar_runtime.lib`
-  file next to the `yar` executable, and finally the workspace
-  `target/release` archive after building `crates/yar-runtime`.
-- Cross builds require `YAR_RUNTIME_ARCHIVE` to point at a runtime
-  archive for the selected target; the sibling and workspace runtime archive
-  fallbacks are host-only.
-- Invokes `clang -Wno-override-module [--target=<triple>] main.ll <runtime-input> -o <output>`.
+- The Rust CLI always uses the Rust runtime through a validated target bundle.
+  An explicit `YAR_RUNTIME_BUNDLE` directory takes precedence, then packaged
+  `runtimes/<target-triple>/` discovery. Host source builds use the checked-in
+  manifest for the Cargo-built workspace archive.
+- Bundle manifests must match the selected target, bundle format, runtime ABI,
+  and compiler compatibility epoch. They name one safe relative archive and an
+  ordered list of validated system libraries. Cross builds require a matching
+  explicit or installed bundle.
+- Invokes `clang -Wno-override-module [--target=<triple>] main.ll <archive> -o <output> <bundle-libraries>`.
 - Applies one absolute `YAR_BUILD_TIMEOUT_SECS` deadline (30 seconds by default)
   across any Cargo runtime build and the clang invocation. Timed tools and their
   ordinary descendants are terminated before temporary build state is removed.

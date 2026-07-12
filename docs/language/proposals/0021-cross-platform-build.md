@@ -15,12 +15,13 @@ The implemented version provides:
   windows/amd64
 - host platform detection as default target
 - cross-compilation validation (prevents running cross-compiled binaries)
-- target-specific runtime archives for Win32 and POSIX APIs
+- validated target-specific runtime bundles for Win32 and POSIX APIs
 - platform-aware executable naming (`.exe` suffix for Windows)
 
 Current implementation note: host builds link the Rust runtime. The Rust CLI
-supports cross builds when `YAR_RUNTIME_ARCHIVE` points at a runtime archive for
-the selected target. The legacy embedded C runtime has been removed.
+validates a `YAR_RUNTIME_BUNDLE` directory or an installed
+`runtimes/<target-triple>/` bundle before linking. The legacy raw-archive
+override and embedded C runtime have been removed.
 
 ## 2. Motivation
 
@@ -94,8 +95,8 @@ $ YAR_OS=linux YAR_ARCH=amd64 yar run main.yar
 - cross-compiled binaries cannot be executed by `yar run` or `yar test`
 - the target triple is passed to LLVM IR generation and to `clang` for linking
 - Windows targets produce executables with the `.exe` suffix
-- the selected runtime archive must provide host-backed functions for the
-  target platform
+- the selected runtime bundle must declare the exact target, runtime ABI,
+  compiler compatibility epoch, static archive, and ordered native libraries
 
 ### Target triple mapping
 
@@ -123,19 +124,19 @@ No new syntax. Target selection is entirely through environment variables.
 - checker impact: none
 - codegen impact: the LLVM IR `target triple` directive is set based on the
   resolved target; data layout may differ per target
-- compiler orchestration impact: `ResolveTarget()` reads environment variables,
-  validates the combination, and returns a `Target` struct containing the
-  triple, OS, arch, and whether it is a cross-compilation; `IsCross()` is
-  checked before execution
-- runtime impact: high; all host-backed C functions have conditional
+- compiler orchestration impact: `Target::resolve()` reads environment
+  variables, validates the combination, and returns a target containing the
+  triple, OS, and architecture; `is_cross()` is checked before execution
+- runtime impact: high; Rust `#[cfg(...)]` platform modules provide conditional
   implementations:
   - filesystem: `CreateDirectoryA`, `FindFirstFileA`/`FindNextFileA`,
     `GetFileAttributesA`, `DeleteFileA`, `RemoveDirectoryA`,
     `GetTempPathA` on Windows vs `mkdir`, `opendir`/`readdir`, `stat`,
     `unlink`, `rmdir`, `getenv("TMPDIR")` on POSIX
-  - process: `_popen`/`_pclose` on Windows vs `popen`/`pclose` on POSIX
-  - environment: `getenv` on both (compatible)
-  - I/O: `fprintf(stderr, ...)` on both (compatible)
+  - process: `CreateProcessA` and Win32 handles on Windows vs
+    `fork`/`execvp`/`waitpid` on POSIX
+  - environment: `GetEnvironmentVariableA` on Windows vs `getenv` on POSIX
+  - I/O: Rust standard I/O at the C ABI boundary on both platforms
 
 ## 8. Interactions
 
@@ -196,7 +197,10 @@ environments.
 
 Accepted and implemented. Cross-compilation uses `YAR_OS` and `YAR_ARCH`
 environment variables with a fixed target triple mapping. Native builds link a
-Rust runtime archive for the selected target.
+validated Rust runtime bundle for the selected target. Bundle format, runtime
+ABI, and compiler compatibility are independent exact-match epochs; bundle
+metadata cannot provide raw linker arguments, target selection, or output
+paths.
 
 ## 14. Implementation Checklist
 

@@ -37,11 +37,11 @@
   `.exe` suffix so the OS can execute them.
 - The default output name for `build` is `a.out` on Unix and `a.exe` on
   Windows.
-- Native build paths link the Rust runtime. The Rust CLI resolves a
-  runtime archive from `YAR_RUNTIME_ARCHIVE` when set, from a
-  `libyar_runtime.a`/`yar_runtime.lib` file next to the `yar` executable when
-  present, or from the workspace `target/release` archive after building
-  `crates/yar-runtime`.
+- Native build paths link the Rust runtime through a strict target bundle.
+  `YAR_RUNTIME_BUNDLE` selects a directory containing `yar-runtime.toml` and one
+  static archive. Otherwise the CLI discovers `runtimes/<target-triple>/` next
+  to the executable or, for host source builds, combines the checked-in target
+  manifest with the Cargo-built workspace archive.
 
 ## Cross-Compilation
 
@@ -54,16 +54,21 @@
   `linux/arm64`, `windows/amd64`.
 - `windows/amd64` maps to `x86_64-pc-windows-gnu`, matching the Windows Rust
   release artifact and packaged `libyar_runtime.a`.
+- Host ABIs outside the exact supported little-endian Darwin and GNU triples
+  are rejected rather than relabeled as a compatible bundle target. The
+  current Windows bundle and clang contract supports Windows GNU, not MSVC or
+  GNU LLVM variants.
 - Cross-compilation requires a `clang` installation that can target the
   requested platform, including the appropriate sysroot and system libraries.
-- Rust CLI cross builds require `YAR_RUNTIME_ARCHIVE` to point at a static
-  runtime archive for the selected target. Without an explicit archive, the
-  Rust CLI only uses sibling executable and workspace runtime archive fallbacks
-  for host builds.
+- Rust CLI cross builds require a matching explicit `YAR_RUNTIME_BUNDLE` or an
+  installed `runtimes/<target-triple>/` bundle. Workspace Cargo fallback is
+  host-only.
 - `yar run` rejects cross-compilation targets since the built binary cannot
   execute on the host.
-- Non-Windows builds that use the runtime concurrency helpers also link with
-  `-pthread`.
+- The bundle carries the ordered native libraries reported for its Rust
+  staticlib target; the CLI validates their names and emits them after the
+  archive. Release staging compares each checked-in list with
+  `rustc --print native-static-libs` and fails on drift.
 
 ## Runtime Implementations
 
@@ -75,15 +80,17 @@
   string-builder, taskgroup, channel, argv capture, environment lookup,
   child-process execution, and filesystem and TCP networking helpers.
 - Host `build`, `run`, and `test` commands can build `crates/yar-runtime` with
-  Cargo and link the generated IR against `target/release/libyar_runtime.a`
-  when no explicit or sibling runtime archive is available.
-- `YAR_RUNTIME_ARCHIVE` points the Rust CLI at a prebuilt runtime static
-  archive. This is the packaging hook for released Rust CLI archives; if it is
-  unset, an archive next to the `yar` executable is used before falling back to
-  the source workspace build path.
-- The runtime uses `#ifdef _WIN32` conditionals to support both POSIX and
-  Windows platforms from a single source file. `clang` defines `_WIN32`
-  automatically when targeting a Windows triple.
+  Cargo and validate the checked-in target manifest against the resulting
+  archive when no explicit or packaged bundle is available. The CLI resolves
+  one `CARGO_TARGET_DIR`, passes it to Cargo, and loads the archive from that
+  same directory.
+- Bundle format, exact target triple, runtime ABI, and compiler compatibility
+  are independent integer epochs and must all match. The archive must be one
+  relative regular file; system-library names are validated while order and
+  duplicates are preserved. Legacy `YAR_RUNTIME_ARCHIVE` configuration is
+  rejected with migration guidance.
+- The Rust runtime uses `#[cfg(...)]` platform modules and branches to select
+  POSIX or Win32 implementations at compile time.
 - Concurrency support is currently implemented only on POSIX targets. Windows
   builds compile, but the concurrency runtime entry points fail with an
   explicit runtime error when called.

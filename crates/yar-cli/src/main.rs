@@ -11,10 +11,12 @@ use std::{
 mod invocation;
 mod metadata_transaction;
 mod project;
+mod runtime_bundle;
 
 use invocation::Invocation;
 use metadata_transaction::{FileChange, MetadataChanges};
 use project::ProjectPaths;
+use runtime_bundle::RuntimeBundle;
 
 use yar_compiler::{
     compile::{CompileOptions, Unit, check_path, compile_path, compile_test_path},
@@ -34,7 +36,8 @@ use yar_process_control::{
     status as process_status,
 };
 
-const RUNTIME_ARCHIVE_ENV: &str = "YAR_RUNTIME_ARCHIVE";
+const RUNTIME_BUNDLE_ENV: &str = "YAR_RUNTIME_BUNDLE";
+const LEGACY_RUNTIME_ARCHIVE_ENV: &str = "YAR_RUNTIME_ARCHIVE";
 const BUILD_TIMEOUT_ENV: &str = "YAR_BUILD_TIMEOUT_SECS";
 const TEST_TIMEOUT_ENV: &str = "YAR_TEST_TIMEOUT_SECS";
 const GIT_TIMEOUT_ENV: &str = "YAR_GIT_TIMEOUT_SECS";
@@ -459,12 +462,12 @@ fn build_unit(
     output: &Path,
     deadline: Deadline,
 ) -> Result<(), CliError> {
-    let archive = runtime_archive(target, deadline)?;
+    let runtime = runtime_bundle(target, deadline)?;
 
     let tmp_dir = TempDir::new("yar-rust-build")?;
     let ir_path = tmp_dir.path().join("main.ll");
     fs::write(&ir_path, unit.ir)?;
-    invoke_clang(target, &ir_path, &archive, output, deadline)?;
+    invoke_clang(target, &ir_path, &runtime, output, deadline)?;
     Ok(())
 }
 
@@ -762,7 +765,7 @@ impl Target {
 
     fn is_cross(&self) -> bool {
         let host = host_target();
-        self.os != host.os || self.arch != host.arch
+        self.os != host.os || self.arch != host.arch || self.triple != host.triple
     }
 
     fn exe_suffix(&self) -> &'static str {
@@ -782,7 +785,17 @@ fn host_target() -> Target {
         other => other,
     }
     .to_string();
-    let triple = target_triple(&os, &arch).map(str::to_string);
+    let supported_host_abi = match env::consts::OS {
+        "macos" => cfg!(target_abi = "") && cfg!(target_endian = "little"),
+        "linux" | "windows" => {
+            cfg!(target_env = "gnu") && cfg!(target_abi = "") && cfg!(target_endian = "little")
+        }
+        _ => false,
+    };
+    let triple = supported_host_abi
+        .then(|| target_triple(&os, &arch))
+        .flatten()
+        .map(str::to_string);
     Target { os, arch, triple }
 }
 
@@ -801,6 +814,18 @@ fn supported_targets() -> &'static str {
     "darwin/amd64, darwin/arm64, linux/amd64, linux/arm64, windows/amd64"
 }
 
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+
+    #[test]
+    fn a_different_target_abi_is_cross_compilation() {
+        let mut target = host_target();
+        target.triple = Some("different-target-abi".to_string());
+        assert!(target.is_cross());
+    }
+}
+
 fn default_output_name(target: &Target) -> &'static str {
     if target.os == "windows" {
         "a.exe"
@@ -809,48 +834,66 @@ fn default_output_name(target: &Target) -> &'static str {
     }
 }
 
-fn runtime_archive(target: &Target, deadline: Deadline) -> Result<PathBuf, CliError> {
-    if let Some(path) = runtime_archive_from_env() {
-        return require_runtime_archive(path);
+fn runtime_bundle(target: &Target, deadline: Deadline) -> Result<RuntimeBundle, CliError> {
+    let Some(triple) = target.triple.as_deref() else {
+        if target.os == "windows" && target.arch == "amd64" {
+            return Err(CliError::other(
+                "this native Windows host ABI is unsupported; use the x86_64-pc-windows-gnu release toolchain",
+            ));
+        }
+        return Err(CliError::other(format!(
+            "target {}/{} has no supported runtime bundle triple",
+            target.os, target.arch
+        )));
+    };
+    if env::var_os(LEGACY_RUNTIME_ARCHIVE_ENV).is_some() {
+        return Err(CliError::other(format!(
+            "{LEGACY_RUNTIME_ARCHIVE_ENV} was replaced by {RUNTIME_BUNDLE_ENV}; point {RUNTIME_BUNDLE_ENV} at a validated target runtime bundle directory"
+        )));
+    }
+    if let Some(path) = runtime_bundle_from_env()? {
+        return RuntimeBundle::load(&path, triple).map_err(CliError::other);
+    }
+    if let Some(path) = runtime_bundle_next_to_exe(triple)? {
+        return RuntimeBundle::load(&path, triple).map_err(CliError::other);
     }
     if target.is_cross() {
         return Err(CliError::other(format!(
-            "cross-compiling with the Rust CLI requires {RUNTIME_ARCHIVE_ENV} to point at a runtime archive for target {}/{}",
-            target.os, target.arch
+            "cross-compiling for {triple} requires an installed runtimes/{triple} bundle or {RUNTIME_BUNDLE_ENV} pointing at a validated target runtime bundle"
         )));
-    }
-    if let Some(path) = runtime_archive_next_to_exe()? {
-        return Ok(path);
     }
 
     let root = repo_root()?;
-    build_rust_runtime(&root, deadline)?;
-    require_runtime_archive(
-        root.join("target")
-            .join("release")
-            .join(rust_runtime_archive_name()),
+    let archive = build_rust_runtime(&root, deadline)?;
+    RuntimeBundle::load_with_archive(
+        &root.join("runtime-bundles").join(triple),
+        triple,
+        Some(archive),
     )
+    .map_err(CliError::other)
 }
 
-fn runtime_archive_from_env() -> Option<PathBuf> {
-    let path = env::var_os(RUNTIME_ARCHIVE_ENV)?;
+fn runtime_bundle_from_env() -> Result<Option<PathBuf>, CliError> {
+    let Some(path) = env::var_os(RUNTIME_BUNDLE_ENV) else {
+        return Ok(None);
+    };
     if path.is_empty() {
-        None
+        Err(CliError::other(format!(
+            "{RUNTIME_BUNDLE_ENV} must point at a target runtime bundle directory"
+        )))
     } else {
-        Some(PathBuf::from(path))
+        Ok(Some(PathBuf::from(path)))
     }
 }
 
-fn runtime_archive_next_to_exe() -> Result<Option<PathBuf>, CliError> {
+fn runtime_bundle_next_to_exe(triple: &str) -> Result<Option<PathBuf>, CliError> {
     let exe = env::current_exe()?;
     let Some(dir) = exe.parent() else {
         return Ok(None);
     };
-    for name in rust_runtime_archive_names() {
-        let archive = dir.join(name);
-        if archive.is_file() {
-            return Ok(Some(archive));
-        }
+    let bundle = dir.join("runtimes").join(triple);
+    if bundle.exists() {
+        return Ok(Some(bundle));
     }
     Ok(None)
 }
@@ -865,10 +908,19 @@ fn require_runtime_archive(path: PathBuf) -> Result<PathBuf, CliError> {
     )))
 }
 
-fn build_rust_runtime(root: &Path, deadline: Deadline) -> Result<(), CliError> {
+fn build_rust_runtime(root: &Path, deadline: Deadline) -> Result<PathBuf, CliError> {
+    let target_dir = match env::var_os("CARGO_TARGET_DIR") {
+        Some(path) if path.is_empty() => {
+            return Err(CliError::other("CARGO_TARGET_DIR must not be empty"));
+        }
+        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
+        Some(path) => root.join(path),
+        None => root.join("target"),
+    };
     let mut command = Command::new("cargo");
     command
-        .args(["build", "-p", "yar-runtime", "--release"])
+        .args(["build", "-p", "yar-runtime", "--release", "--target-dir"])
+        .arg(&target_dir)
         .current_dir(root);
     let output = process_output(command, deadline)?;
     if !output.status.success() {
@@ -878,13 +930,13 @@ fn build_rust_runtime(root: &Path, deadline: Deadline) -> Result<(), CliError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    Ok(())
+    require_runtime_archive(target_dir.join("release").join(rust_runtime_archive_name()))
 }
 
 fn invoke_clang(
     target: &Target,
     ir_path: &Path,
-    runtime_archive: &Path,
+    runtime: &RuntimeBundle,
     output_path: &Path,
     deadline: Deadline,
 ) -> Result<(), CliError> {
@@ -893,16 +945,11 @@ fn invoke_clang(
     if let Some(triple) = &target.triple {
         args.push(OsString::from(format!("--target={triple}")));
     }
-    if target.os != "windows" {
-        args.push(OsString::from("-pthread"));
-    }
     args.push(ir_path.as_os_str().to_owned());
-    args.push(runtime_archive.as_os_str().to_owned());
+    args.push(runtime.archive().as_os_str().to_owned());
     args.push(OsString::from("-o"));
     args.push(output_path.as_os_str().to_owned());
-    if target.os == "windows" {
-        args.push(OsString::from("-lws2_32"));
-    }
+    runtime.append_library_args(&mut args);
 
     let mut command = Command::new(&cc);
     command.args(&args);
@@ -962,8 +1009,8 @@ fn rust_runtime_archive_name() -> &'static str {
 }
 
 fn rust_runtime_archive_names() -> &'static [&'static str] {
-    if env::consts::OS == "windows" {
-        &["yar_runtime.lib", "libyar_runtime.a"]
+    if cfg!(all(target_os = "windows", target_env = "msvc")) {
+        &["yar_runtime.lib"]
     } else {
         &["libyar_runtime.a"]
     }

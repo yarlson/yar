@@ -1,0 +1,8 @@
+format = 1
+target = "aarch64-apple-darwin"
+runtime_abi = 1
+compiler_compatibility = 1
+archive = "libyar_runtime.a"
+
+[link]
+system_libraries = ["System", "c", "m"]
