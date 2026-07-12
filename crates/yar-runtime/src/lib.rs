@@ -171,8 +171,9 @@ pub extern "C" fn yar_taskgroup_spawn(group: *mut u8, entry: *mut u8, ctx: *mut 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_taskgroup_wait(group: *mut u8) -> YarSlice {
-    concurrency::taskgroup_wait(group)
+pub extern "C" fn yar_taskgroup_wait(group: *mut u8, out: *mut YarSlice) {
+    require_abi_out(out);
+    write_abi_out(out, concurrency::taskgroup_wait(group));
 }
 
 #[unsafe(no_mangle)]
@@ -187,6 +188,7 @@ pub extern "C" fn yar_chan_send(handle: *mut u8, value: *const u8) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_chan_recv(handle: *mut u8, out: *mut u8) -> i32 {
+    require_abi_out(out);
     concurrency::chan_recv(handle, out)
 }
 
@@ -258,12 +260,15 @@ pub extern "C" fn yar_str_concat(
     a_len: i64,
     b_ptr: *const u8,
     b_len: i64,
-) -> YarStr {
-    string::concat(a_ptr, a_len, b_ptr, b_len)
+    out: *mut YarStr,
+) {
+    require_abi_out(out);
+    write_abi_out(out, string::concat(a_ptr, a_len, b_ptr, b_len));
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_str_from_byte(value: i32) -> YarStr {
+pub extern "C" fn yar_str_from_byte(value: i32, out: *mut YarStr) {
+    require_abi_out(out);
     if !(0..=255).contains(&value) {
         runtime_fail(b"runtime failure: byte value out of range\n");
     }
@@ -273,17 +278,19 @@ pub extern "C" fn yar_str_from_byte(value: i32) -> YarStr {
     unsafe {
         ptr::write(ptr, value as u8);
     }
-    YarStr { ptr, len: 1 }
+    write_abi_out(out, YarStr { ptr, len: 1 });
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_to_str_i32(value: i32) -> YarStr {
-    string::from_owned(value.to_string())
+pub extern "C" fn yar_to_str_i32(value: i32, out: *mut YarStr) {
+    require_abi_out(out);
+    write_abi_out(out, string::from_owned(value.to_string()));
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_to_str_i64(value: i64) -> YarStr {
-    string::from_owned(value.to_string())
+pub extern "C" fn yar_to_str_i64(value: i64, out: *mut YarStr) {
+    require_abi_out(out);
+    write_abi_out(out, string::from_owned(value.to_string()));
 }
 
 #[unsafe(no_mangle)]
@@ -298,6 +305,7 @@ pub extern "C" fn yar_map_set(map_ptr: *mut u8, key: *const u8, value: *const u8
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_map_get(map_ptr: *mut u8, key: *const u8, value_out: *mut u8) -> i32 {
+    require_abi_out(value_out);
     map::get(map_ptr, key, value_out)
 }
 
@@ -317,8 +325,9 @@ pub extern "C" fn yar_map_len(map_ptr: *mut u8) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_map_keys(map_ptr: *mut u8) -> YarSlice {
-    map::keys(map_ptr)
+pub extern "C" fn yar_map_keys(map_ptr: *mut u8, out: *mut YarSlice) {
+    require_abi_out(out);
+    write_abi_out(out, map::keys(map_ptr));
 }
 
 #[unsafe(no_mangle)]
@@ -332,83 +341,109 @@ pub extern "C" fn yar_sb_write(handle: i64, data: *const u8, data_len: i64) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_sb_string(handle: i64) -> YarStr {
-    string_builder::string(handle)
+pub extern "C" fn yar_sb_string(handle: i64, out: *mut YarStr) {
+    require_abi_out(out);
+    write_abi_out(out, string_builder::string(handle));
+}
+
+fn require_abi_out<T>(out: *mut T) {
+    if out.is_null() {
+        runtime_fail(b"runtime failure: invalid ABI output pointer\n");
+    }
+}
+
+fn write_abi_out<T>(out: *mut T, value: T) {
+    require_abi_out(out);
+    // SAFETY: generated code provides writable storage for the exact repr(C)
+    // result type declared by the runtime ABI.
+    unsafe { ptr::write(out, value) };
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_process_args(out: *mut YarSlice) {
+    require_abi_out(out);
     host::process_args(out);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_env_lookup(name: YarStr, out: *mut YarStr) -> i32 {
-    host::env_lookup(name, out)
+pub extern "C" fn yar_env_lookup(name: *const YarStr, out: *mut YarStr) -> i32 {
+    require_abi_out(out);
+    host::env_lookup(read_abi_in(name), out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_process_run(argv: *const YarSlice, out: *mut YarProcessResult) -> i32 {
+    require_abi_out(out);
     host::process_run(argv, out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_process_run_inherit(argv: *const YarSlice, out: *mut i32) -> i32 {
+    require_abi_out(out);
     host::process_run_inherit(argv, out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_read_file(path: YarStr, out: *mut YarStr) -> i32 {
-    filesystem::read_file(path, out)
+pub extern "C" fn yar_fs_read_file(path: *const YarStr, out: *mut YarStr) -> i32 {
+    require_abi_out(out);
+    filesystem::read_file(read_abi_in(path), out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_write_file(path: YarStr, data: YarStr) -> i32 {
-    filesystem::write_file(path, data)
+pub extern "C" fn yar_fs_write_file(path: *const YarStr, data: *const YarStr) -> i32 {
+    filesystem::write_file(read_abi_in(path), read_abi_in(data))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
-    filesystem::read_dir(path, out)
+pub extern "C" fn yar_fs_read_dir(path: *const YarStr, out: *mut YarSlice) -> i32 {
+    require_abi_out(out);
+    filesystem::read_dir(read_abi_in(path), out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_stat(path: YarStr, kind_out: *mut i32) -> i32 {
-    filesystem::stat(path, kind_out)
+pub extern "C" fn yar_fs_stat(path: *const YarStr, kind_out: *mut i32) -> i32 {
+    require_abi_out(kind_out);
+    filesystem::stat(read_abi_in(path), kind_out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_mkdir_all(path: YarStr) -> i32 {
-    filesystem::mkdir_all(path)
+pub extern "C" fn yar_fs_mkdir_all(path: *const YarStr) -> i32 {
+    filesystem::mkdir_all(read_abi_in(path))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_remove_all(path: YarStr) -> i32 {
-    filesystem::remove_all(path)
+pub extern "C" fn yar_fs_remove_all(path: *const YarStr) -> i32 {
+    filesystem::remove_all(read_abi_in(path))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_temp_dir(prefix: YarStr, out: *mut YarStr) -> i32 {
-    filesystem::temp_dir(prefix, out)
+pub extern "C" fn yar_fs_temp_dir(prefix: *const YarStr, out: *mut YarStr) -> i32 {
+    require_abi_out(out);
+    filesystem::temp_dir(read_abi_in(prefix), out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_open_read(path: YarStr, out: *mut i64) -> i32 {
-    filesystem::open_read(path, out)
+pub extern "C" fn yar_fs_open_read(path: *const YarStr, out: *mut i64) -> i32 {
+    require_abi_out(out);
+    filesystem::open_read(read_abi_in(path), out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_open_write(path: YarStr, out: *mut i64) -> i32 {
-    filesystem::open_write(path, out)
+pub extern "C" fn yar_fs_open_write(path: *const YarStr, out: *mut i64) -> i32 {
+    require_abi_out(out);
+    filesystem::open_write(read_abi_in(path), out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_fs_read_handle(handle: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
+    require_abi_out(out);
     filesystem::read_handle(handle, max_bytes, out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_fs_write_handle(handle: i64, data: YarStr, out: *mut i32) -> i32 {
-    filesystem::write_handle(handle, data, out)
+pub extern "C" fn yar_fs_write_handle(handle: i64, data: *const YarStr, out: *mut i32) -> i32 {
+    require_abi_out(out);
+    filesystem::write_handle(handle, read_abi_in(data), out)
 }
 
 #[unsafe(no_mangle)]
@@ -417,17 +452,20 @@ pub extern "C" fn yar_fs_close_handle(handle: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_net_listen(host: YarStr, port: i32, out: *mut i64) -> i32 {
-    net::listen(host, port, out)
+pub extern "C" fn yar_net_listen(host: *const YarStr, port: i32, out: *mut i64) -> i32 {
+    require_abi_out(out);
+    net::listen(read_abi_in(host), port, out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_accept(listener: i64, out: *mut i64) -> i32 {
+    require_abi_out(out);
     net::accept(listener, out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_listener_addr(listener: i64, out: *mut YarNetAddr) -> i32 {
+    require_abi_out(out);
     net::listener_addr(listener, out)
 }
 
@@ -437,18 +475,21 @@ pub extern "C" fn yar_net_close_listener(listener: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_net_connect(host: YarStr, port: i32, out: *mut i64) -> i32 {
-    net::connect(host, port, out)
+pub extern "C" fn yar_net_connect(host: *const YarStr, port: i32, out: *mut i64) -> i32 {
+    require_abi_out(out);
+    net::connect(read_abi_in(host), port, out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_read(conn: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
+    require_abi_out(out);
     net::read(conn, max_bytes, out)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_net_write(conn: i64, data: YarStr, out: *mut i32) -> i32 {
-    net::write(conn, data, out)
+pub extern "C" fn yar_net_write(conn: i64, data: *const YarStr, out: *mut i32) -> i32 {
+    require_abi_out(out);
+    net::write(conn, read_abi_in(data), out)
 }
 
 #[unsafe(no_mangle)]
@@ -458,11 +499,13 @@ pub extern "C" fn yar_net_close(conn: i64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_local_addr(conn: i64, out: *mut YarNetAddr) -> i32 {
+    require_abi_out(out);
     net::local_addr(conn, out)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_remote_addr(conn: i64, out: *mut YarNetAddr) -> i32 {
+    require_abi_out(out);
     net::remote_addr(conn, out)
 }
 
@@ -477,8 +520,18 @@ pub extern "C" fn yar_net_set_write_deadline(conn: i64, millis: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_net_resolve(host: YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
-    net::resolve(host, port, out)
+pub extern "C" fn yar_net_resolve(host: *const YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
+    require_abi_out(out);
+    net::resolve(read_abi_in(host), port, out)
+}
+
+fn read_abi_in<T: Copy>(input: *const T) -> T {
+    if input.is_null() {
+        runtime_fail(b"runtime failure: invalid ABI input pointer\n");
+    }
+    // SAFETY: generated code provides initialized storage for the exact repr(C)
+    // input type declared by the runtime ABI.
+    unsafe { ptr::read(input) }
 }
 
 #[cfg(test)]
@@ -488,6 +541,76 @@ mod tests {
     use std::process::{Command, Output, Stdio};
     use std::sync::{Arc, Barrier};
     use std::time::{Duration, Instant};
+
+    fn abi_out<T>(call: impl FnOnce(*mut T)) -> T {
+        let mut out = std::mem::MaybeUninit::<T>::uninit();
+        call(out.as_mut_ptr());
+        // SAFETY: runtime out-parameter functions initialize the exact result
+        // type or terminate before returning.
+        unsafe { out.assume_init() }
+    }
+
+    // Keep unit tests expressed in source-level values while exercising the
+    // exported pointer-based aggregate ABI at the boundary.
+    fn yar_env_lookup(name: YarStr, out: *mut YarStr) -> i32 {
+        super::yar_env_lookup(&name, out)
+    }
+
+    fn yar_fs_read_file(path: YarStr, out: *mut YarStr) -> i32 {
+        super::yar_fs_read_file(&path, out)
+    }
+
+    fn yar_fs_write_file(path: YarStr, data: YarStr) -> i32 {
+        super::yar_fs_write_file(&path, &data)
+    }
+
+    fn yar_fs_read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
+        super::yar_fs_read_dir(&path, out)
+    }
+
+    fn yar_fs_stat(path: YarStr, out: *mut i32) -> i32 {
+        super::yar_fs_stat(&path, out)
+    }
+
+    fn yar_fs_mkdir_all(path: YarStr) -> i32 {
+        super::yar_fs_mkdir_all(&path)
+    }
+
+    fn yar_fs_remove_all(path: YarStr) -> i32 {
+        super::yar_fs_remove_all(&path)
+    }
+
+    fn yar_fs_temp_dir(prefix: YarStr, out: *mut YarStr) -> i32 {
+        super::yar_fs_temp_dir(&prefix, out)
+    }
+
+    fn yar_fs_open_read(path: YarStr, out: *mut i64) -> i32 {
+        super::yar_fs_open_read(&path, out)
+    }
+
+    fn yar_fs_open_write(path: YarStr, out: *mut i64) -> i32 {
+        super::yar_fs_open_write(&path, out)
+    }
+
+    fn yar_fs_write_handle(handle: i64, data: YarStr, out: *mut i32) -> i32 {
+        super::yar_fs_write_handle(handle, &data, out)
+    }
+
+    fn yar_net_listen(host: YarStr, port: i32, out: *mut i64) -> i32 {
+        super::yar_net_listen(&host, port, out)
+    }
+
+    fn yar_net_connect(host: YarStr, port: i32, out: *mut i64) -> i32 {
+        super::yar_net_connect(&host, port, out)
+    }
+
+    fn yar_net_write(conn: i64, data: YarStr, out: *mut i32) -> i32 {
+        super::yar_net_write(conn, &data, out)
+    }
+
+    fn yar_net_resolve(host: YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
+        super::yar_net_resolve(&host, port, out)
+    }
 
     #[derive(Clone)]
     struct ChunkedWriter {
@@ -564,7 +687,7 @@ mod tests {
             let group = yar_taskgroup_new(0);
             yar_taskgroup_spawn(group, parked_task as *mut u8, ptr::null_mut());
             yar_taskgroup_spawn(group, fatal_task as *mut u8, ptr::null_mut());
-            let _ = yar_taskgroup_wait(group);
+            let _: YarSlice = abi_out(|out| yar_taskgroup_wait(group, out));
             panic!("fatal worker returned");
         }
 
@@ -596,6 +719,62 @@ mod tests {
 
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn process_args_rejects_a_null_abi_output_before_returning() {
+        const CHILD_ENV: &str = "YAR_TEST_NULL_PROCESS_ARGS_OUT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            super::yar_process_args(ptr::null_mut());
+            panic!("null ABI output returned");
+        }
+
+        assert_invalid_abi_output(run_test_child(
+            "tests::process_args_rejects_a_null_abi_output_before_returning",
+            CHILD_ENV,
+        ));
+    }
+
+    #[test]
+    fn fs_read_rejects_a_null_abi_output_before_io() {
+        const CHILD_ENV: &str = "YAR_TEST_NULL_FS_READ_OUT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let path = string::from_owned("unused".to_owned());
+            super::yar_fs_read_file(&path, ptr::null_mut());
+            panic!("null ABI output returned");
+        }
+
+        assert_invalid_abi_output(run_test_child(
+            "tests::fs_read_rejects_a_null_abi_output_before_io",
+            CHILD_ENV,
+        ));
+    }
+
+    #[test]
+    fn process_run_rejects_a_null_abi_output_before_launch() {
+        const CHILD_ENV: &str = "YAR_TEST_NULL_PROCESS_RUN_OUT";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let argv = YarSlice {
+                ptr: ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            };
+            super::yar_process_run(&argv, ptr::null_mut());
+            panic!("null ABI output returned");
+        }
+
+        assert_invalid_abi_output(run_test_child(
+            "tests::process_run_rejects_a_null_abi_output_before_launch",
+            CHILD_ENV,
+        ));
+    }
+
+    fn assert_invalid_abi_output(output: Output) {
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.stderr,
+            b"runtime failure: invalid ABI output pointer\n"
+        );
     }
 
     fn run_test_child(test_name: &str, child_env: &str) -> Output {
@@ -675,18 +854,26 @@ mod tests {
             0
         );
 
-        let combined = yar_str_concat(a.as_ptr(), a.len() as i64, b.as_ptr(), b.len() as i64);
+        let combined = abi_out(|out| {
+            yar_str_concat(a.as_ptr(), a.len() as i64, b.as_ptr(), b.len() as i64, out)
+        });
         assert_eq!(str_from_runtime(combined), "yarlang");
     }
 
     #[test]
     fn conversion_helpers_return_runtime_strings() {
-        assert_eq!(str_from_runtime(yar_to_str_i32(-32)), "-32");
         assert_eq!(
-            str_from_runtime(yar_to_str_i64(9_000_000_000)),
+            str_from_runtime(abi_out(|out| yar_to_str_i32(-32, out))),
+            "-32"
+        );
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_to_str_i64(9_000_000_000, out))),
             "9000000000"
         );
-        assert_eq!(str_from_runtime(yar_str_from_byte(65)), "A");
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_str_from_byte(65, out))),
+            "A"
+        );
     }
 
     #[test]
@@ -697,8 +884,14 @@ mod tests {
         yar_sb_write(handle, b"hello".as_ptr(), 5);
         yar_sb_write(handle, b", yar".as_ptr(), 5);
 
-        assert_eq!(str_from_runtime(yar_sb_string(handle)), "hello, yar");
-        assert_eq!(str_from_runtime(yar_sb_string(handle)), "");
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_sb_string(handle, out))),
+            "hello, yar"
+        );
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_sb_string(handle, out))),
+            ""
+        );
     }
 
     #[test]
@@ -718,7 +911,7 @@ mod tests {
             writer.join().expect("string builder writer should finish");
         }
 
-        let value = str_from_runtime(yar_sb_string(handle));
+        let value = str_from_runtime(abi_out(|out| yar_sb_string(handle, out)));
         assert_eq!(value.len(), 1024);
         assert!(value.bytes().all(|byte| byte == b'x'));
     }
@@ -749,7 +942,7 @@ mod tests {
         assert_eq!(yar_map_has(handle, (&key as *const i32).cast::<u8>()), 1);
         assert_eq!(yar_map_len(handle), 1);
 
-        let keys = yar_map_keys(handle);
+        let keys = abi_out(|out| yar_map_keys(handle, out));
         assert_eq!(keys.len, 1);
         assert_eq!(keys.cap, 1);
         let copied_key = unsafe { *(keys.ptr.cast::<i32>()) };
@@ -1267,7 +1460,10 @@ mod tests {
         assert_eq!(yar_fs_write_handle(file, data, &mut written), 0);
         assert_eq!(written, 2);
         yar_sb_write(builder, b"builder".as_ptr(), 7);
-        assert_eq!(str_from_runtime(yar_sb_string(builder)), "builder");
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_sb_string(builder, out))),
+            "builder"
+        );
         assert_eq!(yar_net_listener_addr(listener, &mut addr), 0);
         assert_eq!(yar_net_write(client, data, &mut written), 0);
         assert_eq!(written, 2);
@@ -1311,7 +1507,7 @@ mod tests {
             (&mut second as *mut i32).cast::<u8>(),
         );
 
-        let out = yar_taskgroup_wait(group);
+        let out = abi_out(|out| yar_taskgroup_wait(group, out));
         assert_eq!(out.len, 2);
         assert_eq!(out.cap, 2);
         assert!(!out.ptr.is_null());
@@ -1339,7 +1535,7 @@ mod tests {
                 .cast::<u8>(),
         );
 
-        let out = yar_taskgroup_wait(group);
+        let out = abi_out(|out| yar_taskgroup_wait(group, out));
         assert!(out.ptr.is_null());
         assert_eq!(out.len, 2);
         assert_eq!(out.cap, 2);

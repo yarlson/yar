@@ -158,7 +158,7 @@ With proposal 0006 primitives (`len`, `s[i]`, `s[i:j]`, `+`, `==`):
 - `strings.from_byte(i32) str`: requires constructing a `%yar.str` from a
   single byte value. This cannot be expressed in pure Yar today. Options:
   - Add a minimal `chr(i32) str` builtin that creates a one-byte string
-  - Add a runtime helper `yar_str_from_byte(i32) %yar.str`
+  - Add a runtime helper `yar_str_from_byte(i32, ptr)` with explicit output storage
 
 - `conv.itoa(i32) str` and `conv.itoa64(i64) str`: technically implementable
   in pure Yar using digit extraction and `strings.from_byte`, but awkward
@@ -183,7 +183,7 @@ one-byte string. Everything else can be written in pure Yar on top of it.
 - AST / IR: no new node kinds
 - checker: register `chr` builtin if chosen
 - codegen: lower `chr` to runtime call
-- runtime: add `yar_str_from_byte(i32) %yar.str`
+- runtime: add `yar_str_from_byte(i32, ptr)` with explicit output storage
 - stdlib: write `utf8.yar`, extend `strings.yar`, write `conv.yar`
 - tests: stdlib integration tests for each package
 

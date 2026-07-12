@@ -104,12 +104,19 @@
 
 ## Runtime Surface
 
+- Runtime ABI 2 passes every aggregate input and output through explicit
+  caller-owned pointers. Generated LLVM therefore does not depend on
+  target-specific aggregate argument or return conventions at the Rust/C
+  boundary. Runtime calls read input slots during the call and initialize
+  output slots before returning successfully.
+
 ### I/O and Control
 
 - `yar_print(const char *data, long long len)` writes string data to stdout when
   the length is positive.
-- `yar_panic(const char *data, long long len)` writes the message to stderr,
-  flushes stderr, and exits with status `1`.
+- `yar_panic(const char *data, long long len)` writes and flushes the message
+  on a single-threaded fatal path, omits output while tasks are unjoined, and
+  immediately exits with status `1`.
 - `yar_eprint(const char *data, long long len)` writes string data to stderr
   when the length is positive and flushes stderr.
 - The generated native `main` wrapper accepts `argc` / `argv`, records a
@@ -158,8 +165,8 @@
 - `yar_taskgroup_new(int64_t elem_size)` allocates a taskgroup handle.
 - `yar_taskgroup_spawn(void *group, void *entry, void *ctx)` records one task
   and starts it on a native OS thread immediately.
-- `yar_taskgroup_wait(void *group)` joins all started tasks and returns a
-  runtime-managed result slice whose element order matches spawn order.
+- `yar_taskgroup_wait(void *group, YarSlice *out)` joins all started tasks and
+  writes a runtime-managed result slice whose element order matches spawn order.
 - `yar_chan_new(int64_t elem_size, int32_t capacity)` allocates a bounded FIFO
   channel.
 - `yar_chan_send(void *handle, const void *value_ptr)` blocks while the channel
@@ -184,16 +191,16 @@
 - `yar_str_equal(const char *a_ptr, long long a_len, const char *b_ptr,
 long long b_len)` compares two strings by length then bytes.
 - `yar_str_concat(const char *a_ptr, long long a_len, const char *b_ptr,
-long long b_len)` allocates and returns a new string containing the
+long long b_len, YarStr *out)` allocates and writes a new string containing the
   concatenation of both inputs.
 - `yar_str_index_check(long long index, long long len)` traps on out-of-range
   string indexing.
-- `yar_str_from_byte(int32_t value)` allocates a one-byte string from a byte
-  value and traps if the value is outside `0..255`.
-- `yar_to_str_i32(int32_t value)` formats a signed 32-bit integer as a
-  decimal string.
-- `yar_to_str_i64(int64_t value)` formats a signed 64-bit integer as a
-  decimal string.
+- `yar_str_from_byte(int32_t value, YarStr *out)` writes a one-byte string and
+  traps if the value is outside `0..255`.
+- `yar_to_str_i32(int32_t value, YarStr *out)` writes a signed 32-bit integer
+  as a decimal string.
+- `yar_to_str_i64(int64_t value, YarStr *out)` writes a signed 64-bit integer
+  as a decimal string.
 
 ### Runtime Handle Registry
 
@@ -214,33 +221,34 @@ long long b_len)` allocates and returns a new string containing the
   `runtime failure: invalid string builder`.
 - The string-builder ABI uses `i64` directly: `yar_sb_new()` returns an ID,
   while `yar_sb_write` and `yar_sb_string` accept that ID without pointer/integer
-  conversion in generated IR.
+  conversion in generated IR; `yar_sb_string` writes its `YarStr` through an
+  explicit output pointer.
 - Registry validation is a runtime safety boundary, not nominal typing. Source
   `i64` values still carry no compiler-visible handle kind or provenance.
 
 ### Filesystem Runtime
 
-- `yar_fs_read_file(yar_str path, yar_str *out)` reads a whole file into one
+- `yar_fs_read_file(const yar_str *path, yar_str *out)` reads a whole file into one
   runtime-managed string and returns a stable filesystem status code.
-- `yar_fs_write_file(yar_str path, yar_str data)` writes one whole file and
+- `yar_fs_write_file(const yar_str *path, const yar_str *data)` writes one whole file and
   returns a stable filesystem status code.
-- `yar_fs_read_dir(yar_str path, yar_slice *out)` returns a slice of
+- `yar_fs_read_dir(const yar_str *path, yar_slice *out)` returns a slice of
   `fs.DirEntry`-layout values (`name`, `is_dir`) and a stable filesystem status
   code.
-- `yar_fs_stat(yar_str path, int32_t *kind_out)` classifies a path as file,
+- `yar_fs_stat(const yar_str *path, int32_t *kind_out)` classifies a path as file,
   directory, or other.
-- `yar_fs_mkdir_all(yar_str path)` creates a directory tree.
-- `yar_fs_remove_all(yar_str path)` recursively removes a file or directory
+- `yar_fs_mkdir_all(const yar_str *path)` creates a directory tree.
+- `yar_fs_remove_all(const yar_str *path)` recursively removes a file or directory
   tree.
-- `yar_fs_temp_dir(yar_str prefix, yar_str *out)` creates one temporary
+- `yar_fs_temp_dir(const yar_str *prefix, yar_str *out)` creates one temporary
   directory under `TMPDIR` or `/tmp`.
-- `yar_fs_open_read(yar_str path, int64_t *out)` opens a file for streaming
+- `yar_fs_open_read(const yar_str *path, int64_t *out)` opens a file for streaming
   reads and returns an opaque registry ID.
-- `yar_fs_open_write(yar_str path, int64_t *out)` creates or truncates a file
+- `yar_fs_open_write(const yar_str *path, int64_t *out)` creates or truncates a file
   for streaming writes and returns an opaque registry ID.
 - `yar_fs_read_handle(int64_t handle, int32_t max_bytes, yar_str *out)` reads
   up to `max_bytes` from an open file handle and returns empty string on EOF.
-- `yar_fs_write_handle(int64_t handle, yar_str data, int32_t *out)` writes data
+- `yar_fs_write_handle(int64_t handle, const yar_str *data, int32_t *out)` writes data
   to an open file handle and returns bytes written.
 - `yar_fs_close_handle(int64_t handle)` closes an open file handle.
 - Runtime filesystem status codes map in code generation to stable YAR error
@@ -264,7 +272,7 @@ long long b_len)` allocates and returns a new string containing the
 - `yar_process_run_inherit(const yar_slice *argv, int32_t *exit_code_out)`
   launches one child with inherited stdin/stdout/stderr and returns a stable
   host-process status code.
-- `yar_env_lookup(yar_str name, yar_str *out)` looks up one environment
+- `yar_env_lookup(const yar_str *name, yar_str *out)` looks up one environment
   variable and returns a stable host-process status code.
 - Host-process status codes map in code generation to stable YAR error names:
   `NotFound`, `PermissionDenied`, `InvalidArgument`, and `IO`.
@@ -275,7 +283,7 @@ long long b_len)` allocates and returns a new string containing the
 
 ### Networking Runtime
 
-- `yar_net_listen(yar_str host, int32_t port, int64_t *out)` binds and listens
+- `yar_net_listen(const yar_str *host, int32_t port, int64_t *out)` binds and listens
   on a TCP address. Empty host means all interfaces. Returns an opaque listener
   registry ID via the out-pointer.
 - `yar_net_accept(int64_t listener, int64_t *out)` blocks until a connection
@@ -283,11 +291,11 @@ long long b_len)` allocates and returns a new string containing the
 - `yar_net_listener_addr(int64_t listener, yar_net_addr *out)` returns the
   bound address of a listener socket.
 - `yar_net_close_listener(int64_t listener)` closes a listener socket.
-- `yar_net_connect(yar_str host, int32_t port, int64_t *out)` performs TCP
+- `yar_net_connect(const yar_str *host, int32_t port, int64_t *out)` performs TCP
   connect with DNS resolution and returns a connection registry ID.
 - `yar_net_read(int64_t conn, int32_t max_bytes, yar_str *out)` reads up to
   `max_bytes` from a connection. Returns empty string on EOF.
-- `yar_net_write(int64_t conn, yar_str data, int32_t *out)` writes all data
+- `yar_net_write(int64_t conn, const yar_str *data, int32_t *out)` writes all data
   to a connection. Returns bytes written.
 - `yar_net_close(int64_t conn)` closes a connection socket.
 - `yar_net_local_addr(int64_t conn, yar_net_addr *out)` returns the local
@@ -298,7 +306,7 @@ long long b_len)` allocates and returns a new string containing the
   timeout via `SO_RCVTIMEO`. Zero disables the timeout.
 - `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets a write
   timeout via `SO_SNDTIMEO`. Zero disables the timeout.
-- `yar_net_resolve(yar_str host, int32_t port, yar_net_addr *out)` performs
+- `yar_net_resolve(const yar_str *host, int32_t port, yar_net_addr *out)` performs
   DNS resolution and returns the first resolved address.
 - All networking functions return `i32` status codes that map in code generation
   to stable YAR error names: `ConnectionRefused`, `Timeout`, `AddrInUse`,
@@ -326,8 +334,8 @@ long long b_len)` allocates and returns a new string containing the
 - `yar_map_delete(void *map_ptr, const void *key)` removes the entry for a key
   and rehashes forward entries to preserve linear probing.
 - `yar_map_len(void *map_ptr)` returns the current entry count.
-- `yar_map_keys(void *map_ptr)` returns a snapshot slice containing the current
-  keys.
+- `yar_map_keys(void *map_ptr, YarSlice *out)` writes a snapshot slice
+  containing the current keys.
 - Key kinds are passed from code generation as integer constants: `bool` (`0`),
   `i32` (`1`), `i64` (`2`), `str` (`3`).
 - Maps use FNV-1a hashing with linear probing and power-of-two capacity.

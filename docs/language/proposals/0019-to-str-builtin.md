@@ -103,15 +103,15 @@ syntax. The name is resolved during checking as a known builtin, same as
   argument count, rejects errorable arguments, coerces untyped integers,
   validates base type
 - codegen impact:
-  - `i32`: emits call to `@yar_to_str_i32(i32) -> %yar.str`
-  - `i64`: emits call to `@yar_to_str_i64(i64) -> %yar.str`
+  - `i32`: emits `@yar_to_str_i32(i32, ptr)` into caller-owned `%yar.str` storage
+  - `i64`: emits `@yar_to_str_i64(i64, ptr)` into caller-owned `%yar.str` storage
   - `bool`: emits `select i1` choosing between `"true"` and `"false"` string
     constants
   - `str`: returns the argument unchanged
   - `error`: emits a `switch` on the error code mapping each known error name
     to its `"error.<Name>"` string constant, with `"error.unknown"` as default
 - runtime impact: requires `yar_to_str_i32` and `yar_to_str_i64` runtime ABI
-  functions that allocate and format integer strings
+  functions that allocate and format integer strings through output pointers
 
 ## 8. Interactions
 
