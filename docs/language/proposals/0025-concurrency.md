@@ -31,10 +31,10 @@ sleep, file I/O) halted the entire program. This prevented:
 
 The `net` proposal (0023) anticipated this: "If Yar adds concurrency
 primitives, the blocking socket model naturally extends to per-task blocking.
-The opaque handle approach does not preclude this." The `time` proposal (0024)
-notes `sleep` blocks the calling program and that `date_in` uses non-thread-safe
-`setenv`/`tzset` because "Yar is single-threaded." Concurrency is the primary
-remaining capability gap.
+The opaque handle approach does not preclude this." The revised `time`
+proposal (0024) keeps clock operations free of process-global timezone state
+and defines blocking sleep as consuming only the calling native task thread.
+Concurrency is the primary remaining capability gap.
 
 ### Why not `go` (fire-and-forget goroutines)?
 
@@ -596,20 +596,6 @@ and assembly code in the runtime.
 - Write barriers: not needed. The collector is STW — all mutators are stopped
   during collection. The graph is frozen and consistent.
 
-**Timezone safety (~200 lines C):**
-
-- `yar_tz_load(name)`: opens and parses the TZif binary file from the system
-  timezone database (`/usr/share/zoneinfo/<name>` or `$ZONEINFO/<name>`).
-  Returns an opaque GC-managed handle to an immutable transition table. Cached
-  per timezone name.
-- `yar_tz_convert(handle, unix_nanos)`: binary-searches the transition table
-  to find the UTC offset at the given instant. Pure computation, no global
-  state, fully thread-safe.
-- On Windows: uses `SystemTimeToTzSpecificLocalTimeEx` with explicit
-  `DYNAMIC_TIME_ZONE_INFORMATION` (thread-safe Win32 API).
-- Replaces the current `setenv`/`tzset`/`localtime_r` approach in
-  `time.date_in` and `time.from_date_in`.
-
 **Race detector (~200 lines C):**
 
 - Optional, enabled by `-race` flag on `yar build` / `yar run` / `yar test`.
@@ -807,28 +793,19 @@ of the program, via integration with the netpoller.
 ### Host intrinsics: `time` package (proposed, not yet implemented)
 
 The time package (proposal 0024) has not been implemented yet. The concurrency
-impact should be addressed in its implementation:
+contract is already shaped for the native-thread runtime:
 
-| Function                                    | Thread-safe?    | Change needed                                                                                                                                                                                                                                  |
-| ------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time.now`                                  | Yes             | `clock_gettime(CLOCK_REALTIME)` is thread-safe. No blocking.                                                                                                                                                                                   |
-| `time.monotonic`                            | Yes             | `clock_gettime(CLOCK_MONOTONIC)` is thread-safe. No blocking.                                                                                                                                                                                  |
-| `time.sleep`                                | Must change     | Currently blocks the program. Must park the task and register a timer with the netpoller (timerfd on Linux, `EVFILT_TIMER` on macOS). The task is woken when the timer fires. No thread consumed per sleeping task.                            |
-| `time.date`                                 | Must change     | Proposal 0024 uses `gmtime_r`, which is thread-safe (writes to caller-provided buffer). Safe for concurrent calls. No blocking.                                                                                                                |
-| `time.local_date`                           | Must change     | Proposal 0024 uses `localtime_r`, which acquires glibc's internal `tzset_lock`. Thread-safe for concurrent reads but serialized. Safe without changes, but consider replacing with the TZif parser for consistency.                            |
-| `time.date_in`                              | **Must change** | Proposal 0024 uses `setenv("TZ",...) + tzset() + localtime_r()`. This is fundamentally not thread-safe (see resolved decision in section 12). Must be replaced with the TZif file parser (`yar_tz_load` + `yar_tz_convert`).                   |
-| `time.from_date`                            | Must change     | Proposal 0024 uses `timegm` (or `_mkgmtime` on Windows). Both are thread-safe. No change needed.                                                                                                                                               |
-| `time.from_local_date`                      | Must change     | Proposal 0024 uses `mktime`, which reads the `TZ` environment variable internally. Thread-safe on glibc (acquires `tzset_lock`), but subject to the same global `TZ` coupling. Consider replacing with the TZif parser for the local timezone. |
-| `time.from_date_in`                         | **Must change** | Same as `time.date_in` — uses `setenv`/`tzset`. Must be replaced with TZif parser.                                                                                                                                                             |
-| `time.format_*` / `time.parse_*`            | Yes             | Pure Yar code. Thread-safe (no global state, no blocking I/O). Allocations go through the GC mutex.                                                                                                                                            |
-| `time.seconds` / `time.milliseconds` / etc. | Yes             | Pure arithmetic. No allocation, no side effects.                                                                                                                                                                                               |
+| Function             | Concurrency contract |
+| -------------------- | -------------------- |
+| `time.now`           | Thread-safe wall-clock read with no global mutation. |
+| `time.instant`       | Thread-safe monotonic read from one process origin. |
+| `time.sleep`         | Blocks only the calling native task thread; sibling tasks continue. |
+| UTC/text operations  | Deterministic pure package code with no timezone globals. |
 
-**Recommendation for proposal 0024**: implement `time.date_in` and
-`time.from_date_in` using the TZif file parser from the start, even though
-the time package ships before concurrency. This avoids implementing the
-`setenv`/`tzset` approach and then replacing it. The TZif parser works
-correctly in single-threaded programs too — it is simply a better
-implementation regardless of concurrency.
+Local and named timezone conversion is deferred from proposal 0024. A future
+location design must use immutable explicit data and must not mutate `TZ`.
+Timer-poller integration belongs only to the deferred M:N runtime exploration;
+it is not required by the implemented native-thread task model.
 
 ### Stdlib pure packages: no changes needed
 
@@ -877,20 +854,15 @@ implementation regardless of concurrency.
 5. **`net.close` safety**: deregister fd from netpoller and wake parked tasks
    with `error.Closed` before calling `close()`.
 6. **`net.ensure_init` race**: replace static flag with `pthread_once`.
-7. **`time.date_in` / `time.from_date_in`**: implement using TZif parser
-   instead of `setenv`/`tzset` (resolved in section 12). This change should
-   be made in the time package implementation (proposal 0024), not deferred
-   to the concurrency implementation.
-
 **Documentation-only (no runtime changes, behavior documented):**
 
-8. Map handles shared across tasks are data races — document.
-9. Raw string builder IDs bypass compile-time provenance checks — document.
-10. Socket handles should be owned by one task — document.
-11. Slice mutation across tasks is a data race — document.
-12. `sort.*` on shared slices is a data race — document.
-13. `fs.write_file` to the same path from multiple tasks races — document.
-14. `process.run_inherit` from multiple tasks interleaves child output —
+7. Map handles shared across tasks are data races — document.
+8. Raw string builder IDs bypass compile-time provenance checks — document.
+9. Socket handles should be owned by one task — document.
+10. Slice mutation across tasks is a data race — document.
+11. `sort.*` on shared slices is a data race — document.
+12. `fs.write_file` to the same path from multiple tasks races — document.
+13. `process.run_inherit` from multiple tasks interleaves child output —
     document.
 
 ## 9. Alternatives Considered
@@ -1028,7 +1000,7 @@ served to:
    decisions about the `time` package (0024), future stdlib additions, and
    runtime architecture can account for concurrency requirements.
 2. **Identify the blast radius** — specifically, which existing components
-   (GC, host intrinsics, `time.date_in`, `print`) need modification and how.
+   (GC, host intrinsics, blocking operations, and output) need modification.
 3. **Commit to structured concurrency** as the model, ruling out
    fire-and-forget goroutines and async/await early, so library design and
    user expectations align.
@@ -1036,10 +1008,9 @@ served to:
    remain outside it, while a conservative compile-time share-safety rule
    closes the task-input aliasing boundary.
 
-The design should be finalized before the `time` package ships, because
-`time.date_in`'s current `setenv`/`tzset` approach is incompatible with
-concurrent execution and should be implemented with concurrency in mind from
-the start.
+The time proposal must preserve this concurrency model: clock operations avoid
+global mutation, and blocking sleep consumes only the calling native task
+thread. Local and named timezone work remains separate and deferred.
 
 ## 12. Resolved Design Decisions
 
@@ -1231,52 +1202,13 @@ called after the taskgroup exits. Rejecting this at compile time is simple and
 prevents a class of lifetime bugs. If a closure needs to spawn, it can contain
 its own inner `taskgroup`.
 
-### Timezone thread safety: parse TZif files in Yar runtime
+### Timezone work is deferred from the time proposal
 
-**Decision**: implement a TZif file parser in the runtime that reads the
-system timezone database directly, producing an immutable timezone offset table.
-Do not use `setenv`/`tzset`/`localtime_r` for named timezone conversion.
-
-**Research findings**:
-
-- `setenv` is fundamentally not thread-safe on any platform. POSIX does not
-  require `getenv` to be thread-safe. glibc's `setenv` holds a lock but
-  `getenv` does not, so concurrent `setenv` + `getenv` can crash. Apple libc
-  frees old environment values, making the race even more dangerous. This is
-  not fixable with a mutex in the Yar runtime because third-party C code
-  (including libc itself) calls `getenv` without holding Yar's mutex.
-- `newlocale`/`uselocale` (POSIX per-thread locale) only affect formatting
-  (`strftime_l`), NOT timezone offset calculation. There is no
-  `localtime_l()` in POSIX. This approach does not solve the problem.
-- Go's approach: implements its own TZif parser entirely in Go code. Loads
-  timezone files from the system (`/usr/share/zoneinfo/`) or from an embedded
-  zip (~450 KB). `time.LoadLocation("America/New_York")` returns an immutable
-  `*time.Location` that is fully thread-safe. Go never calls C's `localtime_r`
-  or `tzset`.
-- Rust's chrono (post-0.4.20): parses the OS timezone database natively in
-  Rust, eliminating the soundness issue that led to CVE-2020-26235.
-- NetBSD/FreeBSD provide `localtime_rz()`/`mktime_z()` with explicit timezone
-  parameters, but these are not in POSIX and not portable.
-
-**Design**: the Yar runtime implements `yar_tz_load(name)` which:
-
-1. Opens `/usr/share/zoneinfo/<name>` (or `$ZONEINFO/<name>` if set).
-2. Parses the TZif binary header to extract UTC/local transition times and
-   offsets.
-3. Returns an opaque handle to an immutable offset table (allocated via
-   `yar_alloc`, GC-managed).
-4. `yar_tz_convert(handle, unix_nanos)` binary-searches the transition table
-   to find the offset at the given instant. Pure computation, no global state.
-5. On Windows: use `SystemTimeToTzSpecificLocalTimeEx` with explicit
-   `DYNAMIC_TIME_ZONE_INFORMATION` (thread-safe, takes timezone as parameter).
-6. Timezone handles are cached — loading "America/New_York" twice returns the
-   same handle.
-
-This adds ~200 lines of C for TZif parsing (the format is simple: magic
-number, header with counts, arrays of transition times and offset indices).
-No embedded timezone database in v1 — rely on the system's
-`/usr/share/zoneinfo`. Programs on systems without tzdata get `error.NotFound`,
-which is explicit and handleable. Embedding can follow as a future enhancement.
+**Decision**: proposal 0024 contains UTC operations only. Local and named
+timezone conversion requires a separate proposal defining immutable location
+values, timezone-data ownership and versioning, Windows/IANA mapping, and DST
+gap/fold behavior. No future design may implement conversion by mutating
+process-global `TZ` state.
 
 ### Child process waiting: I/O thread pool
 
@@ -1314,7 +1246,6 @@ existing `#ifdef _WIN32` in the runtime).
 | Process waiting   | pidfd + epoll (5.3+), fallback signalfd | EVFILT_PROC                                        | WaitForSingleObject on I/O thread |
 | Thread creation   | pthreads                                | pthreads                                           | CreateThread                      |
 | Mutex/condvar     | pthreads                                | pthreads                                           | SRW locks + condition variables   |
-| TZ file path      | /usr/share/zoneinfo                     | /usr/share/zoneinfo (or /var/db/timezone/zoneinfo) | SystemTimeToTzSpecificLocalTimeEx |
 
 Assembly files: `yar_context_amd64.S` and `yar_context_arm64.S`, included
 conditionally based on `YAR_ARCH`. The `setjmp`/`longjmp` fallback covers
@@ -1440,8 +1371,6 @@ baseline:
 - [ ] `crates/yar-runtime/src/` — macOS/BSD network poller
 - [ ] `crates/yar-runtime/src/` — Windows network poller
 - [ ] `crates/yar-runtime/src/` — blocking I/O thread pool
-- [ ] `crates/yar-runtime/src/` — TZif parser, thread-safe timezone
-      conversion (replaces setenv/tzset in time.date_in)
 - [ ] `crates/yar-runtime/src/memory.rs` — GC multi-stack scanning,
       stop-the-world barrier, task stack registration
 - [ ] `crates/yar-runtime/src/net.rs` — modify yar*net*\* for non-blocking
