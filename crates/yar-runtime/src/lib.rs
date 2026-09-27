@@ -346,6 +346,17 @@ pub extern "C" fn yar_sb_string(handle: i64, out: *mut YarStr) {
     write_abi_out(out, string_builder::string(handle));
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_sb_finish(handle: i64, out: *mut YarStr) {
+    require_abi_out(out);
+    write_abi_out(out, string_builder::finish(handle));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_sb_discard(handle: i64) {
+    string_builder::discard(handle);
+}
+
 fn require_abi_out<T>(out: *mut T) {
     if out.is_null() {
         runtime_fail(b"runtime failure: invalid ABI output pointer\n");
@@ -517,6 +528,11 @@ pub extern "C" fn yar_net_close(conn: i64) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn yar_net_shutdown_write(conn: i64) -> i32 {
+    net::shutdown_write(conn)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn yar_net_local_addr(conn: i64, out: *mut YarNetAddr) -> i32 {
     require_abi_out(out);
     net::local_addr(conn, out)
@@ -536,6 +552,16 @@ pub extern "C" fn yar_net_set_read_deadline(conn: i64, millis: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_set_write_deadline(conn: i64, millis: i32) -> i32 {
     net::set_write_deadline(conn, millis)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_net_set_read_deadline_after(conn: i64, millis: i32) -> i32 {
+    net::set_read_deadline_after(conn, millis)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_net_set_write_deadline_after(conn: i64, millis: i32) -> i32 {
+    net::set_write_deadline_after(conn, millis)
 }
 
 #[unsafe(no_mangle)]
@@ -658,7 +684,7 @@ mod tests {
         let output_lock = Arc::new(Mutex::new(()));
         let barrier = Arc::new(Barrier::new(3));
         let mut tasks = Vec::new();
-        for byte in [b'a', b'b'] {
+        for byte in *b"ab" {
             let writer = ChunkedWriter {
                 output: Arc::clone(&output),
             };
@@ -911,6 +937,22 @@ mod tests {
             str_from_runtime(abi_out(|out| yar_sb_string(handle, out))),
             ""
         );
+    }
+
+    #[test]
+    fn string_builder_finish_and_discard_release_their_handles() {
+        let finished = yar_sb_new();
+        yar_sb_write(finished, b"done".as_ptr(), 4);
+        assert_eq!(
+            str_from_runtime(abi_out(|out| yar_sb_finish(finished, out))),
+            "done"
+        );
+        assert!(handle_registry::string_builder(finished).is_none());
+
+        let discarded = yar_sb_new();
+        yar_sb_write(discarded, b"unused".as_ptr(), 6);
+        yar_sb_discard(discarded);
+        assert!(handle_registry::string_builder(discarded).is_none());
     }
 
     #[test]
@@ -1270,6 +1312,8 @@ mod tests {
         assert_eq!(yar_net_write(client, empty_data, &mut written), 0);
         assert_eq!(written, 0);
         assert_eq!(yar_net_set_read_deadline(client, -1), 7);
+        assert_eq!(yar_net_set_read_deadline_after(client, -1), 7);
+        assert_eq!(yar_net_set_write_deadline_after(client, -1), 7);
         assert_eq!(
             yar_net_write(client, string::from_owned("hello".to_owned()), &mut written),
             0
@@ -1282,6 +1326,22 @@ mod tests {
         };
         assert_eq!(yar_net_read(server, 4096, &mut received), 0);
         assert_eq!(str_from_runtime(received), "hello");
+
+        let binary = [b'a', 0, b'b'];
+        assert_eq!(
+            yar_net_write(
+                client,
+                YarStr {
+                    ptr: binary.as_ptr().cast_mut(),
+                    len: binary.len() as i64,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(written, 3);
+        assert_eq!(yar_net_read(server, 4096, &mut received), 0);
+        assert_eq!(str_from_runtime(received).as_bytes(), binary);
 
         assert_eq!(
             yar_net_write(server, string::from_owned("world".to_owned()), &mut written),
@@ -1306,8 +1366,12 @@ mod tests {
 
         assert_eq!(yar_net_set_read_deadline(client, 50), 0);
         assert_eq!(yar_net_set_write_deadline(client, 50), 0);
+        assert_eq!(yar_net_set_read_deadline_after(client, 50), 0);
+        assert_eq!(yar_net_set_write_deadline_after(client, 50), 0);
         assert_eq!(yar_net_set_read_deadline(client, 0), 0);
         assert_eq!(yar_net_set_write_deadline(client, 0), 0);
+        assert_eq!(yar_net_set_read_deadline_after(client, 0), 0);
+        assert_eq!(yar_net_set_write_deadline_after(client, 0), 0);
 
         let mut resolved = YarNetAddr {
             host: YarStr {
@@ -1525,6 +1589,132 @@ mod tests {
         };
         assert_eq!(yar_net_read(server, 4, &mut out), 2);
         assert_eq!(write_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 0);
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_fixed_read_deadline_spans_multiple_reads() {
+        let (listener, client, server) = loopback_connection_handles();
+        assert_eq!(yar_net_set_read_deadline_after(server, 200), 0);
+
+        let mut written = 0;
+        assert_eq!(
+            yar_net_write(
+                client,
+                YarStr {
+                    ptr: b"a".as_ptr().cast_mut(),
+                    len: 1,
+                },
+                &mut written,
+            ),
+            0
+        );
+        let mut out = YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(server, 1, &mut out), 0);
+        assert_eq!(str_from_runtime(out), "a");
+
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(
+            yar_net_write(
+                client,
+                YarStr {
+                    ptr: b"b".as_ptr().cast_mut(),
+                    len: 1,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(yar_net_read(server, 1, &mut out), 2);
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_fixed_write_deadline_spans_multiple_writes() {
+        let (listener, client, server) = loopback_connection_handles();
+        assert_eq!(yar_net_set_write_deadline_after(server, 200), 0);
+
+        let mut written = 0;
+        assert_eq!(
+            yar_net_write(
+                server,
+                YarStr {
+                    ptr: b"a".as_ptr().cast_mut(),
+                    len: 1,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(written, 1);
+
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(
+            yar_net_write(
+                server,
+                YarStr {
+                    ptr: b"b".as_ptr().cast_mut(),
+                    len: 1,
+                },
+                &mut written,
+            ),
+            2
+        );
+        assert_eq!(written, 0);
+
+        assert_eq!(yar_net_close(client), 0);
+        assert_eq!(yar_net_close(server), 0);
+        assert_eq!(yar_net_close_listener(listener), 0);
+    }
+
+    #[test]
+    fn networking_write_shutdown_preserves_the_read_half() {
+        let (listener, client, server) = loopback_connection_handles();
+        let mut written = 0;
+        assert_eq!(
+            yar_net_write(
+                server,
+                YarStr {
+                    ptr: b"done".as_ptr().cast_mut(),
+                    len: 4,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(yar_net_shutdown_write(server), 0);
+
+        let mut out = YarStr {
+            ptr: ptr::null_mut(),
+            len: 0,
+        };
+        assert_eq!(yar_net_read(client, 4, &mut out), 0);
+        assert_eq!(str_from_runtime(out), "done");
+        assert_eq!(yar_net_read(client, 1, &mut out), 0);
+        assert_eq!(out.len, 0);
+
+        assert_eq!(
+            yar_net_write(
+                client,
+                YarStr {
+                    ptr: b"ack".as_ptr().cast_mut(),
+                    len: 3,
+                },
+                &mut written,
+            ),
+            0
+        );
+        assert_eq!(yar_net_read(server, 3, &mut out), 0);
+        assert_eq!(str_from_runtime(out), "ack");
 
         assert_eq!(yar_net_close(client), 0);
         assert_eq!(yar_net_close(server), 0);

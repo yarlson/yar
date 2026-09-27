@@ -283,6 +283,7 @@ Methods on `Listener`:
 - `accept() !Conn`
 - `addr() !Addr`
 - `close() !void`
+- `shutdown_write() !void` — finish output while preserving reads
 
 Methods on `Conn`:
 
@@ -294,6 +295,8 @@ Methods on `Conn`:
 - `remote_addr() !Addr`
 - `set_read_deadline(millis i32) !void`
 - `set_write_deadline(millis i32) !void`
+- `set_read_deadline_after(millis i32) !void`
+- `set_write_deadline_after(millis i32) !void`
 
 Errors:
 
@@ -315,8 +318,55 @@ and resource release. Raw `i64` network intrinsics are internal.
 
 Read and write deadlines are relative per-operation socket timeouts. Zero
 disables a timeout; changing it is not promised to interrupt a syscall already
-in progress. Synchronous DNS and connect cannot be interrupted before a handle
-exists. Resolver failure is `net.NotFound`.
+in progress. The `*_deadline_after` variants instead anchor one fixed deadline
+at the setter call, shared by all later operations in that direction; zero
+disables it. When both are set, the earlier per-operation or fixed deadline
+wins. Synchronous DNS and connect cannot be interrupted before a handle exists.
+Resolver failure is `net.NotFound`.
+
+### `http`
+
+Pure-Yar bounded HTTP/1.1 server handling over `net`.
+
+Public types:
+
+- `Header { pub name str, pub value str }`
+- `Request { pub method str, pub target str, pub headers []Header, pub body str }`
+- `Limits` — validated private framing and deadline limits
+- `Response` — validated private status, headers, and body
+- `Server` — private typed listener plus limits
+- `Connection` — private typed connection plus limits
+
+Functions:
+
+- `default_limits() Limits`
+- `limits(max_head_bytes, max_body_bytes, read_timeout_millis, write_timeout_millis) !Limits`
+- `listen(addr net.Addr, limits Limits) !Server`
+- `response(status i32, body str) !Response`
+- `text(status i32, body str) !Response`
+
+Methods:
+
+- `Request.header(name) !str` and `header_values(name) ![]str`
+- `Response.with_header(name, value) !Response` replaces a field
+- `Response.add_header(name, value) !Response` preserves repeated fields
+- `Server.accept() !Connection`, `addr() !net.Addr`, and `close() !void`
+- `Connection.serve(handler fn(Request) !Response) !void`, address accessors,
+  and `close() !void`
+
+Each served connection processes one request and closes. Parsing is incremental
+across TCP reads, requires strict CRLF and HTTP/1.1 grammar, supports bounded
+`Content-Length` and `chunked` bodies, rejects ambiguous framing, and validates
+targets, authorities, chunk extensions, and trailers. Absolute-form authority
+replaces the received Host field before handler dispatch. Fixed read/write
+deadlines bound the exchange. Protocol errors receive bodyless bounded responses
+and remain visible to the caller as package-owned errors.
+Response framing belongs to the package; application headers cannot override
+`Content-Length`, transfer coding, connection, trailer, or upgrade fields.
+
+The caller owns the accept loop, concurrency, cancellation, logging, and error
+policy. HTTP clients, routing, TLS, keep-alive, upgrades, compression, and
+streaming body APIs are not part of the package.
 
 ### `testing`
 

@@ -329,7 +329,7 @@ thread. A program with no taskgroups retains the single-threaded behavior.
   join; unreachable channel tokens finalize their external state.
 - **Pointers, slices, and maps**: these values cannot be passed or captured
   across a spawn boundary, including when nested inside aggregates.
-- **String builders**: `sb_new`/`sb_write`/`sb_string` resolve through the
+- **String builders**: `sb_new`/`sb_write`/`sb_string`/`sb_finish`/`sb_discard` resolve through the
   runtime handle registry and serialize mutable state per builder. Raw builder
   IDs remain indistinguishable from ordinary `i64` values to the checker.
 - **Output**: `print` and `stdio.eprint` serialize each complete call under
@@ -444,7 +444,8 @@ No ambiguity with existing syntax:
 - `chan[T]` as a type uses `chan` keyword followed by `[`, which is not a valid
   start for any existing type expression.
 - `chan_new`, `chan_send`, `chan_recv`, `chan_close` are builtins following the
-  existing naming pattern (`sb_new`, `sb_write`, `sb_string`).
+  existing naming pattern (`sb_new`, `sb_write`, `sb_string`, `sb_finish`,
+  `sb_discard`).
 
 ## 7. Lowering / Implementation Model
 
@@ -462,7 +463,7 @@ No ambiguity with existing syntax:
 - `SpawnStmt` node with field: `Call Expr`.
 - `ChanType` node with field: `ElemType Type`.
 - `chan_new`, `chan_send`, `chan_recv`, `chan_close` are registered as builtins
-  alongside `sb_new`, `sb_write`, `sb_string`.
+  alongside `sb_new`, `sb_write`, `sb_string`, `sb_finish`, and `sb_discard`.
 
 ### Checker impact
 
@@ -665,7 +666,7 @@ rejected in the taskgroup body so every accepted path reaches the join.
 
 Four new builtins: `chan_new`, `chan_send`, `chan_recv`, `chan_close`. These
 follow the naming and handle pattern established by `sb_new`, `sb_write`,
-`sb_string`.
+`sb_string`, `sb_finish`, and `sb_discard`.
 
 ### Future: select
 
@@ -737,6 +738,8 @@ mutex-protected copy or platform-specific thread-safe alternatives.
 | `sb_new`    | Returns a new handle. Safe — each call creates an independent builder.                          | The registry allocates one typed process-local ID.                                                                 |
 | `sb_write`  | Modifies builder state behind the validated handle registry.                                    | Per-builder synchronization serializes writes.                                                                     |
 | `sb_string` | Reads and resets builder state behind the validated handle registry.                           | Per-builder synchronization serializes extraction and reset.                                                       |
+| `sb_finish` | Extracts the value and consumes the builder handle.                                             | Registry removal makes later lookup fail and releases retained capacity.                                           |
+| `sb_discard`| Consumes the builder handle without extracting a value.                                        | Registry removal releases partial state on abandoned paths.                                                        |
 | `has`       | Reads map structure without locking.                                                            | No runtime change. Document: maps must not be shared across tasks, or access must be serialized through a channel. |
 | `delete`    | Modifies map, may trigger rehash.                                                               | Same as `has`.                                                                                                     |
 
@@ -840,7 +843,7 @@ it is not required by the implemented native-thread task model.
 | `trim_left`, `trim_right`, `trim`                        | Yes          | Returns substring via slicing, no allocation.                                                                                                                  |
 | `parse_i64`                                              | Yes          | Pure parsing, no allocation.                                                                                                                                   |
 | `repeat`, `replace`, `join`                              | Yes          | Allocate via string concatenation (GC mutex). Each call creates independent results.                                                                           |
-| `to_lower`, `to_upper`                                   | Yes          | Each call creates a new string builder via `sb_new`, uses it privately, and extracts the result. The builder handle is local to the call — never shared. Safe. |
+| `to_lower`, `to_upper`                                   | Yes          | Each call creates a private string builder and consumes it with `sb_finish`. The handle is never shared. Safe. |
 | `split`                                                  | Yes          | Allocates result slice via GC. Each call is independent.                                                                                                       |
 
 ### Stdlib `sort` package

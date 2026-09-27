@@ -174,11 +174,40 @@ operand width. Invalid division and remainder terminate deterministically.
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
 | `net`     | TCP networking and stream wrappers                    |
+| `http`    | Bounded HTTP/1.1 server connections                    |
 | `testing` | Test assertions and framework                         |
 
-HTTP serving is not part of the standard library. The earlier
-`std/http` experiment was withdrawn until bounded framing, deadlines, and
-resource lifecycle rules are specified and tested.
+`std/http` keeps server control flow explicit: applications create a bounded
+server, accept a connection, and serve one request with ordinary Yar errors.
+Framing is incremental and strict, bodies and chunk metadata are bounded,
+fixed deadlines stop slow clients, and response headers cannot inject or
+override connection framing.
+
+See [`examples/http_server`](examples/http_server/) for a minimal sequential
+service. Applications choose and bound their own concurrency policy.
+
+```yar
+package main
+
+import "std/http"
+import "std/net"
+
+fn main() !i32 {
+    server := http.listen(
+        net.Addr{host: "127.0.0.1", port: 8080},
+        http.default_limits(),
+    )?
+    for true {
+        connection := server.accept()?
+        connection.serve(fn(req http.Request) !http.Response {
+            return http.text(200, "hello from Yar\n")
+        }) or |err| {
+            print("http connection failed: " + to_str(err) + "\n")
+        }
+    }
+    return 0
+}
+```
 
 Source programs launch bounded child processes explicitly. `process.run`
 takes validated timeout and stdout/stderr byte limits plus a share-safe

@@ -309,6 +309,8 @@
 - `sb_new() i64` — create a string builder (opaque handle)
 - `sb_write(i64, str) void` — append to builder
 - `sb_string(i64) str` — extract built string, reset builder
+- `sb_finish(i64) str` — extract built string and release the builder
+- `sb_discard(i64) void` — release the builder without extracting
 - `chan_new[T](i32) chan[T]` — create a bounded channel with explicit element
   type
 - `chan_send(chan[T], T) !void` — send one value, `error.Closed` on a closed
@@ -326,7 +328,7 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, and
+  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
   `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
@@ -354,8 +356,13 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 - `stdio.eprint(str)` writes to stderr and returns `void`.
 - `net` provides TCP networking primitives for listening, accepting,
   connecting, reading, writing, closing, inspecting addresses, setting
-  timeouts, and DNS resolution. It also provides `Conn` and `Listener` wrapper
-  structs with methods that satisfy the `io` stream interfaces.
+  per-operation timeouts and fixed deadlines, and DNS resolution. It also
+  provides `Conn` and `Listener` wrapper structs with methods that satisfy the
+  `io` stream interfaces.
+- `http` provides bounded HTTP/1.1 server connections over `net`. The package
+  incrementally parses strict request framing, applies fixed exchange
+  deadlines, validates response headers, and leaves accept loops and
+  concurrency explicit in user code.
 - Host process/environment failures surface through ordinary `error` values
   using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and
   `IO`.

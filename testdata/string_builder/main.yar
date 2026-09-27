@@ -30,5 +30,15 @@ fn main() i32 {
         return 3
     }
 
+    finished := sb_new()
+    sb_write(finished, "released")
+    if sb_finish(finished) != "released" {
+        return 4
+    }
+
+    discarded := sb_new()
+    sb_write(discarded, "unused")
+    sb_discard(discarded)
+
     return 0
 }

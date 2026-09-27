@@ -175,6 +175,13 @@
   implicit durability sync. Unknown, stale, and wrong-kind IDs produce
   `error.Closed`; invalid string-builder IDs terminate with the string-builder
   runtime failure.
+- Network per-operation timeouts reset for each call. Fixed deadline-after
+  setters instead anchor one deadline at the setter call and bound a sequence
+  of reads or writes; HTTP uses those fixed deadlines for one exchange.
+- `std/http` keeps protocol policy in Yar. Its `Server` exposes explicit
+  `accept`, each `Connection` serves exactly one HTTP/1.1 request and closes,
+  and the caller owns loops, concurrency, cancellation, logging, and error
+  policy.
 - Files ending in `_test.yar` are excluded from `check`, `build`, `emit-ir`,
   and `run` commands. `yar test` includes them only for its exact entry package;
   imported packages and dependencies remain production-only.

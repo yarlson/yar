@@ -173,7 +173,7 @@ impl Generator<'_> {
             )
             .unwrap();
         }
-        if self.info.functions.values().any(|sig| sig.errorable) {
+        if !self.result_types(program).is_empty() {
             out.push('\n');
         }
         out.push_str("declare void @yar_print(ptr, i64)\n");
@@ -203,6 +203,8 @@ impl Generator<'_> {
         out.push_str("declare i64 @yar_sb_new()\n");
         out.push_str("declare void @yar_sb_write(i64, ptr, i64)\n");
         out.push_str("declare void @yar_sb_string(i64, ptr)\n");
+        out.push_str("declare void @yar_sb_finish(i64, ptr)\n");
+        out.push_str("declare void @yar_sb_discard(i64)\n");
         out.push_str("declare i32 @yar_fs_read_file(ptr, ptr)\n");
         out.push_str("declare i32 @yar_fs_write_file(ptr, ptr)\n");
         out.push_str("declare i32 @yar_fs_read_dir(ptr, ptr)\n");
@@ -223,10 +225,13 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_net_read(i64, i32, ptr)\n");
         out.push_str("declare i32 @yar_net_write(i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_net_close(i64)\n");
+        out.push_str("declare i32 @yar_net_shutdown_write(i64)\n");
         out.push_str("declare i32 @yar_net_local_addr(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_remote_addr(i64, ptr)\n");
         out.push_str("declare i32 @yar_net_set_read_deadline(i64, i32)\n");
         out.push_str("declare i32 @yar_net_set_write_deadline(i64, i32)\n");
+        out.push_str("declare i32 @yar_net_set_read_deadline_after(i64, i32)\n");
+        out.push_str("declare i32 @yar_net_set_write_deadline_after(i64, i32)\n");
         out.push_str("declare i32 @yar_net_resolve(ptr, i32, ptr)\n");
         out.push_str("declare void @yar_process_args(ptr)\n");
         out.push_str("declare i32 @yar_process_run(ptr, i64, i64, i64, ptr, ptr)\n");
@@ -302,6 +307,14 @@ impl Generator<'_> {
             .filter(|sig| sig.errorable)
             .map(|sig| sig.return_type.clone())
             .collect::<Vec<_>>();
+        result_types.extend(
+            self.info
+                .methods
+                .values()
+                .flat_map(|methods| methods.values())
+                .filter(|sig| sig.errorable)
+                .map(|sig| sig.return_type.clone()),
+        );
         result_types.extend(
             self.info
                 .function_literals
@@ -3000,6 +3013,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             "sb_new" => self.emit_sb_new(call),
             "sb_write" => self.emit_sb_write(call),
             "sb_string" => self.emit_sb_string(call),
+            "sb_finish" => self.emit_sb_finish(call),
+            "sb_discard" => self.emit_sb_discard(call),
             "len" => self.emit_len(call),
             "append" => self.emit_append(call),
             "has" => self.emit_map_has(call),
@@ -3440,6 +3455,43 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         Ok(Value {
             type_: "str".to_string(),
             repr: format!("%{result}"),
+        })
+    }
+
+    fn emit_sb_finish(&mut self, call: &CallExpr) -> Result<Value, CodegenError> {
+        let [handle] = call.args.as_slice() else {
+            return Err(CodegenError::unsupported("sb_finish arity"));
+        };
+        let handle = self.emit_expression_as(handle, "i64")?;
+        let result_slot = self.temp("sb.finish.result.slot");
+        self.body
+            .push_str(&format!("  %{result_slot} = alloca %yar.str\n"));
+        self.body.push_str(&format!(
+            "  call void @yar_sb_finish(i64 {}, ptr %{result_slot})\n",
+            handle.repr
+        ));
+        let result = self.temp("sb.finish.result");
+        self.body.push_str(&format!(
+            "  %{result} = load %yar.str, ptr %{result_slot}\n"
+        ));
+        Ok(Value {
+            type_: "str".to_string(),
+            repr: format!("%{result}"),
+        })
+    }
+
+    fn emit_sb_discard(&mut self, call: &CallExpr) -> Result<Value, CodegenError> {
+        let [handle] = call.args.as_slice() else {
+            return Err(CodegenError::unsupported("sb_discard arity"));
+        };
+        let handle = self.emit_expression_as(handle, "i64")?;
+        self.body.push_str(&format!(
+            "  call void @yar_sb_discard(i64 {})\n",
+            handle.repr
+        ));
+        Ok(Value {
+            type_: "void".to_string(),
+            repr: String::new(),
         })
     }
 
@@ -4398,6 +4450,12 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 "yar_net_close",
                 format!("i64 {}", args[0].repr),
             ),
+            "net.shutdown_write" => self.emit_host_status_call(
+                signature,
+                "net.shutdown_write",
+                "yar_net_shutdown_write",
+                format!("i64 {}", args[0].repr),
+            ),
             "net.local_addr" => {
                 let out_type = self.llvm_type(&signature.return_type)?.to_string();
                 self.emit_host_out_call(
@@ -4428,6 +4486,18 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 signature,
                 "net.set_write_deadline",
                 "yar_net_set_write_deadline",
+                format!("i64 {}, i32 {}", args[0].repr, args[1].repr),
+            ),
+            "net.set_read_deadline_after" => self.emit_host_status_call(
+                signature,
+                "net.set_read_deadline_after",
+                "yar_net_set_read_deadline_after",
+                format!("i64 {}, i32 {}", args[0].repr, args[1].repr),
+            ),
+            "net.set_write_deadline_after" => self.emit_host_status_call(
+                signature,
+                "net.set_write_deadline_after",
+                "yar_net_set_write_deadline_after",
                 format!("i64 {}, i32 {}", args[0].repr, args[1].repr),
             ),
             "net.resolve" => {
@@ -6194,10 +6264,13 @@ fn is_net_host_intrinsic(name: &str) -> bool {
             | "net.read"
             | "net.write"
             | "net.close"
+            | "net.shutdown_write"
             | "net.local_addr"
             | "net.remote_addr"
             | "net.set_read_deadline"
             | "net.set_write_deadline"
+            | "net.set_read_deadline_after"
+            | "net.set_write_deadline_after"
             | "net.resolve"
     )
 }
@@ -6364,6 +6437,7 @@ mod tests {
         "testdata/slices/main.yar",
         "testdata/stdlib_conv/main.yar",
         "testdata/stdlib_fs_path/main.yar",
+        "testdata/stdlib_http/main.yar",
         "testdata/stdlib_io/main.yar",
         "testdata/stdlib_net/main.yar",
         "testdata/stdlib_process_env/main.yar",
@@ -6425,6 +6499,7 @@ mod tests {
                     | "testdata/slices/main.yar"
                     | "testdata/stdlib_conv/main.yar"
                     | "testdata/stdlib_fs_path/main.yar"
+                    | "testdata/stdlib_http/main.yar"
                     | "testdata/stdlib_io/main.yar"
                     | "testdata/stdlib_net/main.yar"
                     | "testdata/stdlib_process_env/main.yar"
@@ -6510,9 +6585,13 @@ fn main() !i32 {
             "declare i64 @yar_sb_new()",
             "declare void @yar_sb_write(i64, ptr, i64)",
             "declare void @yar_sb_string(i64, ptr)",
+            "declare void @yar_sb_finish(i64, ptr)",
+            "declare void @yar_sb_discard(i64)",
             "call i64 @yar_sb_new()",
             "call void @yar_sb_write(i64 %",
             "call void @yar_sb_string(i64 %",
+            "call void @yar_sb_finish(i64 %",
+            "call void @yar_sb_discard(i64 %",
         ] {
             assert!(ir.contains(expected), "missing {expected:?} in IR:\n{ir}");
         }
@@ -6559,6 +6638,7 @@ fn main() !i32 {
             "declare i32 @yar_net_read(i64, i32, ptr)",
             "declare i32 @yar_net_write(i64, ptr, ptr)",
             "declare i32 @yar_net_close(i64)",
+            "declare i32 @yar_net_shutdown_write(i64)",
             "declare i32 @yar_net_local_addr(i64, ptr)",
             "declare i32 @yar_net_remote_addr(i64, ptr)",
             "declare i32 @yar_net_resolve(ptr, i32, ptr)",
@@ -6570,6 +6650,7 @@ fn main() !i32 {
             "call i32 @yar_net_read(i64 ",
             "call i32 @yar_net_write(i64 ",
             "call i32 @yar_net_close(i64 ",
+            "call i32 @yar_net_shutdown_write(i64 ",
             "call i32 @yar_net_local_addr(i64 ",
             "call i32 @yar_net_remote_addr(i64 ",
             "call i32 @yar_net_resolve(ptr %",
@@ -6656,6 +6737,56 @@ fn main() i32 {
 
         assert!(ir.contains("call ptr @yar_taskgroup_new(i64 8)"), "{ir}");
         assert!(!ir.contains("taskgroup.elem_size"), "{ir}");
+    }
+
+    #[test]
+    fn declares_error_result_types_returned_only_by_methods() {
+        let ir = emit_source(
+            r#"
+package main
+
+struct First {
+    value i32
+}
+
+struct Second {
+    value i64
+}
+
+struct Left {}
+struct Right {}
+
+fn (left Left) next() !First {
+    return First{value: 1}
+}
+
+fn (right Right) next() !Second {
+    return Second{value: 2}
+}
+
+fn main() i32 {
+    first := Left{}.next() or |err| {
+        return 1
+    }
+    second := Right{}.next() or |err| {
+        return 1
+    }
+    if first.value != 1 || second.value != 2 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        assert!(
+            ir.contains("%yar.result.First = type { i1, i32, %yar.struct.First }"),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("%yar.result.Second = type { i1, i32, %yar.struct.Second }"),
+            "{ir}"
+        );
     }
 
     #[test]

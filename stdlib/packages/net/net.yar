@@ -54,6 +54,10 @@ fn close(conn i64) !void {
     panic("net.close intrinsic")
 }
 
+fn shutdown_write(conn i64) !void {
+    panic("net.shutdown_write intrinsic")
+}
+
 fn local_addr(conn i64) !Addr {
     panic("net.local_addr intrinsic")
 }
@@ -68,6 +72,14 @@ fn set_read_deadline(conn i64, millis i32) !void {
 
 fn set_write_deadline(conn i64, millis i32) !void {
     panic("net.set_write_deadline intrinsic")
+}
+
+fn set_read_deadline_after(conn i64, millis i32) !void {
+    panic("net.set_read_deadline_after intrinsic")
+}
+
+fn set_write_deadline_after(conn i64, millis i32) !void {
+    panic("net.set_write_deadline_after intrinsic")
 }
 
 pub fn resolve(host str, port i32) !Addr {
@@ -111,6 +123,11 @@ pub fn (c Conn) close() !void {
     return
 }
 
+pub fn (c Conn) shutdown_write() !void {
+    shutdown_write(c.handle)?
+    return
+}
+
 pub fn (c Conn) local_addr() !Addr {
     return local_addr(c.handle)
 }
@@ -126,5 +143,15 @@ pub fn (c Conn) set_read_deadline(millis i32) !void {
 
 pub fn (c Conn) set_write_deadline(millis i32) !void {
     set_write_deadline(c.handle, millis)?
+    return
+}
+
+pub fn (c Conn) set_read_deadline_after(millis i32) !void {
+    set_read_deadline_after(c.handle, millis)?
+    return
+}
+
+pub fn (c Conn) set_write_deadline_after(millis i32) !void {
+    set_write_deadline_after(c.handle, millis)?
     return
 }

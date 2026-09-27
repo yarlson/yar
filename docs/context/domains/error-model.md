@@ -97,6 +97,11 @@
   `ConnectionRefused`, `ConnectionReset`, `IO`, `InvalidArgument`, `NotFound`,
   `PermissionDenied`, and `Timeout`. Closed resources use compiler-owned
   `error.Closed`.
+- HTTP protocol and construction failures belong to `http`: `BadRequest`,
+  `BodyTooLarge`, `ExpectationFailed`, `HeaderNotFound`, `HeaderTooLarge`,
+  `HTTPVersionNotSupported`, `InvalidArgument`, `InvalidResponse`, `URITooLong`,
+  `UnsupportedMethod`, and `UnsupportedTransferEncoding`. Transport and handler
+  failures keep their original package-owned identities.
 - Host mapping uses canonical declarations rather than raw error-name strings.
 
 ## Generated Representation

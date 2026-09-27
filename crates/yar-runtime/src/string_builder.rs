@@ -20,7 +20,10 @@ pub(crate) fn write(handle: i64, data: *const u8, data_len: i64) {
     let Ok(incoming_len) = usize::try_from(data_len) else {
         super::runtime_fail(b"runtime failure: invalid string length\n");
     };
-    let mut builder = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(builder) = state.as_mut() else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
     if builder.len().checked_add(incoming_len).is_none() {
         super::runtime_fail(b"runtime failure: invalid string length\n");
     }
@@ -37,7 +40,37 @@ pub(crate) fn string(handle: i64) -> YarStr {
     let Some(handle) = handle_registry::string_builder(handle) else {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
     };
-    let mut builder = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(builder) = state.as_mut() else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
+    let value = copy_to_runtime_string(builder);
+    builder.clear();
+    value
+}
+
+pub(crate) fn finish(handle: i64) -> YarStr {
+    let Some(handle) = handle_registry::remove_string_builder(handle) else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(builder) = state.take() else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
+    copy_to_runtime_string(&builder)
+}
+
+pub(crate) fn discard(handle: i64) {
+    let Some(handle) = handle_registry::remove_string_builder(handle) else {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    };
+    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+    if state.take().is_none() {
+        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    }
+}
+
+fn copy_to_runtime_string(builder: &[u8]) -> YarStr {
     if builder.is_empty() {
         return YarStr {
             ptr: ptr::null_mut(),
@@ -52,6 +85,5 @@ pub(crate) fn string(handle: i64) -> YarStr {
     unsafe {
         ptr::copy_nonoverlapping(builder.as_ptr(), buf, builder.len());
     }
-    builder.clear();
     YarStr { ptr: buf, len }
 }

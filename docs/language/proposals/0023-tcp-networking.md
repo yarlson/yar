@@ -123,9 +123,15 @@ remain kind-checked at the runtime boundary.
 - `Conn.write(data)` performs one host write and returns its exact byte count;
   the result may be shorter than `len(data)`.
 - `Conn.close()` closes a connection socket.
+- `Conn.shutdown_write()` sends EOF after earlier writes while leaving the read
+  half available.
 - `Conn.local_addr()` / `remote_addr()` return connection endpoint addresses.
 - `Conn.set_read_deadline(millis)` / `set_write_deadline(millis)` set
   socket timeouts. 0 means no timeout.
+- `Conn.set_read_deadline_after(millis)` / `set_write_deadline_after(millis)`
+  anchor one fixed deadline at the setter call across later operations in that
+  direction. Zero disables it; the earlier fixed or per-operation deadline
+  wins.
 - `resolve(host, port)` returns the first IPv4 or IPv6 result; resolver failure
   is `net.NotFound`.
 - Typed connections and listeners are share-safe registry references. One read

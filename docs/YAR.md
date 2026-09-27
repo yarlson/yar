@@ -997,6 +997,8 @@ Builtins are fixed by the compiler:
 - `sb_new() i64` — create a new string builder (returns opaque handle)
 - `sb_write(i64, str) void` — append a string to the builder
 - `sb_string(i64) str` — extract the built string and reset the builder
+- `sb_finish(i64) str` — extract the built string and release the builder
+- `sb_discard(i64) void` — release the builder without extracting a string
 - `chan_new[T](i32) chan[T]` — create a bounded channel
 - `chan_send(chan[T], T) !void` — send one value
 - `chan_recv(chan[T]) !T` — receive one value
@@ -1008,6 +1010,8 @@ String-builder handles are positive, process-local opaque `i64` tokens backed by
 generation-tagged registry slots. Their mutable state is synchronized. Passing
 an unknown, stale-generation, or wrong-kind token to a string-builder operation
 terminates with `runtime failure: invalid string builder`.
+`sb_string` retains the handle for deliberate reuse. One-shot builders must use
+`sb_finish` on success or `sb_discard` when abandoning a partial value.
 
 Across runtime handle kinds, removing an entry advances its slot generation and
 changes the full token before that slot can be reused. Stale-generation and
@@ -1319,6 +1323,7 @@ Methods on `net.Listener`:
 - `accept() !net.Conn`
 - `addr() !net.Addr`
 - `close() !void`
+- `shutdown_write() !void` — send EOF after queued writes while keeping reads open
 
 Methods on `net.Conn`:
 
@@ -1330,14 +1335,21 @@ Methods on `net.Conn`:
 - `remote_addr() !net.Addr`
 - `set_read_deadline(millis i32) !void`
 - `set_write_deadline(millis i32) !void`
+- `set_read_deadline_after(millis i32) !void`
+- `set_write_deadline_after(millis i32) !void`
 
 `read(max_bytes)` accepts 1 through 67,108,864 bytes inclusive and returns an
 empty string only on EOF. Read and write deadlines are relative, per-operation
-socket timeouts; zero disables the timeout. Changing a timeout is not promised
-to interrupt a syscall that is already running. DNS resolution and connection
-creation are synchronous host calls and cannot be interrupted before a
-connection handle exists. A sibling task can end blocked accept, read, or write
-by closing the typed listener or connection.
+socket timeouts; zero disables the timeout. The `*_deadline_after` variants
+instead store one fixed deadline measured from the setter call and shared by
+later operations in that direction. When both forms are active, the earlier
+deadline wins. Changing a deadline is not promised to interrupt a syscall that
+is already running. DNS resolution and connection creation are synchronous host
+calls and cannot be interrupted before a connection handle exists. A sibling
+task can end blocked accept, read, or write by closing the typed listener or
+connection.
+`shutdown_write` serializes after earlier writes, disables further output on
+that socket, and leaves the read half available until `close`.
 
 Networking errors surface through package-owned public errors:
 
@@ -1351,13 +1363,114 @@ Networking errors surface through package-owned public errors:
 - `net.IO`
 - `error.Closed`
 
-### HTTP serving
+### `http`
 
-There is no `std/http` package. The earlier server experiment was
-withdrawn because it did not provide bounded incremental framing, strict
-request and response validation, connection deadlines, or a safe resource
-lifecycle. A future HTTP design requires a new accepted proposal and
-adversarial socket tests before it can return to the standard library.
+```
+import "std/http"
+```
+
+`http` provides bounded HTTP/1.1 server connections over `std/net`.
+
+Public request types:
+
+- `http.Header { pub name str, pub value str }`
+- `http.Request { pub method str, pub target str, pub headers []http.Header, pub body str }`
+
+Package-owned types with private fields:
+
+- `http.Limits` — request/response-head limits, request-body limits, and fixed
+  exchange deadlines
+- `http.Response` — validated final status, headers, and body
+- `http.Server` — listener and limits
+- `http.Connection` — one accepted connection and its limits
+
+Construction:
+
+- `http.default_limits() http.Limits` — 32 KiB request/response head, 1 MiB decoded body,
+  5-second read deadline, and 5-second write deadline
+- `http.limits(max_head_bytes i32, max_body_bytes i32, read_timeout_millis i32, write_timeout_millis i32) !http.Limits`
+- `http.listen(addr net.Addr, limits http.Limits) !http.Server`
+- `http.response(status i32, body str) !http.Response`
+- `http.text(status i32, body str) !http.Response`
+
+Methods:
+
+- `Request.header(name str) !str` returns the first case-insensitive field or
+  `http.HeaderNotFound`
+- `Request.header_values(name str) ![]str` returns every matching field;
+  invalid field names return `http.InvalidArgument`
+- `Response.with_header(name str, value str) !Response` replaces existing
+  instances in an independently backed response
+- `Response.add_header(name str, value str) !Response` appends a repeated field
+- `Server.accept() !Connection`, `addr() !net.Addr`, and `close() !void`
+- `Connection.serve(handler fn(Request) !Response) !void`, `local_addr() !net.Addr`,
+  `remote_addr() !net.Addr`, and `close() !void`
+
+Example:
+
+```yar
+package main
+
+import "std/http"
+import "std/net"
+
+fn main() !i32 {
+    server := http.listen(
+        net.Addr{host: "127.0.0.1", port: 8080},
+        http.default_limits(),
+    )?
+    for true {
+        connection := server.accept()?
+        connection.serve(fn(req http.Request) !http.Response {
+            if req.method == "GET" && req.target == "/health" {
+                return http.text(200, "ok\n")
+            }
+            return http.text(404, "not found\n")
+        }) or |err| {
+            print("http connection failed: " + to_str(err) + "\n")
+        }
+    }
+    return 0
+}
+```
+
+Each `Connection.serve` incrementally parses one request, writes one response,
+performs a bounded input drain, and closes. Request heads require strict CRLF
+and HTTP/1.1 grammar. Bodies use a
+bounded `Content-Length` or one final `chunked` transfer coding; conflicting or
+duplicate framing is rejected. Chunk metadata and trailers are bounded and
+validated, including chunk-extension token and quoted-string syntax. `Host` is
+required exactly once and must contain a valid authority. Origin-form,
+absolute-form, and `OPTIONS *` targets are accepted; other target/method
+combinations and URI fragments are rejected. For absolute-form targets, the
+target authority replaces the received `Host` value before the request reaches
+the handler. Unsupported expectations,
+`CONNECT`, and transfer codings receive explicit errors and responses.
+An overlong request target receives `414`; an overlong completed header section
+receives `431`. Malformed version syntax is a bad request, while a syntactically
+valid unsupported HTTP version receives `505`.
+
+Response status and headers are validated before serialization. Applications
+cannot set framing, connection, trailer, or upgrade fields, and CR/LF in values
+is rejected. Responses always use `Connection: close`; `HEAD` omits body bytes.
+Package-generated protocol and handler-error responses are bodyless. Protocol,
+handler, and transport failures remain ordinary errors returned to the caller.
+The caller explicitly owns the accept loop, concurrency, cancellation, logging,
+and error policy. A sibling owner can cancel blocked connection I/O with
+`Connection.close`; closing the socket does not interrupt handler computation.
+For `HEAD`, the handler is responsible for returning the metadata and body
+length that the corresponding `GET` would have produced; the serializer omits
+the body bytes.
+
+The package does not provide an HTTP client, routing, TLS, keep-alive,
+pipelining, upgrades, compression, or streaming body APIs.
+
+HTTP-owned errors are `http.BadRequest`, `http.BodyTooLarge`,
+`http.ExpectationFailed`, `http.HeaderNotFound`, `http.HeaderTooLarge`,
+`http.HTTPVersionNotSupported`, `http.InvalidArgument`,
+`http.InvalidResponse`, `http.URITooLong`, `http.UnsupportedMethod`, and
+`http.UnsupportedTransferEncoding`. Network and handler failures preserve their
+original error identities.
 
 ### `testing`
 
