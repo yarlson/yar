@@ -214,7 +214,7 @@ pub fn to_lower(s str) str {
         }
         i = i + 1
     }
-    return sb_string(sb)
+    return sb_finish(sb)
 }
 
 pub fn to_upper(s str) str {
@@ -229,7 +229,7 @@ pub fn to_upper(s str) str {
         }
         i = i + 1
     }
-    return sb_string(sb)
+    return sb_finish(sb)
 }
 
 pub fn parse_i64(s str) !i64 {

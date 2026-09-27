@@ -48,6 +48,7 @@ fn serve(listener net.Listener) !i32 {
         return 1
     }
     write_all(conn, "world")?
+    conn.shutdown_write()?
     conn.close()?
     return 0
 }

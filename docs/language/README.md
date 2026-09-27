@@ -57,7 +57,7 @@ their status does not prove implementation.
 | 0023 | [TCP Networking](proposals/0023-tcp-networking.md) | accepted | implemented |
 | 0024 | [Time Values and UTC](proposals/0024-time.md) | proposed | not started |
 | 0025 | [Structured Concurrency](proposals/0025-concurrency.md) | accepted | implemented |
-| 0026 | [Minimal HTTP Server](proposals/0026-http-server.md) | withdrawn | removed |
+| 0026 | [Bounded HTTP/1.1 Server](proposals/0026-http-server.md) | accepted | implemented |
 | 0027 | [HTTP Routing](proposals/0027-http-routing.md) | withdrawn | removed |
 | 0028 | [Streaming Resource Model](proposals/0028-streaming-resource-model.md) | accepted | implemented |
 | 0029 | [Struct Field Visibility and Package-Owned Construction](proposals/0029-struct-field-visibility.md) | accepted | implemented |

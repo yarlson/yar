@@ -111,7 +111,7 @@
 
 ## Runtime Surface
 
-- Runtime ABI 3 passes every aggregate input and output through explicit
+- Runtime ABI 4 passes every aggregate input and output through explicit
   caller-owned pointers. Generated LLVM therefore does not depend on
   target-specific aggregate argument or return conventions at the Rust/C
   boundary. Runtime calls read input slots during the call and initialize
@@ -236,10 +236,12 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   `error.Closed`.
   Invalid string-builder IDs terminate with
   `runtime failure: invalid string builder`.
-- The string-builder ABI uses `i64` directly: `yar_sb_new()` returns an ID,
-  while `yar_sb_write` and `yar_sb_string` accept that ID without pointer/integer
-  conversion in generated IR; `yar_sb_string` writes its `YarStr` through an
-  explicit output pointer.
+- The string-builder ABI uses `i64` directly: `yar_sb_new()` returns an ID;
+  `yar_sb_write`, `yar_sb_string`, `yar_sb_finish`, and `yar_sb_discard` accept
+  that ID without pointer/integer conversion in generated IR. `yar_sb_string`
+  writes through an explicit output pointer and retains the handle;
+  `yar_sb_finish` writes through an output pointer and consumes the handle;
+  `yar_sb_discard` consumes it without allocating a result.
 - Registry validation is a runtime safety boundary, not nominal typing. Source
   `i64` values still carry no compiler-visible handle kind or provenance.
 
@@ -318,6 +320,8 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - `yar_net_write(int64_t conn, const yar_str *data, int32_t *out)` performs one
   host write and returns its exact byte count, which may be short.
 - `yar_net_close(int64_t conn)` closes a connection socket.
+- `yar_net_shutdown_write(int64_t conn)` serializes with writes and shuts down
+  only the socket's write half, leaving reads available until close.
 - `yar_net_local_addr(int64_t conn, yar_net_addr *out)` returns the local
   address of a connection via `getsockname`.
 - `yar_net_remote_addr(int64_t conn, yar_net_addr *out)` returns the remote
@@ -326,6 +330,12 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   timeout captured by the next read operation. Zero disables the timeout.
 - `yar_net_set_write_deadline(int64_t conn, int32_t millis)` sets the relative
   timeout captured by the next write operation. Zero disables the timeout.
+- `yar_net_set_read_deadline_after(int64_t conn, int32_t millis)` stores one
+  fixed deadline measured from the call and shared by later reads. Zero
+  disables it.
+- `yar_net_set_write_deadline_after(int64_t conn, int32_t millis)` stores one
+  fixed deadline measured from the call and shared by later writes. Zero
+  disables it.
 - `yar_net_resolve(const yar_str *host, int32_t port, yar_net_addr *out)` performs
   DNS resolution and returns the first IPv4 or IPv6 address; resolver failure
   maps to `NotFound`.
@@ -338,9 +348,11 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   1-through-64-millisecond waits while retaining the blocking source-level
   contract for that native task thread. This is a portability mechanism, not a
   high-scale readiness poller; each blocked call still owns one native thread.
-- Read/write timeouts are relative per-operation socket timeouts. Updating one
-  need not interrupt a syscall already running. DNS and connection creation are
-  synchronous host calls and cannot be interrupted before a handle exists.
+- Read/write timeouts are relative per-operation socket timeouts. Fixed
+  deadline-after values persist across operations, and the earlier applicable
+  deadline wins. Updating either form need not interrupt a syscall already
+  running. DNS and connection creation are synchronous host calls and cannot be
+  interrupted before a handle exists.
 - All networking functions return unchanged `i32` status codes that map in code
   generation to package-owned `net` declarations (`ConnectionRefused`,
   `Timeout`, `AddrInUse`, `ConnectionReset`, `NotFound`, `PermissionDenied`,

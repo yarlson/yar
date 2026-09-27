@@ -149,7 +149,10 @@ pub(crate) fn read(raw_conn: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
 
     let mut buffer = vec![0; max_bytes as usize];
     let mut stream = &handle.stream;
-    let deadline = socket_deadline(handle.read_timeout_millis.load(Ordering::Acquire));
+    let deadline = operation_deadline(
+        handle.read_timeout_millis.load(Ordering::Acquire),
+        fixed_deadline(&handle.read_fixed_deadline),
+    );
     let mut poll_delay = SOCKET_POLL_INITIAL;
     loop {
         if let Some(status) = socket_status(&handle, deadline) {
@@ -176,7 +179,7 @@ pub(crate) fn write(raw_conn: i64, data: YarStr, out: *mut i32) -> i32 {
     let Some(handle) = handle_registry::connection(raw_conn) else {
         return NET_CLOSED;
     };
-    let Some(data) = checked_str(data, true) else {
+    let Some(data) = checked_bytes(data, true) else {
         return NET_INVALID_ARG;
     };
     if data.len() > i32::MAX as usize {
@@ -192,7 +195,10 @@ pub(crate) fn write(raw_conn: i64, data: YarStr, out: *mut i32) -> i32 {
     }
 
     let mut stream = &handle.stream;
-    let deadline = socket_deadline(handle.write_timeout_millis.load(Ordering::Acquire));
+    let deadline = operation_deadline(
+        handle.write_timeout_millis.load(Ordering::Acquire),
+        fixed_deadline(&handle.write_fixed_deadline),
+    );
     let mut poll_delay = SOCKET_POLL_INITIAL;
     loop {
         if let Some(status) = socket_status(&handle, deadline) {
@@ -231,6 +237,20 @@ pub(crate) fn close(raw_conn: i64) -> i32 {
     NET_OK
 }
 
+pub(crate) fn shutdown_write(raw_conn: i64) -> i32 {
+    let Some(handle) = handle_registry::connection(raw_conn) else {
+        return NET_CLOSED;
+    };
+    let _write = handle.write.lock().unwrap_or_else(|err| err.into_inner());
+    if handle.closed.load(Ordering::Acquire) {
+        return NET_CLOSED;
+    }
+    handle
+        .stream
+        .shutdown(Shutdown::Write)
+        .map_or_else(status_from_io, |_| NET_OK)
+}
+
 pub(crate) fn local_addr(raw_conn: i64, out: *mut YarNetAddr) -> i32 {
     conn_addr(raw_conn, out, TcpStream::local_addr)
 }
@@ -245,6 +265,14 @@ pub(crate) fn set_read_deadline(raw_conn: i64, millis: i32) -> i32 {
 
 pub(crate) fn set_write_deadline(raw_conn: i64, millis: i32) -> i32 {
     set_deadline(raw_conn, millis, |handle| &handle.write_timeout_millis)
+}
+
+pub(crate) fn set_read_deadline_after(raw_conn: i64, millis: i32) -> i32 {
+    set_fixed_deadline(raw_conn, millis, |handle| &handle.read_fixed_deadline)
+}
+
+pub(crate) fn set_write_deadline_after(raw_conn: i64, millis: i32) -> i32 {
+    set_fixed_deadline(raw_conn, millis, |handle| &handle.write_fixed_deadline)
 }
 
 pub(crate) fn resolve(host: YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
@@ -315,6 +343,44 @@ fn set_deadline(
     }
 }
 
+fn set_fixed_deadline(
+    raw_conn: i64,
+    millis: i32,
+    deadline_field: fn(&handle_registry::ConnectionState) -> &std::sync::Mutex<Option<Instant>>,
+) -> i32 {
+    let Some(handle) = handle_registry::connection(raw_conn) else {
+        return NET_CLOSED;
+    };
+    if millis < 0 {
+        return NET_INVALID_ARG;
+    }
+    if handle.closed.load(Ordering::Acquire) {
+        return NET_CLOSED;
+    }
+
+    let deadline = (millis != 0).then(|| Instant::now() + Duration::from_millis(millis as u64));
+    *deadline_field(&handle)
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = deadline;
+    if handle.closed.load(Ordering::Acquire) {
+        NET_CLOSED
+    } else {
+        NET_OK
+    }
+}
+
+fn fixed_deadline(deadline: &std::sync::Mutex<Option<Instant>>) -> Option<Instant> {
+    *deadline.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+fn operation_deadline(timeout_millis: u64, fixed: Option<Instant>) -> Option<Instant> {
+    match (socket_deadline(timeout_millis), fixed) {
+        (Some(timeout), Some(fixed)) => Some(timeout.min(fixed)),
+        (Some(timeout), None) => Some(timeout),
+        (None, fixed) => fixed,
+    }
+}
+
 fn socket_deadline(millis: u64) -> Option<Instant> {
     (millis != 0).then(|| Instant::now() + Duration::from_millis(millis))
 }
@@ -351,22 +417,21 @@ fn status_from_connection_io(handle: &handle_registry::ConnectionLease, err: io:
 }
 
 fn host_string(value: YarStr, allow_empty: bool) -> Option<String> {
-    let bytes = checked_str(value, allow_empty)?;
+    let bytes = checked_bytes(value, allow_empty)?;
+    if bytes.contains(&0) {
+        return None;
+    }
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
-fn checked_str(value: YarStr, allow_empty: bool) -> Option<&'static [u8]> {
+fn checked_bytes(value: YarStr, allow_empty: bool) -> Option<&'static [u8]> {
     if value.len < 0 || (value.ptr.is_null() && value.len != 0) {
         return None;
     }
     if !allow_empty && value.len == 0 {
         return None;
     }
-    let bytes = unsafe { string_bytes(value) };
-    if bytes.contains(&0) {
-        return None;
-    }
-    Some(bytes)
+    Some(unsafe { string_bytes(value) })
 }
 
 unsafe fn string_bytes<'a>(value: YarStr) -> &'a [u8] {

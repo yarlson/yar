@@ -117,10 +117,13 @@ pub fn (l Listener) close() !void
 pub fn (c Conn) read(max_bytes i32) !str
 pub fn (c Conn) write(data str) !i32
 pub fn (c Conn) close() !void
+pub fn (c Conn) shutdown_write() !void
 pub fn (c Conn) local_addr() !Addr
 pub fn (c Conn) remote_addr() !Addr
 pub fn (c Conn) set_read_deadline(millis i32) !void
 pub fn (c Conn) set_write_deadline(millis i32) !void
+pub fn (c Conn) set_read_deadline_after(millis i32) !void
+pub fn (c Conn) set_write_deadline_after(millis i32) !void
 ```
 
 `net.Conn` satisfies `io.Reader`, `io.Writer`, `io.Closer`,
@@ -129,6 +132,8 @@ pub fn (c Conn) set_write_deadline(millis i32) !void
 Connections allow one reader and one writer concurrently; calls in the same
 direction serialize. `read` accepts at most 64 MiB, inclusive. `write` performs
 one host write and returns its exact count, which may be short.
+`shutdown_write` serializes after earlier writes, sends EOF, and preserves the
+read half until `close`.
 
 ## 3. Example
 
@@ -196,9 +201,11 @@ the full token and prevents a stale handle from resolving to a newer resource.
 After the maximum generation is removed, the slot is retired instead of wrapped.
 
 The `net` methods lower through compiler-internal networking intrinsics. Socket
-timeouts are relative per-operation timeouts; changing one need not interrupt
-an already-running syscall. DNS and connect are synchronous and cannot be
-interrupted before a connection handle exists.
+timeouts are relative per-operation timeouts. Deadline-after setters instead
+anchor one fixed deadline across later operations, and the earlier applicable
+deadline wins. Changing either need not interrupt an already-running syscall.
+DNS and connect are synchronous and cannot be interrupted before a connection
+handle exists.
 
 ## 6. Tests
 

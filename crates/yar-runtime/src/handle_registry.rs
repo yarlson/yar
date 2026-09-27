@@ -6,10 +6,11 @@ use std::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 pub(crate) type FileHandle = Arc<Mutex<Option<File>>>;
-pub(crate) type StringBuilderHandle = Arc<Mutex<Vec<u8>>>;
+pub(crate) type StringBuilderHandle = Arc<Mutex<Option<Vec<u8>>>>;
 
 pub(crate) struct ListenerLease(Arc<ListenerState>);
 
@@ -103,6 +104,8 @@ pub(crate) struct ConnectionState {
     operations: Operations,
     pub(crate) read_timeout_millis: AtomicU64,
     pub(crate) write_timeout_millis: AtomicU64,
+    pub(crate) read_fixed_deadline: Mutex<Option<Instant>>,
+    pub(crate) write_fixed_deadline: Mutex<Option<Instant>>,
     pub(crate) read: Mutex<()>,
     pub(crate) write: Mutex<()>,
 }
@@ -363,6 +366,8 @@ pub(crate) fn register_connection(stream: TcpStream) -> i64 {
         operations: Operations::new(),
         read_timeout_millis: AtomicU64::new(0),
         write_timeout_millis: AtomicU64::new(0),
+        read_fixed_deadline: Mutex::new(None),
+        write_fixed_deadline: Mutex::new(None),
         read: Mutex::new(()),
         write: Mutex::new(()),
     })))
@@ -388,13 +393,20 @@ pub(crate) fn remove_connection(id: i64) -> Option<Arc<ConnectionState>> {
 }
 
 pub(crate) fn register_string_builder() -> i64 {
-    handles().insert(HandleEntry::StringBuilder(Arc::new(Mutex::new(
+    handles().insert(HandleEntry::StringBuilder(Arc::new(Mutex::new(Some(
         Vec::with_capacity(64),
-    ))))
+    )))))
 }
 
 pub(crate) fn string_builder(id: i64) -> Option<StringBuilderHandle> {
     match handles().get(id, HandleKind::StringBuilder)? {
+        HandleEntry::StringBuilder(handle) => Some(handle),
+        _ => None,
+    }
+}
+
+pub(crate) fn remove_string_builder(id: i64) -> Option<StringBuilderHandle> {
+    match handles().remove(id, HandleKind::StringBuilder)? {
         HandleEntry::StringBuilder(handle) => Some(handle),
         _ => None,
     }
@@ -405,7 +417,7 @@ mod tests {
     use super::*;
 
     fn builder_entry() -> HandleEntry {
-        HandleEntry::StringBuilder(Arc::new(Mutex::new(Vec::new())))
+        HandleEntry::StringBuilder(Arc::new(Mutex::new(Some(Vec::new()))))
     }
 
     fn file_entry() -> HandleEntry {

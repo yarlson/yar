@@ -1053,6 +1053,419 @@ fn build_net_fixture_runs_with_rust_runtime() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "net ok\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn http_server_enforces_framing_limits_and_fixed_deadlines() {
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = temp_dir("yar-cli-http-adversarial");
+    let runtime_bundle = build_runtime_bundle(&dir);
+    let source = dir.join("main.yar");
+    let program = dir.join("http-server");
+    fs::write(
+        &source,
+        r#"package main
+
+import "std/conv"
+import "std/http"
+import "std/net"
+import "std/process"
+import "std/strings"
+
+fn handle(req http.Request) !http.Response {
+    if req.target == "/invalid-response" {
+        response := http.text(200, "unsafe")?
+        return response.with_header("x-test", "safe\r\ninjected: yes")
+    }
+    if req.target == "/head" {
+        return http.text(200, "hidden")
+    }
+    if strings.has_suffix(req.target, "/host") {
+        return http.text(200, req.header("host")?)
+    }
+    if req.target == "/no-content" {
+        return http.response(204, "")
+    }
+    if req.target == "/reset-content" {
+        return http.response(205, "")
+    }
+    if req.target == "/not-modified" {
+        return http.response(304, "")
+    }
+    if req.target == "/invalid-reset" {
+        return http.response(205, "invalid")
+    }
+    if req.target == "/large-response-head" {
+        response := http.text(200, "too many headers")?
+        for i := 0; i < 100; i += 1 {
+            response = response.add_header("x-field-" + to_str(i), "0123456789abcdef")?
+        }
+        return response
+    }
+    response := http.text(200, req.body)?
+    response = response.with_header("x-method", req.method)?
+    response = response.add_header("set-cookie", "first=1")?
+    return response.add_header("set-cookie", "second=2")
+}
+
+fn main() !i32 {
+    args := process.args()
+    if len(args) != 3 {
+        return 2
+    }
+    port := conv.to_i32(strings.parse_i64(args[1])?)
+    exchanges := conv.to_i32(strings.parse_i64(args[2])?)
+    server := http.listen(
+        net.Addr{host: "127.0.0.1", port: port},
+        http.limits(1024, 16, 150, 1000)?,
+    )?
+
+    for i := 0; i < exchanges; i += 1 {
+        connection := server.accept()?
+        connection.serve(fn(req http.Request) !http.Response {
+            return handle(req)
+        }) or |err| {
+        }
+    }
+    server.close()?
+    print("http adversarial ok\n")
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let build = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            source.to_str().unwrap(),
+            "-o",
+            program.to_str().unwrap(),
+        ])
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let expected_connections = 38;
+    let child = Command::new(&program)
+        .arg(port.to_string())
+        .arg(expected_connections.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut child = TestChild::new(child);
+
+    let response = http_exchange(
+        port,
+        &[
+            b"POST /ok HTTP/1.1\r\nHost: local",
+            b"host\r\nContent-Length: 5\r\n\r\nhe",
+            b"llo",
+        ],
+        Duration::from_millis(15),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 \r\n"), "{response:?}");
+    assert!(response.ends_with("\r\n\r\nhello"), "{response:?}");
+    assert_eq!(response.matches("set-cookie:").count(), 2, "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"POST /chunk HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4;part=one\r\nWiki\r\n5 ; part=\"two\"\r\npedia\r\n0\r\nX-Done: yes\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.ends_with("\r\n\r\nWikipedia"), "{response:?}");
+
+    for (request, status) in [
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n",
+            400,
+        ),
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx",
+            400,
+        ),
+        ("GET / HTTP/1.1\r\n\r\n", 400),
+        ("GET / HTTP/1.1\r\nHost: first\r\nHost: second\r\n\r\n", 400),
+        ("GET / HTTP/1.1\r\nHost: bad host\r\n\r\n", 400),
+        ("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n", 400),
+        ("GET / HTTP/1.1\r\nHost: [1.2.3.4::]\r\n\r\n", 400),
+        (
+            "GET / HTTP/1.1\r\nHost: localhost\r\n folded: value\r\n\r\n",
+            400,
+        ),
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: gzip\r\n\r\n",
+            501,
+        ),
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nExpect: something-else\r\nContent-Length: 0\r\n\r\n",
+            417,
+        ),
+        ("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n", 505),
+        ("GET / GARBAGE\r\nHost: localhost\r\n\r\n", 400),
+        ("GET * HTTP/1.1\r\nHost: localhost\r\n\r\n", 400),
+        ("GET /bad#fragment HTTP/1.1\r\nHost: localhost\r\n\r\n", 400),
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n4;=bad\r\ntest\r\n0\r\n\r\n",
+            400,
+        ),
+        (
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 17\r\n\r\n",
+            413,
+        ),
+        (
+            "CONNECT localhost:80 HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            501,
+        ),
+    ] {
+        let response = http_exchange(port, &[request.as_bytes()], Duration::ZERO);
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} \r\n")),
+            "request: {request:?}\nresponse: {response:?}"
+        );
+    }
+
+    let exact_head_prefix = "GET / HTTP/1.1\r\nHost: localhost\r\nX-Pad: ";
+    let exact_head_suffix = "\r\n\r\n";
+    let exact_head = format!(
+        "{exact_head_prefix}{}{exact_head_suffix}",
+        "x".repeat(1024 - exact_head_prefix.len() - exact_head_suffix.len())
+    );
+    assert_eq!(exact_head.len(), 1024);
+    let response = http_exchange(port, &[exact_head.as_bytes()], Duration::ZERO);
+    assert!(response.starts_with("HTTP/1.1 200 \r\n"), "{response:?}");
+
+    let oversized = format!(
+        "GET / HTTP/1.1\r\nHost: localhost\r\nX-Large: {}\r\n\r\n",
+        "x".repeat(1024)
+    );
+    let response = http_exchange(port, &[oversized.as_bytes()], Duration::ZERO);
+    assert!(response.starts_with("HTTP/1.1 431 \r\n"), "{response:?}");
+
+    let long_target = format!("GET /{}", "x".repeat(1024));
+    let response = http_exchange(port, &[long_target.as_bytes()], Duration::ZERO);
+    assert!(response.starts_with("HTTP/1.1 414 \r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"POST /exact HTTP/1.1\r\nHost: localhost\r\nContent-Length: 16\r\n\r\n0123456789abcdef"],
+        Duration::ZERO,
+    );
+    assert!(
+        response.ends_with("\r\n\r\n0123456789abcdef"),
+        "{response:?}"
+    );
+
+    let response = http_exchange(
+        port,
+        &[b"POST /binary HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\na\0b"],
+        Duration::ZERO,
+    );
+    assert!(
+        response.as_bytes().ends_with(b"\r\n\r\na\0b"),
+        "{response:?}"
+    );
+
+    let response = http_exchange(
+        port,
+        &[b"OPTIONS * HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 200 \r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"GET http://target.example/host HTTP/1.1\r\nHost: attacker.example\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.ends_with("\r\n\r\ntarget.example"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"GET http://[::1]:8080/host HTTP/1.1\r\nHost: ignored.example\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.ends_with("\r\n\r\n[::1]:8080"), "{response:?}");
+
+    let mut expect = connect_http(port);
+    expect
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    expect
+        .write_all(b"POST /expect HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 5\r\n\r\n")
+        .unwrap();
+    assert_eq!(read_http_head(&mut expect), "HTTP/1.1 100 Continue\r\n\r\n");
+    expect.write_all(b"hello").unwrap();
+    expect.shutdown(Shutdown::Write).unwrap();
+    let mut final_response = String::new();
+    expect.read_to_string(&mut final_response).unwrap();
+    assert!(
+        final_response.ends_with("\r\n\r\nhello"),
+        "{final_response:?}"
+    );
+
+    let response = http_exchange(
+        port,
+        &[b"HEAD /head HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.contains("content-length: 6\r\n"), "{response:?}");
+    assert!(response.ends_with("\r\n\r\n"), "{response:?}");
+
+    for (path, status, content_length) in [
+        ("/no-content", 204, None),
+        ("/reset-content", 205, Some(0)),
+        ("/not-modified", 304, None),
+    ] {
+        let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        let response = http_exchange(port, &[request.as_bytes()], Duration::ZERO);
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} \r\n")),
+            "{response:?}"
+        );
+        match content_length {
+            Some(length) => assert!(
+                response.contains(&format!("content-length: {length}\r\n")),
+                "{response:?}"
+            ),
+            None => assert!(!response.contains("content-length:"), "{response:?}"),
+        }
+        assert!(response.ends_with("\r\n\r\n"), "{response:?}");
+    }
+
+    let response = http_exchange(
+        port,
+        &[b"GET /invalid-reset HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 500 \r\n"), "{response:?}");
+    assert!(response.contains("content-length: 0\r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"GET /large-response-head HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 500 \r\n"), "{response:?}");
+    assert!(response.contains("content-length: 0\r\n"), "{response:?}");
+    assert!(response.ends_with("\r\n\r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"GET /invalid-response HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 500 \r\n"), "{response:?}");
+    assert!(!response.contains("injected: yes"), "{response:?}");
+    assert!(response.contains("content-length: 0\r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"HEAD /invalid-response HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 500 \r\n"), "{response:?}");
+    assert!(response.contains("content-length: 0\r\n"), "{response:?}");
+    assert!(response.ends_with("\r\n\r\n"), "{response:?}");
+
+    let response = http_exchange(
+        port,
+        &[b"GET /first HTTP/1.1\r\nHost: localhost\r\n\r\nGET /second HTTP/1.1\r\nHost: localhost\r\n\r\n"],
+        Duration::ZERO,
+    );
+    assert!(response.starts_with("HTTP/1.1 200 \r\n"), "{response:?}");
+    assert_eq!(response.matches("HTTP/1.1").count(), 1, "{response:?}");
+
+    let started = Instant::now();
+    let mut slow = connect_http(port);
+    slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    for byte in [b"G", b"E", b"T", b" "] {
+        if slow.write_all(byte).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    let _ = slow.shutdown(Shutdown::Write);
+    let mut closed = Vec::new();
+    if let Err(err) = slow.read_to_end(&mut closed) {
+        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionReset);
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(700),
+        "fixed request deadline reset between reads"
+    );
+    assert!(
+        closed.is_empty(),
+        "timeout unexpectedly produced a response"
+    );
+
+    let output = child.wait_with_output(Duration::from_secs(5));
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "http adversarial ok\n"
+    );
+}
+
+#[test]
+fn http_opaque_values_cannot_be_fabricated_outside_the_package() {
+    let dir = temp_dir("yar-cli-http-private-values");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"package main
+
+import "std/http"
+
+fn main() i32 {
+    limits := http.Limits{}
+    response := http.Response{}
+    server := http.Server{}
+    connection := http.Connection{}
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for type_name in [
+        "http.Limits",
+        "http.Response",
+        "http.Server",
+        "http.Connection",
+    ] {
+        assert!(
+            stderr.contains(&format!(
+                "struct literal for {type_name:?} is not allowed outside package \"http\" because it has package-private fields"
+            )),
+            "stderr: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn test_runs_passing_tests() {
     let output = Command::new(env!("CARGO_BIN_EXE_yar"))
@@ -3528,6 +3941,92 @@ fn temp_dir(prefix: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[cfg(unix)]
+fn connect_http(port: u16) -> std::net::TcpStream {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match std::net::TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => return stream,
+            Err(err) if std::time::Instant::now() < deadline => {
+                let _ = err;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(err) => panic!("failed to connect to HTTP test server: {err}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn http_exchange(port: u16, parts: &[&[u8]], delay: std::time::Duration) -> String {
+    use std::io::{Read, Write};
+    use std::net::Shutdown;
+
+    let mut stream = connect_http(port);
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .unwrap();
+    for part in parts {
+        stream.write_all(part).unwrap();
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
+    }
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    String::from_utf8(response).unwrap()
+}
+
+#[cfg(unix)]
+fn read_http_head(stream: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+        assert!(head.len() <= 4096, "HTTP response head exceeded test bound");
+    }
+    String::from_utf8(head).unwrap()
+}
+
+#[cfg(unix)]
+struct TestChild {
+    child: Option<std::process::Child>,
+}
+
+#[cfg(unix)]
+impl TestChild {
+    fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn wait_with_output(&mut self, timeout: std::time::Duration) -> std::process::Output {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.child.as_mut().unwrap().try_wait().unwrap().is_some() {
+                return self.child.take().unwrap().wait_with_output().unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "HTTP test server did not exit within {timeout:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TestChild {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 struct LockedDependencyProject {

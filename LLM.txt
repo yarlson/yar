@@ -449,6 +449,8 @@ to_str(i32|i64|bool|str|error) str  // convert to string
 sb_new() i64                         // create string builder (opaque handle)
 sb_write(i64, str) void              // append string to builder
 sb_string(i64) str                   // extract built string, reset builder
+sb_finish(i64) str                   // extract built string, release builder
+sb_discard(i64) void                 // release builder without extracting
 chan_new[T](i32) chan[T]             // create bounded channel
 chan_send(chan[T], T) !void          // send one value
 chan_recv(chan[T]) !T                // receive one value
@@ -458,6 +460,8 @@ chan_close(chan[T]) void             // close a channel
 String-builder handles are synchronized process-local registry IDs. Unknown or
 wrong-kind IDs terminate with
 `runtime failure: invalid string builder`.
+`sb_string` retains a builder for reuse; one-shot code uses `sb_finish` or
+`sb_discard` so its registry slot and retained capacity are released.
 
 ## Concurrency
 
@@ -598,6 +602,7 @@ fs.open_write(path) !fs.File
 read(max_bytes i32) !str
 write(data str) !i32
 close() !void
+shutdown_write() !void  // send EOF after writes; keep read half open
 ```
 
 `fs.File` is a resource struct and cannot cross a spawn boundary.
@@ -716,13 +721,18 @@ local_addr() !net.Addr
 remote_addr() !net.Addr
 set_read_deadline(millis i32) !void
 set_write_deadline(millis i32) !void
+set_read_deadline_after(millis i32) !void
+set_write_deadline_after(millis i32) !void
 ```
 
 `read` accepts 1..67,108,864 bytes inclusive and returns `""` on EOF. Socket
 timeouts are relative per-operation timeouts; 0 disables them, and changing a
-timeout need not interrupt an already-running syscall. Synchronous DNS/connect
-cannot be interrupted before a handle exists. Sibling close ends blocked
-accept/read/write with `error.Closed`.
+timeout need not interrupt an already-running syscall. Deadline-after setters
+anchor one fixed deadline at the setter call across later operations; the
+earlier applicable deadline wins. Synchronous DNS/connect cannot be interrupted
+before a handle exists. Sibling close ends blocked accept/read/write with
+`error.Closed`.
+`shutdown_write` serializes after earlier writes and preserves the read half.
 
 Errors: `net.ConnectionRefused`, `net.Timeout`, `net.AddrInUse`,
 `net.ConnectionReset`, `net.NotFound` (DNS), `net.PermissionDenied`,
@@ -730,9 +740,41 @@ Errors: `net.ConnectionRefused`, `net.Timeout`, `net.AddrInUse`,
 
 ### HTTP serving
 
-There is no `std/http` package. The earlier server experiment was
-withdrawn because it lacked bounded incremental framing, strict request and
-response validation, connection deadlines, and a safe resource lifecycle.
+`std/http` provides bounded HTTP/1.1 server connections over `std/net`.
+
+```
+Header { pub name str, pub value str }
+Request { pub method str, pub target str, pub headers []Header, pub body str }
+Limits, Response, Server, Connection // package-owned private fields
+
+default_limits() Limits
+limits(max_head, max_body, read_ms, write_ms) !Limits
+listen(net.Addr, Limits) !Server
+response(status, body) !Response
+text(status, body) !Response
+
+Request.header(name) !str
+Request.header_values(name) ![]str
+Response.with_header(name, value) !Response
+Response.add_header(name, value) !Response
+Server.accept() !Connection
+Server.addr() !net.Addr
+Server.close() !void
+Connection.serve(fn(Request) !Response) !void
+Connection.local_addr() !net.Addr
+Connection.remote_addr() !net.Addr
+Connection.close() !void
+```
+
+Each served connection incrementally parses one strict HTTP/1.1 request under
+fixed head/body/deadline limits, writes one validated `Connection: close`
+response, and closes. `Content-Length` and `chunked` are supported; ambiguous
+framing, invalid authorities/target forms, malformed chunk extensions, response
+splitting, unsupported expectations/codings, and missing/duplicate `Host` are
+rejected. Absolute-form target authority replaces the received Host value.
+Automatic error responses are bodyless. The caller owns the accept loop,
+concurrency, cancellation, logging, and error policy. No client, routing, TLS,
+keep-alive, upgrades, compression, or streaming body API is included.
 
 ### testing
 

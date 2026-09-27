@@ -725,6 +725,8 @@ fn is_builtin_function(name: &str) -> bool {
             | "sb_new"
             | "sb_write"
             | "sb_string"
+            | "sb_finish"
+            | "sb_discard"
             | "chan_new"
             | "chan_send"
             | "chan_recv"

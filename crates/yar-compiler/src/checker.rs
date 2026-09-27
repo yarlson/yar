@@ -3980,6 +3980,8 @@ fn builtin_functions() -> BTreeMap<String, Signature> {
         ("sb_new", vec![], TYPE_I64, false),
         ("sb_write", vec![TYPE_I64, TYPE_STR], TYPE_VOID, false),
         ("sb_string", vec![TYPE_I64], TYPE_STR, false),
+        ("sb_finish", vec![TYPE_I64], TYPE_STR, false),
+        ("sb_discard", vec![TYPE_I64], TYPE_VOID, false),
         ("chan_new", vec![TYPE_I32], TYPE_INVALID, false),
         (
             "chan_send",

@@ -41,8 +41,8 @@ These are possible directions, not commitments:
   smaller data-modeling feature cannot solve the same programs;
 - richer data modeling only when concrete programs expose a gap not solved by
   current structs, enums, interfaces, and generics;
-- a new HTTP design only after bounded streaming, framing, deadlines, resource
-  ownership, and adversarial socket behavior are specified together;
+- HTTP routing, clients, TLS, keep-alive, or streaming bodies only through
+  separate proposals grounded in the bounded server connection API;
 - additional standard-library capabilities driven by real compiler or tooling
   pressure;
 - carefully scoped diagnostics and developer-experience improvements.

@@ -97,7 +97,9 @@ Network close linearizes when it removes the ID from the registry. It wakes
 blocked accept, read, and write operations with `error.Closed`, then waits for
 those operations and the host resource to finish releasing. A connection
 permits one reader and one writer concurrently while serializing operations in
-the same direction. File close remains non-interrupting and releases the host
+the same direction. Write shutdown serializes after earlier writes, sends EOF,
+and leaves the read half available until close. File close remains
+non-interrupting and releases the host
 file without an implicit durability sync.
 
 Unknown, stale, and wrong-kind file or internal network IDs produce
@@ -105,6 +107,9 @@ Unknown, stale, and wrong-kind file or internal network IDs produce
 Invalid string-builder IDs terminate with the deterministic string-builder
 runtime failure. This registry is a runtime safety boundary only: raw `i64`
 values still have no compiler-visible nominal handle type or provenance.
+`sb_string` deliberately retains a builder for reuse. One-shot builders use
+`sb_finish` to extract and consume the handle or `sb_discard` to consume partial
+state, preventing registry and retained-capacity growth in long-lived code.
 
 ### Sugar must lower to explicit semantics
 
@@ -404,9 +409,22 @@ Status: accepted
 The compiler embeds a standard library written in Yar. Its packages use the
 reserved import paths `std/strings`, `std/utf8`, `std/conv`, `std/sort`,
 `std/path`, `std/fs`, `std/io`, `std/process`, `std/env`, `std/stdio`,
-`std/net`, and `std/testing`. Direct and stdlib-internal imports
+`std/net`, `std/http`, and `std/testing`. Direct and stdlib-internal imports
 resolve only to the embedded stdlib origin and cannot be shadowed by project or
 dependency sources.
+
+### HTTP server control flow and framing stay explicit
+
+Status: accepted
+
+`std/http` exposes typed server and connection resources rather than a hidden
+forever-running server loop. Callers own accept loops, concurrency,
+cancellation, logging, and error policy. Each served connection incrementally
+parses one strict HTTP/1.1 request under explicit byte limits and fixed
+deadlines, writes one validated response, and closes. The package supports
+bounded `Content-Length` and chunked bodies while rejecting ambiguous framing
+and response splitting. HTTP clients, routing, TLS, keep-alive, and streaming
+bodies require separate designs.
 
 ### Text and UTF-8 helpers
 
@@ -520,15 +538,16 @@ The original `std/http` experiment was removed because single-read request
 parsing, ambiguous framing, unvalidated response headers, and an unbounded
 connection lifecycle were not a safe server contract. HTTP serving requires a
 new accepted design with bounded streaming, deadlines, strict framing, resource
-ownership, and adversarial socket tests.
+ownership, and adversarial socket tests. The later bounded HTTP/1.1 design does
+not revive this withdrawn contract.
 
 ### Routing without a safe HTTP server substrate
 
 Status: withdrawn
 
 The routing proposal depended on the removed server contract. Its routing model
-was not independently rejected; routing can be reconsidered after a safe HTTP
-serving design reaches accepted status and its implementation is complete.
+was not independently rejected; a new routing proposal may now build on the
+bounded server connection API without reviving the withdrawn design.
 
 ---
 

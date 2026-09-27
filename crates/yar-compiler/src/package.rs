@@ -949,10 +949,13 @@ fn mark_stdlib_metadata(import_path: &str, program: &mut Program) {
                     | "read"
                     | "write"
                     | "close"
+                    | "shutdown_write"
                     | "local_addr"
                     | "remote_addr"
                     | "set_read_deadline"
                     | "set_write_deadline"
+                    | "set_read_deadline_after"
+                    | "set_write_deadline_after"
                     | "resolve"
             ),
             _ => false,
@@ -971,6 +974,24 @@ fn stdlib_entries(import_path: &str) -> Option<&'static [(&'static str, &'static
             include_str!("../../../stdlib/packages/env/env.yar"),
         )]),
         "fs" => Some(&[("fs.yar", include_str!("../../../stdlib/packages/fs/fs.yar"))]),
+        "http" => Some(&[
+            (
+                "http.yar",
+                include_str!("../../../stdlib/packages/http/http.yar"),
+            ),
+            (
+                "grammar.yar",
+                include_str!("../../../stdlib/packages/http/grammar.yar"),
+            ),
+            (
+                "request.yar",
+                include_str!("../../../stdlib/packages/http/request.yar"),
+            ),
+            (
+                "response.yar",
+                include_str!("../../../stdlib/packages/http/response.yar"),
+            ),
+        ]),
         "io" => Some(&[("io.yar", include_str!("../../../stdlib/packages/io/io.yar"))]),
         "net" => Some(&[(
             "net.yar",
@@ -1345,10 +1366,13 @@ dep = { path = "dep" }
             "read",
             "write",
             "close",
+            "shutdown_write",
             "local_addr",
             "remote_addr",
             "set_read_deadline",
             "set_write_deadline",
+            "set_read_deadline_after",
+            "set_write_deadline_after",
         ] {
             assert!(
                 net_package
@@ -1485,8 +1509,8 @@ fn main() i32 {
     }
 
     #[test]
-    fn withdrawn_http_stdlib_import_does_not_fall_through() {
-        let dir = temp_dir("yar-rust-withdrawn-http-stdlib");
+    fn embedded_http_stdlib_import_does_not_fall_through() {
+        let dir = temp_dir("yar-rust-embedded-http-stdlib");
         fs::create_dir_all(dir.join("std").join("http")).unwrap();
         fs::write(
             dir.join("main.yar"),
@@ -1513,12 +1537,13 @@ pub fn local_value() i32 {
 
         let (graph, diagnostics) = load_package_graph(&dir, false).unwrap();
 
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(
-            diagnostics[0].message,
-            "standard library package \"std/http\" does not exist"
-        );
+        assert_eq!(diagnostics, Vec::new());
+        assert!(graph.packages[&stdlib_package_id("http")].stdlib);
         assert!(!graph.packages.contains_key(&entry_package_id("std/http")));
+        assert_eq!(
+            graph.packages[&PackageId::default()].imports[0].target,
+            stdlib_package_id("http")
+        );
     }
 
     #[test]

@@ -40,6 +40,7 @@ $fixtures = @(
     @{ Name = "concurrency_lifecycle"; Expected = "251000" },
     @{ Name = "concurrency_share_safe"; Expected = "" },
     @{ Name = "garbage_collection"; Expected = "142000" },
+    @{ Name = "stdlib_http"; Expected = "http ok" },
     @{ Name = "stdlib_net"; Expected = "net ok" }
 )
 
