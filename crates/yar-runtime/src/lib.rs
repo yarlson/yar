@@ -684,7 +684,7 @@ mod tests {
         let output_lock = Arc::new(Mutex::new(()));
         let barrier = Arc::new(Barrier::new(3));
         let mut tasks = Vec::new();
-        for byte in [b'a', b'b'] {
+        for byte in *b"ab" {
             let writer = ChunkedWriter {
                 output: Arc::clone(&output),
             };
