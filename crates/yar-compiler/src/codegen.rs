@@ -12,7 +12,7 @@ use crate::{
         Signature, const_integer_expression, function_literal_key, infer_untyped_integer_type,
         is_untyped_integer_expression,
     },
-    token::Kind,
+    token::{Kind, Position},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,6 +236,9 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_net_set_read_deadline_after(i64, i32)\n");
         out.push_str("declare i32 @yar_net_set_write_deadline_after(i64, i32)\n");
         out.push_str("declare i32 @yar_net_resolve(ptr, i32, ptr)\n");
+        out.push_str("declare i32 @yar_time_now_unix_nanoseconds(ptr)\n");
+        out.push_str("declare i64 @yar_time_instant_nanoseconds()\n");
+        out.push_str("declare i32 @yar_time_sleep_nanoseconds(i64)\n");
         out.push_str("declare void @yar_process_args(ptr)\n");
         out.push_str("declare i32 @yar_process_run(ptr, i64, i64, i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_process_run_inherit(ptr, i64, ptr, ptr)\n");
@@ -1321,6 +1324,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 .push_str(&format!("  store {llvm_type} {register}, ptr {slot}\n"));
             self.locals.insert(param.name, Local { type_, ptr: slot });
         }
+        self.emit_safepoint_poll();
 
         for statement in &self.body_block.stmts {
             self.emit_statement(statement)?;
@@ -2059,6 +2063,12 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
     }
 
     fn emit_fallthrough_return(&mut self) -> Result<(), CodegenError> {
+        if self.signature.errorable {
+            return self.emit_errorable_return(&ReturnStmt {
+                return_pos: Position::default(),
+                value: None,
+            });
+        }
         match self.signature.return_type.as_str() {
             "void" => self.body.push_str("  ret void\n"),
             other => {
@@ -4661,6 +4671,40 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                     format!("ptr {host}, i32 {}", args[1].repr),
                 )
             }
+            "time.now_unix_nanoseconds" => {
+                let out = self.temp("time.now.out");
+                self.body.push_str(&format!("  %{out} = alloca i64\n"));
+                self.body.push_str(&format!("  store i64 0, ptr %{out}\n"));
+                let status = self.temp("time.now.status");
+                self.body.push_str(&format!(
+                    "  %{status} = call i32 @yar_time_now_unix_nanoseconds(ptr %{out})\n"
+                ));
+                let value = self.temp("time.now.value");
+                self.body
+                    .push_str(&format!("  %{value} = load i64, ptr %{out}\n"));
+                self.emit_host_status_result(
+                    &signature.full_name,
+                    &signature.return_type,
+                    &format!("%{status}"),
+                    Some(&format!("%{value}")),
+                )
+            }
+            "time.instant_nanoseconds" => {
+                let value = self.temp("time.instant");
+                self.body.push_str(&format!(
+                    "  %{value} = call i64 @yar_time_instant_nanoseconds()\n"
+                ));
+                Ok(Value {
+                    type_: "i64".to_string(),
+                    repr: format!("%{value}"),
+                })
+            }
+            "time.sleep_nanoseconds" => self.emit_host_status_call(
+                signature,
+                "time.sleep",
+                "yar_time_sleep_nanoseconds",
+                format!("i64 {}", args[0].repr),
+            ),
             _ => Err(CodegenError::unsupported(format!(
                 "host intrinsic {:?}",
                 signature.full_name
@@ -5143,9 +5187,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let owner = host_error_owner(full_name).ok_or_else(|| {
             CodegenError::unsupported(format!("host error mapping for {full_name:?}"))
         })?;
+        let fallback = if is_time_host_intrinsic(full_name) {
+            "Overflow"
+        } else {
+            "IO"
+        };
         let mut code = self
             .generator
-            .error_code(&format!("{owner}.IO"))?
+            .error_code(&format!("{owner}.{fallback}"))?
             .to_string();
         let mappings = if is_fs_host_intrinsic(full_name) {
             &[
@@ -5182,6 +5231,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 (2, "Timeout"),
                 (1, "ConnectionRefused"),
             ][..]
+        } else if is_time_host_intrinsic(full_name) {
+            &[(2, "InvalidArgument"), (1, "Overflow")][..]
         } else {
             return Err(CodegenError::unsupported(format!(
                 "host error mapping for {full_name:?}"
@@ -6373,6 +6424,8 @@ fn host_error_owner(name: &str) -> Option<&'static str> {
         Some("env")
     } else if is_net_host_intrinsic(name) {
         Some("net")
+    } else if is_time_host_intrinsic(name) {
+        Some("time")
     } else {
         None
     }
@@ -6432,6 +6485,10 @@ fn is_net_host_intrinsic(name: &str) -> bool {
             | "net.set_write_deadline_after"
             | "net.resolve"
     )
+}
+
+fn is_time_host_intrinsic(name: &str) -> bool {
+    matches!(name, "time.now_unix_nanoseconds" | "time.sleep_nanoseconds")
 }
 
 fn interface_table_type_name(name: &str) -> String {
@@ -6564,6 +6621,7 @@ mod tests {
         "testdata/compound_assign/main.yar",
         "testdata/concurrency_basic/main.yar",
         "testdata/concurrency_channels/main.yar",
+        "testdata/concurrency_collection/main.yar",
         "testdata/concurrency_errors/main.yar",
         "testdata/concurrency_fs/main.yar",
         "testdata/concurrency_lifecycle/main.yar",
@@ -6574,6 +6632,7 @@ mod tests {
         "testdata/enums/main.yar",
         "testdata/error_identity/main.yar",
         "testdata/field_visibility/main.yar",
+        "testdata/function_values/main.yar",
         "testdata/garbage_collection/main.yar",
         "testdata/garbage_collection_tasks/main.yar",
         "testdata/generics/main.yar",
@@ -6585,6 +6644,7 @@ mod tests {
         "testdata/integer_rem_overflow/main.yar",
         "testdata/integer_wrapping/main.yar",
         "testdata/interfaces/main.yar",
+        "testdata/loop_locals/main.yar",
         "testdata/maps/main.yar",
         "testdata/maps_keys/main.yar",
         "testdata/match_else/main.yar",
@@ -6598,12 +6658,16 @@ mod tests {
         "testdata/stdlib_conv/main.yar",
         "testdata/stdlib_fs_path/main.yar",
         "testdata/stdlib_http/main.yar",
+        "testdata/stdlib_http_router/main.yar",
         "testdata/stdlib_io/main.yar",
+        "testdata/stdlib_json/main.yar",
         "testdata/stdlib_net/main.yar",
         "testdata/stdlib_process_env/main.yar",
         "testdata/stdlib_sort/main.yar",
         "testdata/stdlib_strings/main.yar",
         "testdata/stdlib_strings_ext/main.yar",
+        "testdata/stdlib_time/main.yar",
+        "testdata/stdlib_url/main.yar",
         "testdata/stdlib_utf8/main.yar",
         "testdata/open_ended_slice/main.yar",
         "testdata/string_builder/main.yar",
@@ -6637,12 +6701,14 @@ mod tests {
                     | "testdata/compound_assign/main.yar"
                     | "testdata/concurrency_basic/main.yar"
                     | "testdata/concurrency_channels/main.yar"
+                    | "testdata/concurrency_collection/main.yar"
                     | "testdata/concurrency_errors/main.yar"
                     | "testdata/concurrency_fs/main.yar"
                     | "testdata/deps_local/main.yar"
                     | "testdata/divide/main.yar"
                     | "testdata/enum_positional/main.yar"
                     | "testdata/enums/main.yar"
+                    | "testdata/function_values/main.yar"
                     | "testdata/garbage_collection/main.yar"
                     | "testdata/garbage_collection_tasks/main.yar"
                     | "testdata/generics/main.yar"
@@ -6652,6 +6718,7 @@ mod tests {
                     | "testdata/infinite_for/main.yar"
                     | "testdata/integer_wrapping/main.yar"
                     | "testdata/interfaces/main.yar"
+                    | "testdata/loop_locals/main.yar"
                     | "testdata/maps/main.yar"
                     | "testdata/maps_keys/main.yar"
                     | "testdata/match_else/main.yar"
@@ -6661,12 +6728,16 @@ mod tests {
                     | "testdata/stdlib_conv/main.yar"
                     | "testdata/stdlib_fs_path/main.yar"
                     | "testdata/stdlib_http/main.yar"
+                    | "testdata/stdlib_http_router/main.yar"
                     | "testdata/stdlib_io/main.yar"
+                    | "testdata/stdlib_json/main.yar"
                     | "testdata/stdlib_net/main.yar"
                     | "testdata/stdlib_process_env/main.yar"
                     | "testdata/stdlib_sort/main.yar"
                     | "testdata/stdlib_strings/main.yar"
                     | "testdata/stdlib_strings_ext/main.yar"
+                    | "testdata/stdlib_time/main.yar"
+                    | "testdata/stdlib_url/main.yar"
                     | "testdata/stdlib_utf8/main.yar"
                     | "testdata/open_ended_slice/main.yar"
                     | "testdata/string_builder/main.yar"
@@ -7110,6 +7181,34 @@ fn main() i32 {
         let first_branch = body.find("  br ").unwrap();
         assert_eq!(body.matches(" = alloca ").count(), 3, "{body}");
         assert!(!body[first_branch..].contains(" = alloca "), "{body}");
+        assert!(
+            body.contains("load atomic i32, ptr @yar_gc_safepoint_requested monotonic"),
+            "{body}"
+        );
+        assert!(body.contains("call void @yar_gc_safepoint()"), "{body}");
+    }
+
+    #[test]
+    fn functions_without_loops_poll_for_collection_on_entry() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn fib(n i32) i32 {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() i32 {
+    return fib(10)
+}
+"#,
+        );
+
+        let body = &ir[ir.find("define i32 @yar.fib(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
         assert!(
             body.contains("load atomic i32, ptr @yar_gc_safepoint_requested monotonic"),
             "{body}"

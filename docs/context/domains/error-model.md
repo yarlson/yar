@@ -99,9 +99,17 @@
   `error.Closed`.
 - HTTP protocol and construction failures belong to `http`: `BadRequest`,
   `BodyTooLarge`, `ExpectationFailed`, `HeaderNotFound`, `HeaderTooLarge`,
-  `HTTPVersionNotSupported`, `InvalidArgument`, `InvalidResponse`, `URITooLong`,
-  `UnsupportedMethod`, and `UnsupportedTransferEncoding`. Transport and handler
-  failures keep their original package-owned identities.
+  `HTTPVersionNotSupported`, `InvalidArgument`, `InvalidResponse`,
+  `PathValueNotFound`, `RouteConflict`, `URITooLong`, `UnsupportedMethod`, and
+  `UnsupportedTransferEncoding`. Transport and handler failures keep their
+  original package-owned identities.
+- URL failures belong to `url`: `InvalidEscape` and `NotFound`.
+- Time failures belong to `time`: `InvalidArgument`, `InvalidFormat`, and
+  `Overflow`. Host clock status `1` maps to `Overflow` and `2` to
+  `InvalidArgument`.
+- JSON failures belong to `json`: `DuplicateName`, `InvalidJSON`,
+  `InvalidNumber`, `InvalidString`, `NotFound`, `OutOfRange`, `TooDeep`, and
+  `TypeMismatch`.
 - Host mapping uses canonical declarations rather than raw error-name strings.
 
 ## Generated Representation

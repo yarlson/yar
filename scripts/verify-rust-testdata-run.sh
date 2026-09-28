@@ -131,6 +131,7 @@ while IFS= read -r fixture; do
     || [ "$fixture" = "testdata/garbage_collection_tasks/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_basic/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_channels/main.yar" ] \
+    || [ "$fixture" = "testdata/concurrency_collection/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_errors/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_fs/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_lifecycle/main.yar" ] \

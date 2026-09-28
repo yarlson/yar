@@ -523,7 +523,8 @@ fn add(a i32, b i32) i32 {
 
 Parameters are positional and explicitly typed.
 
-Function values use explicit function types and anonymous literals:
+Function values use explicit function types. They come from anonymous literals
+or from named functions:
 
 ```
 fn make_adder(base i32) fn(i32) i32 {
@@ -533,11 +534,29 @@ fn make_adder(base i32) fn(i32) i32 {
 }
 ```
 
+```
+fn double(value i32) i32 {
+    return value * 2
+}
+
+fn apply(value i32, transform fn(i32) i32) i32 {
+    return transform(value)
+}
+
+fn main() i32 {
+    return apply(21, double)
+}
+```
+
 Current closure rules:
 
 - function types are written as `fn(T1, T2) R` or `fn(T) !R`
 - anonymous function literals use `fn(...) R { ... }`
 - function values may be stored in locals, passed as parameters, returned, and called
+- a non-generic top-level function name, or an exported `pkg.name`, is a
+  function value of the declared function type; locals with the same name win
+- generic functions, `noreturn` functions, and the entry `main` cannot be used
+  as values
 - closures capture outer locals lexically by value at closure creation time
 - captured outer locals are readable inside a closure but cannot be assigned there
 - captured outer locals are not addressable, so closures cannot mutate captured state indirectly through pointers
@@ -1376,7 +1395,7 @@ import "std/http"
 Public request types:
 
 - `http.Header { pub name str, pub value str }`
-- `http.Request { pub method str, pub target str, pub headers []http.Header, pub body str }`
+- `http.Request { pub method str, pub target str, pub headers []http.Header, pub body str, pub path_values []url.Param }`
 
 Package-owned types with private fields:
 
@@ -1385,6 +1404,8 @@ Package-owned types with private fields:
 - `http.Response` — validated final status, headers, and body
 - `http.Server` — listener and limits
 - `http.Connection` — one accepted connection and its limits
+- `http.Route` — one validated method, path pattern, and handler
+- `http.Router` — a conflict-free set of routes
 
 Construction:
 
@@ -1394,6 +1415,10 @@ Construction:
 - `http.listen(addr net.Addr, limits http.Limits) !http.Server`
 - `http.response(status i32, body str) !http.Response`
 - `http.text(status i32, body str) !http.Response`
+- `http.json(status i32, body str) !http.Response` — sets
+  `content-type: application/json`
+- `http.route(method str, pattern str, handler fn(http.Request) !http.Response) !http.Route`
+- `http.router(routes []http.Route) !http.Router`
 
 Methods:
 
@@ -1401,12 +1426,22 @@ Methods:
   `http.HeaderNotFound`
 - `Request.header_values(name str) ![]str` returns every matching field;
   invalid field names return `http.InvalidArgument`
+- `Request.path() str` returns the target path without the query; for
+  absolute-form targets it drops the scheme and authority
+- `Request.query() !url.Query` parses the target query with `url.parse_query`
+- `Request.path_value(name str) !str` returns a router path parameter or
+  `http.PathValueNotFound`
+- `Response.status() i32`, `Response.body() str`, and
+  `Response.header(name str) !str` read a response, which makes handlers
+  testable without sockets
 - `Response.with_header(name str, value str) !Response` replaces existing
   instances in an independently backed response
 - `Response.add_header(name str, value str) !Response` appends a repeated field
 - `Server.accept() !Connection`, `addr() !net.Addr`, and `close() !void`
 - `Connection.serve(handler fn(Request) !Response) !void`, `local_addr() !net.Addr`,
   `remote_addr() !net.Addr`, and `close() !void`
+- `Router.serve(req Request) !Response` dispatches a request and has the
+  handler shape, so it can be passed to `Connection.serve` through a closure
 
 Example:
 
@@ -1458,21 +1493,213 @@ is rejected. Responses always use `Connection: close`; `HEAD` omits body bytes.
 Package-generated protocol and handler-error responses are bodyless. Protocol,
 handler, and transport failures remain ordinary errors returned to the caller.
 The caller explicitly owns the accept loop, concurrency, cancellation, logging,
-and error policy. A sibling owner can cancel blocked connection I/O with
+and error policy. `http.Server` is share-safe, so a taskgroup can spawn
+several workers that each loop on `accept` for the same server;
+`examples/todo_api` combines such a worker pool with a store task that owns
+shared state behind a channel. A sibling owner can cancel blocked connection I/O with
 `Connection.close`; closing the socket does not interrupt handler computation.
 For `HEAD`, the handler is responsible for returning the metadata and body
 length that the corresponding `GET` would have produced; the serializer omits
 the body bytes.
 
-The package does not provide an HTTP client, routing, TLS, keep-alive,
-pipelining, upgrades, compression, or streaming body APIs.
+Routing:
+
+```yar
+fn get_user(req http.Request) !http.Response {
+    return http.text(200, "user " + req.path_value("id")?)
+}
+
+router := http.router([]http.Route{
+    http.route("GET", "/users/{id}", get_user)?,
+    http.route("GET", "/files/{path...}", serve_file)?,
+})?
+```
+
+A pattern starts with `/`. `{name}` matches one non-empty segment, and a final
+`{name...}` matches the rest of the path, including an empty rest after a
+trailing slash. Other segments are literals of URI path characters without
+`%`, `{`, or `}`; an empty literal may only end a pattern, so `/users` and
+`/users/` are different routes. Parameter names are unique identifiers, and
+methods are case-sensitive HTTP tokens. Invalid methods and patterns return
+`http.InvalidArgument`. Two routes with the same method and the same segment
+shape (ignoring parameter names) return `http.RouteConflict`.
+
+`Router.serve` percent-decodes each path segment and answers a bad escape with
+`400`. Literals match decoded segments; parameters receive decoded segments,
+so `%2F` stays inside one value; a rest value is the decoded remainder. Among
+routes for the request method, the most specific match wins, comparing
+segments left to right: literal before parameter before rest. `HEAD` falls back
+to the matching `GET` route. A path that matches only other methods receives a
+bodyless `405` with `Allow` in registration order (`HEAD` follows `GET`); any
+other path receives a bodyless `404`. The handler receives the request with
+`path_values` filled in. `Router` holds function values, so it is not
+share-safe; build one router per worker task.
+
+The package does not provide an HTTP client, TLS, keep-alive, pipelining,
+upgrades, compression, middleware, or streaming body APIs.
 
 HTTP-owned errors are `http.BadRequest`, `http.BodyTooLarge`,
 `http.ExpectationFailed`, `http.HeaderNotFound`, `http.HeaderTooLarge`,
 `http.HTTPVersionNotSupported`, `http.InvalidArgument`,
-`http.InvalidResponse`, `http.URITooLong`, `http.UnsupportedMethod`, and
+`http.InvalidResponse`, `http.PathValueNotFound`, `http.RouteConflict`,
+`http.URITooLong`, `http.UnsupportedMethod`, and
 `http.UnsupportedTransferEncoding`. Network and handler failures preserve their
 original error identities.
+
+### `url`
+
+```
+import "std/url"
+```
+
+`url` percent-encodes and decodes text and parses
+`application/x-www-form-urlencoded` queries and form bodies.
+
+- `url.Param { pub name str, pub value str }`
+- `url.Query` — ordered query parameters with private fields
+- `url.percent_decode(s str) !str` — replaces `%XX` escapes with bytes; `+`
+  stays `+`; a truncated or non-hex escape returns `url.InvalidEscape`
+- `url.percent_encode(s str) str` — keeps `A-Z a-z 0-9 - . _ ~` and writes
+  every other byte as uppercase `%XX`
+- `url.parse_query(raw str) !url.Query` — splits on `&`, skips empty pairs,
+  splits each pair at the first `=`, turns `+` into a space, and decodes names
+  and values; a pair without `=` has an empty value
+- `Query.get(name str) !str` — first value or `url.NotFound`
+- `Query.values(name str) []str` — every value in order
+- `Query.params() []url.Param` — a copy of every pair in order
+
+### `json`
+
+```
+import "std/json"
+```
+
+`json` represents JSON as an explicit value tree:
+
+```yar
+pub enum Value {
+    Null
+    Bool { value bool }
+    Number { text str }
+    String { value str }
+    Array { items []Value }
+    Object { members []Member }
+}
+
+pub struct Member {
+    pub name str
+    pub value Value
+}
+```
+
+Functions:
+
+- `json.parse(text str) !json.Value`
+- `json.encode(value json.Value) !str` — compact output in member order
+- `json.int(value i64) json.Value`
+- `json.number(text str) !json.Value` — validates JSON number text
+- `json.get(value json.Value, name str) !json.Value`
+- `json.is_null(value json.Value) bool`
+- `json.as_bool`, `json.as_str`, `json.as_i64`, `json.as_i32`,
+  `json.as_array`, and `json.as_object` return the typed payload
+
+Example:
+
+```yar
+body := json.parse(req.body)?
+title := json.as_str(json.get(body, "title")?)?
+reply := json.Value.Object([]json.Member{
+    json.Member{name: "title", value: json.Value.String(title)},
+})
+return http.json(201, json.encode(reply)?)
+```
+
+Numbers keep their validated source text, so large integers and decimals stay
+exact. `as_i64` and `as_i32` accept only in-range integer text without a
+fraction or exponent and otherwise return `json.OutOfRange`.
+
+`parse` accepts one value with surrounding JSON whitespace and rejects invalid
+UTF-8, raw control characters, lone surrogate escapes, leading zeros, and
+trailing content with `json.InvalidJSON`. Duplicate object names return
+`json.DuplicateName`. Nesting deeper than 128 arrays or objects returns
+`json.TooDeep`.
+
+`encode` escapes `"`, `\`, and control characters and writes other UTF-8
+unchanged. It validates caller-built values: invalid number text returns
+`json.InvalidNumber`, invalid UTF-8 returns `json.InvalidString`, duplicate
+names return `json.DuplicateName`, and nesting deeper than 128 returns
+`json.TooDeep`.
+
+`get` returns `json.NotFound` for a missing member. Accessors return
+`json.TypeMismatch` when the value has a different kind.
+
+### `time`
+
+```
+import "std/time"
+```
+
+`time` keeps three domains nominally distinct. Their fields are private, so
+values come only from the package's functions:
+
+- `time.Timestamp` — wall-clock signed Unix nanoseconds (about years 1677
+  through 2262)
+- `time.Instant` — process-local monotonic reading; never persist or compare
+  across processes
+- `time.Duration` — signed nanosecond span
+- `time.Date { pub year, pub month, pub day, pub hour, pub minute, pub second, pub nanosecond, pub weekday i32 }`
+  — UTC decomposition; `weekday` is `0` for Sunday
+
+Clocks and sleep:
+
+- `time.now() !time.Timestamp`
+- `time.instant() time.Instant`
+- `time.sleep(duration time.Duration) !void` — blocks the calling native task
+  thread for at least the span; negative spans return `time.InvalidArgument`
+
+Durations:
+
+- `time.nanoseconds(value i64) time.Duration`
+- `time.microseconds`, `time.milliseconds`, `time.seconds`, `time.minutes`,
+  and `time.hours` take `i64` and return `!time.Duration`; multiplication is
+  checked and returns `time.Overflow` instead of wrapping
+- `time.duration_nanoseconds(value time.Duration) i64`
+
+Timestamps and instants:
+
+- `time.timestamp_from_unix_nanoseconds(value i64) time.Timestamp` and
+  `time.timestamp_unix_nanoseconds(value time.Timestamp) i64`
+- `time.timestamp_add`, `time.timestamp_subtract`, and
+  `time.timestamp_difference(left, right)` (`left - right`, possibly negative)
+  return `time.Overflow` when the result does not fit
+- `time.timestamp_before` and `time.timestamp_equal`
+- `time.instant_difference(later, earlier) !time.Duration` returns
+  `time.InvalidArgument` when `later` precedes `earlier`
+- `time.instant_before` and `time.instant_equal`
+
+UTC calendar and RFC 3339:
+
+- `time.utc_date(value time.Timestamp) time.Date`
+- `time.from_utc(year, month, day, hour, minute, second, nanosecond i32) !time.Timestamp`
+  validates every field strictly (no leap seconds, no `24:00:00`, no
+  normalization) and returns `time.InvalidArgument` or `time.Overflow`
+- `time.format_rfc3339(value time.Timestamp) str` writes UTC with `Z` and up to
+  nine fractional digits without trailing zeros
+- `time.parse_rfc3339(value str) !time.Timestamp` requires
+  `YYYY-MM-DDTHH:MM:SS`, an optional `.` with one to nine digits, and `Z` or
+  `+HH:MM`/`-HH:MM`; uppercase `T` and `Z` only; `-00:00` is rejected.
+  Malformed text returns `time.InvalidFormat`; results outside the range
+  return `time.Overflow`
+
+```yar
+start := time.instant()
+created := time.format_rfc3339(time.now()?)
+elapsed := time.instant_difference(time.instant(), start)?
+print(created + " in " + to_str(time.duration_nanoseconds(elapsed)) + "ns\n")
+```
+
+Local and named timezones, timers, tickers, and cancellable sleep are not
+provided.
 
 ### `testing`
 

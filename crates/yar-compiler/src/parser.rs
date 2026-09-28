@@ -112,6 +112,7 @@ impl Parser {
             fields: Vec::new(),
         };
         while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+            let start = self.index;
             let exported = if self.at(Kind::Pub) {
                 self.advance();
                 true
@@ -126,6 +127,7 @@ impl Parser {
                 name_pos: field_name.pos,
                 type_ref: field_type,
             });
+            self.advance_if_stalled(start);
         }
         self.expect(Kind::RBrace, "expected '}' after struct body");
         decl
@@ -144,6 +146,7 @@ impl Parser {
             methods: Vec::new(),
         };
         while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+            let start = self.index;
             let method_name = self.expect(Kind::Ident, "expected interface method name");
             self.expect(Kind::LParen, "expected '(' after interface method name");
             let params = self.parse_param_list();
@@ -155,6 +158,7 @@ impl Parser {
                 return_type,
                 return_is_bang,
             });
+            self.advance_if_stalled(start);
         }
         self.expect(Kind::RBrace, "expected '}' after interface body");
         decl
@@ -173,6 +177,7 @@ impl Parser {
             cases: Vec::new(),
         };
         while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+            let case_start = self.index;
             let case_name = self.expect(Kind::Ident, "expected enum case name");
             let mut enum_case = EnumCaseDecl {
                 name: case_name.text,
@@ -182,6 +187,7 @@ impl Parser {
             if self.at(Kind::LBrace) {
                 self.advance();
                 while !self.at(Kind::RBrace) && !self.at(Kind::Eof) {
+                    let field_start = self.index;
                     if self.at(Kind::Pub) {
                         self.error_current(
                             "enum payload fields are inherently public and do not accept 'pub'",
@@ -196,10 +202,12 @@ impl Parser {
                         name_pos: field_name.pos,
                         type_ref: field_type,
                     });
+                    self.advance_if_stalled(field_start);
                 }
                 self.expect(Kind::RBrace, "expected '}' after enum payload");
             }
             decl.cases.push(enum_case);
+            self.advance_if_stalled(case_start);
         }
         self.expect(Kind::RBrace, "expected '}' after enum body");
         decl
@@ -1311,6 +1319,12 @@ impl Parser {
         }
     }
 
+    fn advance_if_stalled(&mut self, start: usize) {
+        if self.index == start {
+            self.advance();
+        }
+    }
+
     fn expect(&mut self, kind: Kind, message: &str) -> Token {
         let tok = self.current();
         if tok.kind != kind {
@@ -1443,6 +1457,25 @@ enum Value {
                 .collect::<Vec<_>>(),
             vec!["enum payload fields are inherently public and do not accept 'pub'"]
         );
+    }
+
+    #[test]
+    fn reports_unexpected_tokens_in_declaration_bodies_without_stalling() {
+        for source in [
+            "package main\n\nstruct S { a i32, b i32 }\n",
+            "package main\n\ninterface I { a() i32, b() i32 }\n",
+            "package main\n\nenum E { A, B }\n",
+            "package main\n\nenum E { A { a i32, b i32 } }\n",
+        ] {
+            let (_, diagnostics) = parse(source);
+
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.ends_with("got ,")),
+                "source: {source:?}\ndiagnostics: {diagnostics:?}"
+            );
+        }
     }
 
     #[test]

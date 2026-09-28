@@ -229,6 +229,9 @@ fn make_adder(base i32) fn(i32) i32 {
 
 - Capture by value (read-only inside closure)
 - Function types: `fn(T1, T2) R` or `fn(T) !R`
+- Named non-generic functions are values: `apply(xs, double)`,
+  `upper := strings.to_upper`; locals shadow function names; generic and
+  `noreturn` functions cannot be values
 
 ## Generics
 
@@ -744,17 +747,27 @@ Errors: `net.ConnectionRefused`, `net.Timeout`, `net.AddrInUse`,
 
 ```
 Header { pub name str, pub value str }
-Request { pub method str, pub target str, pub headers []Header, pub body str }
-Limits, Response, Server, Connection // package-owned private fields
+Request { pub method str, pub target str, pub headers []Header, pub body str, pub path_values []url.Param }
+Limits, Response, Server, Connection, Route, Router // package-owned private fields
 
 default_limits() Limits
 limits(max_head, max_body, read_ms, write_ms) !Limits
 listen(net.Addr, Limits) !Server
 response(status, body) !Response
 text(status, body) !Response
+json(status, body) !Response        // content-type: application/json
+route(method, pattern, fn(Request) !Response) !Route
+router([]Route) !Router
 
 Request.header(name) !str
 Request.header_values(name) ![]str
+Request.path() str
+Request.query() !url.Query
+Request.path_value(name) !str       // http.PathValueNotFound
+Response.status() i32
+Response.body() str
+Response.header(name) !str
+Router.serve(Request) !Response
 Response.with_header(name, value) !Response
 Response.add_header(name, value) !Response
 Server.accept() !Connection
@@ -773,8 +786,92 @@ framing, invalid authorities/target forms, malformed chunk extensions, response
 splitting, unsupported expectations/codings, and missing/duplicate `Host` are
 rejected. Absolute-form target authority replaces the received Host value.
 Automatic error responses are bodyless. The caller owns the accept loop,
-concurrency, cancellation, logging, and error policy. No client, routing, TLS,
-keep-alive, upgrades, compression, or streaming body API is included.
+concurrency, cancellation, logging, and error policy. `http.Server` is
+share-safe: spawn several workers that each `accept` on it. No client, TLS,
+keep-alive, upgrades, compression, middleware, or streaming body API is
+included.
+
+Routing: patterns start with `/`; `{name}` matches one non-empty decoded
+segment; a final `{name...}` matches the decoded rest (possibly empty after a
+trailing slash); literals match exactly and trailing slashes are significant.
+Most specific wins (literal > `{name}` > `{name...}`, left to right). `HEAD`
+falls back to `GET`. Path matches with the wrong method get `405` + `Allow`;
+misses get `404`; bad escapes get `400`. Invalid patterns/methods return
+`http.InvalidArgument`; same method + same shape returns `http.RouteConflict`.
+`Router` holds function values and is not share-safe: build one per worker.
+
+```yar
+fn get_user(req http.Request) !http.Response {
+    return http.text(200, "user " + req.path_value("id")?)
+}
+
+router := http.router([]http.Route{
+    http.route("GET", "/users/{id}", get_user)?,
+})?
+connection.serve(fn(req http.Request) !http.Response {
+    return router.serve(req)
+})?
+```
+
+### url
+
+```
+Param { pub name str, pub value str }
+Query                                  // private ordered pairs
+percent_decode(s) !str                 // %XX -> byte; '+' kept; url.InvalidEscape
+percent_encode(s) str                  // keeps A-Z a-z 0-9 - . _ ~
+parse_query(raw) !Query                // '&' pairs, first '=', '+' -> space
+Query.get(name) !str                   // first value or url.NotFound
+Query.values(name) []str
+Query.params() []Param
+```
+
+### json
+
+```
+enum Value { Null, Bool{value bool}, Number{text str}, String{value str},
+             Array{items []Value}, Object{members []Member} }
+Member { pub name str, pub value Value }
+
+parse(text) !Value     // strict; json.InvalidJSON, DuplicateName, TooDeep (>128)
+encode(Value) !str     // compact; InvalidNumber, InvalidString, DuplicateName, TooDeep
+int(i64) Value
+number(text) !Value    // json.InvalidNumber
+get(Value, name) !Value            // json.NotFound, json.TypeMismatch
+is_null(Value) bool
+as_bool / as_str / as_i64 / as_i32 / as_array / as_object  // json.TypeMismatch
+```
+
+Numbers keep validated text; `as_i64`/`as_i32` need integer text in range,
+else `json.OutOfRange`. Build values with enum constructors:
+`json.Value.String("x")`, `json.Value.Array([]json.Value{...})`.
+
+### time
+
+```
+Timestamp, Instant, Duration   // private fields; nominal domains
+Date { pub year, month, day, hour, minute, second, nanosecond, weekday i32 }
+
+now() !Timestamp                 // time.Overflow
+instant() Instant                // monotonic, process-local
+sleep(Duration) !void            // time.InvalidArgument if negative
+nanoseconds(i64) Duration
+microseconds/milliseconds/seconds/minutes/hours(i64) !Duration  // time.Overflow
+duration_nanoseconds(Duration) i64
+timestamp_from_unix_nanoseconds(i64) Timestamp
+timestamp_unix_nanoseconds(Timestamp) i64
+timestamp_add/subtract(Timestamp, Duration) !Timestamp
+timestamp_difference(left, right) !Duration     // left - right
+timestamp_before/equal(Timestamp, Timestamp) bool
+instant_difference(later, earlier) !Duration    // InvalidArgument if reversed
+instant_before/equal(Instant, Instant) bool
+utc_date(Timestamp) Date
+from_utc(y, mo, d, h, mi, s, ns i32) !Timestamp // strict; InvalidArgument, Overflow
+format_rfc3339(Timestamp) str                    // UTC "Z", trimmed fraction
+parse_rfc3339(str) !Timestamp                    // Z or ±HH:MM; InvalidFormat, Overflow
+```
+
+UTC only: no local/named timezones, timers, or cancellable sleep.
 
 ### testing
 

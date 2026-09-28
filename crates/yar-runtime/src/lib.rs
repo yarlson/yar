@@ -7,6 +7,7 @@ mod memory;
 mod net;
 mod string;
 mod string_builder;
+mod time;
 
 use std::io::{self, Write};
 use std::ptr;
@@ -569,6 +570,29 @@ pub extern "C" fn yar_net_set_read_deadline_after(conn: i64, millis: i32) -> i32
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_net_set_write_deadline_after(conn: i64, millis: i32) -> i32 {
     net::set_write_deadline_after(conn, millis)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_time_now_unix_nanoseconds(out: *mut i64) -> i32 {
+    require_abi_out(out);
+    match time::now_unix_nanoseconds() {
+        Some(value) => {
+            write_abi_out(out, value);
+            time::STATUS_OK
+        }
+        None => time::STATUS_OVERFLOW,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_time_instant_nanoseconds() -> i64 {
+    time::instant_nanoseconds()
+        .unwrap_or_else(|| runtime_fail(b"runtime failure: monotonic clock range exhausted\n"))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_time_sleep_nanoseconds(nanoseconds: i64) -> i32 {
+    time::sleep_nanoseconds(nanoseconds)
 }
 
 #[unsafe(no_mangle)]

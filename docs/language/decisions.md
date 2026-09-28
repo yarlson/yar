@@ -187,8 +187,8 @@ Codegen passes each allocation's pointer layout, so the runtime traces heap
 objects precisely and never scans pointer-free data. Thread stacks stay
 conservative, which keeps code generation free of stack maps and GC-aware
 calling conventions, and in turn keeps the collector non-moving. Every thread
-running Yar code stops at allocation, loop, or blocking-operation safepoints,
-so collection continues while tasks run.
+running Yar code stops at allocation, function-entry, loop, or
+blocking-operation safepoints, so collection continues while tasks run.
 
 ### Boolean operators are short-circuiting
 
@@ -285,6 +285,17 @@ YAR supports anonymous function literals and first-class function types.
 Closures capture outer locals lexically by value, calls through function
 values are explicit, and captured outer bindings are read-only inside closure
 bodies in the current implementation.
+
+### Named functions are values
+
+Status: accepted
+
+A non-generic top-level function, or an exported `pkg.name`, can be used as a
+value of its declared function type. Lowering turns each reference into a
+capture-free forwarding literal, so closures remain the only function-value
+representation. Callback-heavy APIs such as route tables name handlers
+directly instead of repeating their signatures. Generic and `noreturn`
+functions are rejected until the language can express them as values.
 
 ### Interfaces
 
@@ -420,7 +431,8 @@ Status: accepted
 The compiler embeds a standard library written in Yar. Its packages use the
 reserved import paths `std/strings`, `std/utf8`, `std/conv`, `std/sort`,
 `std/path`, `std/fs`, `std/io`, `std/process`, `std/env`, `std/stdio`,
-`std/net`, `std/http`, and `std/testing`. Direct and stdlib-internal imports
+`std/net`, `std/http`, `std/url`, `std/json`, `std/time`, and
+`std/testing`. Direct and stdlib-internal imports
 resolve only to the embedded stdlib origin and cannot be shadowed by project or
 dependency sources.
 
@@ -434,8 +446,48 @@ cancellation, logging, and error policy. Each served connection incrementally
 parses one strict HTTP/1.1 request under explicit byte limits and fixed
 deadlines, writes one validated response, and closes. The package supports
 bounded `Content-Length` and chunked bodies while rejecting ambiguous framing
-and response splitting. HTTP clients, routing, TLS, keep-alive, and streaming
-bodies require separate designs.
+and response splitting. HTTP clients, TLS, keep-alive, and streaming bodies
+require separate designs.
+
+### HTTP routing is declarative and strict
+
+Status: accepted
+
+Routes are values built by `http.route` and validated together by
+`http.router`, which rejects conflicting shapes up front. Patterns use
+`{name}` and a final `{name...}`, match percent-decoded segments, keep trailing
+slashes significant, and pick the most specific literal-first match. The router
+answers `404`, `405` with `Allow`, and bad escapes itself, and `Router.serve`
+has the handler shape so it composes with `Connection.serve` without a
+framework layer. Middleware and extractors are left to plain functions.
+
+### JSON is an explicit value tree
+
+Status: accepted
+
+Without reflection, `std/json` models documents as a public `json.Value` enum.
+Programs convert between their own types and values with ordinary code.
+Numbers keep validated text because Yar has no floating-point type and text is
+exact. Parsing is strict, rejects duplicate names, and bounds nesting at 128;
+encoding validates caller-built values the same way.
+
+### Time values keep domains nominal and UTC-only
+
+Status: accepted
+
+`std/time` separates wall-clock `Timestamp`, process-local `Instant`, and
+`Duration` as package-owned structs, so cross-domain arithmetic is a type
+error. Arithmetic is checked instead of wrapping. Only the wall clock, the
+monotonic clock, and sleep are host intrinsics; calendar conversion and RFC
+3339 text are deterministic Yar code. Local and named timezones, timers, and
+cancellable sleep need separate designs and never mutate process-global `TZ`.
+
+### URL decoding is shared stdlib policy
+
+Status: accepted
+
+`std/url` owns percent-encoding and ordered form-query parsing so the router,
+handlers, and form bodies share one strict decoder.
 
 ### Text and UTF-8 helpers
 
@@ -557,7 +609,7 @@ not revive this withdrawn contract.
 Status: withdrawn
 
 The routing proposal depended on the removed server contract. Its routing model
-was not independently rejected; a new routing proposal may now build on the
+was not independently rejected. Proposal 0034 now provides routing on the
 bounded server connection API without reviving the withdrawn design.
 
 ---

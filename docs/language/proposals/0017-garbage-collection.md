@@ -112,7 +112,8 @@ would require a separate proposal.
     `{ i64 stride, i64 count, [count x i64] offsets }` computed from the
     compiler's own type layout; pointer-free layouts pass `null`
   - every `alloca` is placed in the entry block, so loops reuse stack slots
-  - each loop condition polls `yar_gc_safepoint_requested` and calls
+  - each function entry and loop condition polls
+    `yar_gc_safepoint_requested` and calls
     `yar_gc_safepoint()` when a collection is pending
   - channel and taskgroup constructors pass their element descriptor
 - runtime impact: high
@@ -122,8 +123,8 @@ would require a separate proposal.
     allocation
   - lock-free thread-local allocation from an owned page per size class
   - every Yar thread is a registered mutator; collection stops all of them at
-    allocation, loop, or blocking-operation safepoints after spilling
-    callee-saved registers, then scans every stack conservatively
+    allocation, function-entry, loop, or blocking-operation safepoints after
+    spilling callee-saved registers, then scans every stack conservatively
   - heap tracing follows descriptors precisely; marking is parallel when the
     previous live heap was at least 8 MiB
   - sweeping swaps mark bits into live bits during the pause; empty pages are
@@ -208,8 +209,9 @@ until the taskgroup is joined.
 
 Implementation evidence: the runtime memory tests cover reachability, interior
 pointers, precise descriptors, finalizers, slot reuse, allocation-pressure
-collection, and scanning a blocked thread's stack; codegen tests cover
-descriptor emission, entry-block stack slots, and loop safepoint polls; the
+collection, scanning a blocked thread's stack, and collecting while a thread
+is blocked in a file read; codegen tests cover descriptor emission,
+entry-block stack slots, and function-entry and loop safepoint polls; the
 fixture runner executes the collection and concurrency fixtures under a 1 KiB
 budget.
 

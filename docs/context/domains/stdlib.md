@@ -331,11 +331,13 @@ Pure-Yar bounded HTTP/1.1 server handling over `net`.
 Public types:
 
 - `Header { pub name str, pub value str }`
-- `Request { pub method str, pub target str, pub headers []Header, pub body str }`
+- `Request { pub method str, pub target str, pub headers []Header, pub body str, pub path_values []url.Param }`
 - `Limits` — validated private framing and deadline limits
 - `Response` — validated private status, headers, and body
 - `Server` — private typed listener plus limits
 - `Connection` — private typed connection plus limits
+- `Route` — private validated method, pattern segments, and handler
+- `Router` — private conflict-free route list
 
 Functions:
 
@@ -344,10 +346,16 @@ Functions:
 - `listen(addr net.Addr, limits Limits) !Server`
 - `response(status i32, body str) !Response`
 - `text(status i32, body str) !Response`
+- `json(status i32, body str) !Response`
+- `route(method str, pattern str, handler fn(Request) !Response) !Route`
+- `router(routes []Route) !Router`
 
 Methods:
 
 - `Request.header(name) !str` and `header_values(name) ![]str`
+- `Request.path() str`, `query() !url.Query`, and `path_value(name) !str`
+- `Response.status() i32`, `body() str`, and `header(name) !str`
+- `Router.serve(req Request) !Response`
 - `Response.with_header(name, value) !Response` replaces a field
 - `Response.add_header(name, value) !Response` preserves repeated fields
 - `Server.accept() !Connection`, `addr() !net.Addr`, and `close() !void`
@@ -364,9 +372,46 @@ and remain visible to the caller as package-owned errors.
 Response framing belongs to the package; application headers cannot override
 `Content-Length`, transfer coding, connection, trailer, or upgrade fields.
 
+The router (`router.yar`) splits `Request.path()` into percent-decoded
+segments, filters routes by method (`HEAD` falls back to `GET`), and picks the
+most specific match by comparing segment kinds left to right: literal, then
+`{name}`, then a final `{name...}`. Path-only matches produce `405` with
+`Allow`; other misses produce `404`; bad escapes produce `400`. `router`
+rejects routes with the same method and segment shape. Routers hold function
+values and are not share-safe.
+
 The caller owns the accept loop, concurrency, cancellation, logging, and error
-policy. HTTP clients, routing, TLS, keep-alive, upgrades, compression, and
+policy. HTTP clients, TLS, keep-alive, upgrades, compression, middleware, and
 streaming body APIs are not part of the package.
+
+### `url`
+
+Pure-Yar percent-encoding and form-query parsing: `percent_decode`,
+`percent_encode`, and `parse_query` returning an ordered `Query` with `get`,
+`values`, and `params`. Errors are `url.InvalidEscape` and `url.NotFound`.
+
+### `json`
+
+Pure-Yar JSON as the public enum `Value` (`Null`, `Bool`, `Number` with
+validated text, `String`, `Array`, `Object` with ordered `Member`s). `parse`
+is a strict recursive-descent parser over byte offsets with a nesting limit of
+128; `encode` writes compact JSON through a string builder and validates
+caller-built numbers, UTF-8, duplicate names, and depth. Accessors (`get`,
+`as_*`, `is_null`) and constructors (`int`, `number`) report
+`json.TypeMismatch`, `json.NotFound`, `json.OutOfRange`, or
+`json.InvalidNumber`.
+
+### `time`
+
+Nominal `Timestamp`, `Instant`, and `Duration` structs with private `i64`
+nanosecond fields, plus the transparent UTC `Date`. Three private host
+intrinsics (`now_unix_nanoseconds`, `instant_nanoseconds`,
+`sleep_nanoseconds`) back `now`, `instant`, and `sleep`; everything else is
+pure Yar: checked `i64` arithmetic, floor division, Hinnant civil-day
+conversion, strict field validation, and fixed-width RFC 3339 text. Negative
+timestamps with fractions convert through `seconds + 1` so the earliest
+representable nanosecond does not overflow. Errors are `time.InvalidArgument`,
+`time.InvalidFormat`, and `time.Overflow`.
 
 ### `testing`
 

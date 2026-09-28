@@ -35,6 +35,7 @@ $env:YAR_GC_HEAP_TARGET_BYTES = "1024"
 $fixtures = @(
     @{ Name = "concurrency_basic"; Expected = "4`n9" },
     @{ Name = "concurrency_channels"; Expected = "13" },
+    @{ Name = "concurrency_collection"; Expected = "collection ok" },
     @{ Name = "concurrency_errors"; Expected = "1`nerror.Zero" },
     @{ Name = "concurrency_fs"; Expected = "hello`nhello" },
     @{ Name = "concurrency_lifecycle"; Expected = "251000" },
@@ -42,7 +43,8 @@ $fixtures = @(
     @{ Name = "garbage_collection"; Expected = "142000" },
     @{ Name = "garbage_collection_tasks"; Expected = "tasks ok" },
     @{ Name = "stdlib_http"; Expected = "http ok" },
-    @{ Name = "stdlib_net"; Expected = "net ok" }
+    @{ Name = "stdlib_net"; Expected = "net ok" },
+    @{ Name = "stdlib_time"; Expected = "time ok" }
 )
 
 foreach ($fixture in $fixtures) {

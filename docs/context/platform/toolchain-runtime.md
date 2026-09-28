@@ -149,8 +149,9 @@
   per distinct layout; the runtime keeps its own static descriptors for maps,
   channel tokens, string arrays, and directory entries, and uses a one-word
   layout that visits every aligned word when it does not know a layout.
-- `yar_gc_safepoint_requested` is an exported 32-bit flag. Generated loops load
-  it once per iteration and call `yar_gc_safepoint(void)` when it is non-zero.
+- `yar_gc_safepoint_requested` is an exported 32-bit flag. Generated functions
+  load it on entry and once per loop iteration, and call
+  `yar_gc_safepoint(void)` when it is non-zero.
 - `yar_gc_collect(void)` runs a full stop-the-world collection from a
   registered thread.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
@@ -172,9 +173,9 @@
   lock, and allocation pacing is counted per page rather than per object.
 - Every thread that runs Yar code is a registered mutator. A collection sets the
   safepoint flag and waits until every mutator is stopped: at an allocation,
-  at a loop safepoint, or inside a blocking runtime operation such as a channel
-  wait, task join, socket wait, file or process I/O, or contended resource-lock
-  acquisition. Stopped threads publish the low end of their spilled frame.
+  at a function-entry or loop safepoint, or inside a blocking runtime operation
+  such as a channel wait, task join, socket wait, file or process I/O, or
+  contended resource-lock acquisition. Stopped threads publish the low end of their spilled frame.
 - Roots are the aligned words of every stopped thread's stack, including
   spilled registers, plus explicit runtime roots for spawned task contexts and
   pending task results. Heap objects are traced precisely from their
@@ -406,6 +407,21 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   contract through adaptive polling of readiness, close state, and
   operation-local timeouts. Windows runtime bundles include `ws2_32` in the
   Rust static library's ordered native-library contract.
+
+### Time Runtime
+
+- `yar_time_now_unix_nanoseconds(int64_t *out)` reads the wall clock as signed
+  Unix nanoseconds and returns status `0`, or `1` when the value does not fit
+  `i64`. A null output pointer is a runtime failure.
+- `yar_time_instant_nanoseconds(void)` returns monotonic nanoseconds since a
+  process-local origin that is initialized thread-safely on first use; range
+  exhaustion terminates with `runtime failure: monotonic clock range
+  exhausted`.
+- `yar_time_sleep_nanoseconds(int64_t nanoseconds)` blocks the calling native
+  thread for at least the span and returns `0`, or `2` for a negative span.
+- Status codes map in code generation to `time.Overflow` and
+  `time.InvalidArgument`. The implementation uses Rust `SystemTime`,
+  `Instant`, and `thread::sleep`.
 
 ### Map Runtime
 

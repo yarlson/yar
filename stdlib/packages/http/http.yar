@@ -10,6 +10,8 @@ pub error HeaderTooLarge
 pub error HTTPVersionNotSupported
 pub error InvalidArgument
 pub error InvalidResponse
+pub error PathValueNotFound
+pub error RouteConflict
 pub error URITooLong
 pub error UnsupportedMethod
 pub error UnsupportedTransferEncoding

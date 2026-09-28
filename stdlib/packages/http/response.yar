@@ -24,6 +24,32 @@ pub fn text(status i32, body str) !Response {
     return out.with_header("content-type", "text/plain; charset=utf-8")
 }
 
+pub fn json(status i32, body str) !Response {
+    out := response(status, body)?
+    return out.with_header("content-type", "application/json")
+}
+
+pub fn (r Response) status() i32 {
+    return r.status
+}
+
+pub fn (r Response) body() str {
+    return r.body
+}
+
+pub fn (r Response) header(name str) !str {
+    if !valid_field_name(name) {
+        return error.InvalidArgument
+    }
+    normalized := strings.to_lower(name)
+    for i := 0; i < len(r.headers); i += 1 {
+        if r.headers[i].name == normalized {
+            return r.headers[i].value
+        }
+    }
+    return error.HeaderNotFound
+}
+
 pub fn (r Response) with_header(name str, value str) !Response {
     header := response_header(name, value)?
     headers := []Header{}

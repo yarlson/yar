@@ -176,7 +176,10 @@ operand width. Invalid division and remainder terminate deterministically.
 | `env`     | Environment variable lookup                           |
 | `stdio`   | Stderr output                                         |
 | `net`     | TCP networking and stream wrappers                    |
-| `http`    | Bounded HTTP/1.1 server connections                    |
+| `http`    | Bounded HTTP/1.1 server connections and routing       |
+| `url`     | Percent-encoding and query/form parsing               |
+| `json`    | JSON parsing and encoding                             |
+| `time`    | Clocks, durations, sleep, UTC and RFC 3339            |
 | `testing` | Test assertions and framework                         |
 
 `std/http` keeps server control flow explicit: applications create a bounded
@@ -186,7 +189,24 @@ fixed deadlines stop slow clients, and response headers cannot inject or
 override connection framing.
 
 See [`examples/http_server`](examples/http_server/) for a minimal sequential
-service. Applications choose and bound their own concurrency policy.
+service. Applications choose and bound their own concurrency policy;
+[`examples/todo_api`](examples/todo_api/) is a JSON API with routing, a worker
+pool, and a store task that owns shared state behind a channel.
+
+Routes name handlers directly and receive decoded path parameters:
+
+```yar
+fn get_todo(req http.Request) !http.Response {
+    body := json.Value.Object([]json.Member{
+        json.Member{name: "id", value: json.Value.String(req.path_value("id")?)},
+    })
+    return http.json(200, json.encode(body)?)
+}
+
+router := http.router([]http.Route{
+    http.route("GET", "/todos/{id}", get_todo)?,
+})?
+```
 
 ```yar
 package main

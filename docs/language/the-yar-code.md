@@ -160,7 +160,8 @@ boundaries, not as a replacement for clear concrete data types.
 **XI. Closures capture by value.**
 Function literals capture outer locals at creation time, by value. The captured
 values are read-only inside the closure. If you need a closure to observe later
-changes, pass a pointer explicitly.
+changes, pass a pointer explicitly. A named function is also a value, so pass
+`handler` instead of wrapping it in a literal that only forwards its arguments.
 
 ```
 fn make_adder(base i32) fn(i32) i32 {
@@ -172,7 +173,8 @@ fn make_adder(base i32) fn(i32) i32 {
 
 **XII. Use the stdlib before writing your own.**
 The embedded standard library covers strings, UTF-8, conversions, sorting,
-paths, filesystem, process execution, environment, and stderr. Stdlib packages
+paths, filesystem, process execution, environment, stderr, TCP networking,
+HTTP serving and routing, URL and query decoding, JSON, and time. Stdlib packages
 use compiler-owned `std/...` paths and cannot be shadowed. Same-named bare user
 packages remain separate packages.
 
