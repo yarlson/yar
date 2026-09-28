@@ -5,57 +5,44 @@
 #include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-typedef void (*yar_gc_root_visitor)(uintptr_t candidate, void *context);
+typedef void (*yar_gc_spilled_fn)(void *context, void *stack_low);
+typedef void (*yar_gc_range_fn)(uintptr_t low, uintptr_t high, void *context);
 
-static void yar_gc_visit_range(const unsigned char *start,
-                               const unsigned char *end,
-                               yar_gc_root_visitor visitor,
-                               void *context) {
-    uintptr_t low = (uintptr_t)start;
-    uintptr_t high = (uintptr_t)end;
-    if (low > high) {
-        uintptr_t swap = low;
-        low = high;
-        high = swap;
-    }
-
-    if (high - low < sizeof(uintptr_t)) {
-        return;
-    }
-    uintptr_t last = high - sizeof(uintptr_t);
-    for (uintptr_t cursor = low;; cursor++) {
-        uintptr_t candidate = 0;
-        memcpy(&candidate, (const void *)cursor, sizeof(candidate));
-        if (candidate != 0) {
-            visitor(candidate, context);
-        }
-        if (cursor == last) {
-            break;
-        }
+void yar_gc_spill_registers_and_call(yar_gc_spilled_fn fn, void *context) {
+    jmp_buf registers;
+#if defined(__GNUC__) || defined(__clang__)
+    __builtin_unwind_init();
+#endif
+    if (setjmp(registers) == 0) {
+        fn(context, (void *)&registers);
     }
 }
 
+void *yar_gc_thread_stack_top(void *marker) {
 #ifdef _WIN32
-static void yar_gc_visit_stack_range(const unsigned char *start,
-                                     const unsigned char *end,
-                                     yar_gc_root_visitor visitor,
-                                     void *context) {
-    (void)end;
     ULONG_PTR stack_low = 0;
     ULONG_PTR stack_high = 0;
     GetCurrentThreadStackLimits(&stack_low, &stack_high);
-    uintptr_t low = (uintptr_t)start;
-    uintptr_t high = (uintptr_t)stack_high;
-    if (low < (uintptr_t)stack_low || low >= high) {
+    (void)marker;
+    return (void *)stack_high;
+#else
+    return marker;
+#endif
+}
+
+void yar_gc_for_each_readable_range(uintptr_t low,
+                                    uintptr_t high,
+                                    yar_gc_range_fn fn,
+                                    void *context) {
+    if (low >= high) {
         return;
     }
-
+#ifdef _WIN32
     uintptr_t cursor = low;
     while (cursor < high) {
         MEMORY_BASIC_INFORMATION region;
@@ -71,41 +58,11 @@ static void yar_gc_visit_stack_range(const unsigned char *start,
         uintptr_t readable_end = high < region_end ? high : region_end;
         if (region.State == MEM_COMMIT &&
             (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0) {
-            yar_gc_visit_range((const unsigned char *)readable_start,
-                               (const unsigned char *)readable_end,
-                               visitor,
-                               context);
+            fn(readable_start, readable_end, context);
         }
         cursor = region_end;
     }
-}
 #else
-static void yar_gc_visit_stack_range(const unsigned char *start,
-                                     const unsigned char *end,
-                                     yar_gc_root_visitor visitor,
-                                     void *context) {
-    yar_gc_visit_range(start, end, visitor, context);
-}
+    fn(low, high, context);
 #endif
-
-void yar_gc_visit_stack_and_registers(const void *stack_top,
-                                      yar_gc_root_visitor visitor,
-                                      void *context) {
-    jmp_buf registers;
-    volatile unsigned char stack_marker = 0;
-
-    if (stack_top == NULL || visitor == NULL) {
-        return;
-    }
-
-    if (setjmp(registers) == 0) {
-        yar_gc_visit_range((const unsigned char *)&registers,
-                           (const unsigned char *)&registers + sizeof(registers),
-                           visitor,
-                           context);
-        yar_gc_visit_stack_range((const unsigned char *)&stack_marker,
-                                 (const unsigned char *)stack_top,
-                                 visitor,
-                                 context);
-    }
 }

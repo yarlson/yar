@@ -77,10 +77,7 @@ impl Operations {
     fn wait(&self) {
         let mut active = self.active.lock().unwrap_or_else(|err| err.into_inner());
         while *active != 0 {
-            active = self
-                .idle
-                .wait(active)
-                .unwrap_or_else(|err| err.into_inner());
+            active = crate::memory::wait(&self.idle, &self.active, active);
         }
     }
 }

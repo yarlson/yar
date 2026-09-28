@@ -179,6 +179,17 @@ runtime concern rather than a user-visible language feature. There is no
 `gc()` builtin, no manual `free`, and no source-level promise about exact
 collection timing.
 
+### The collector traces heaps precisely and stacks conservatively
+
+Status: accepted
+
+Codegen passes each allocation's pointer layout, so the runtime traces heap
+objects precisely and never scans pointer-free data. Thread stacks stay
+conservative, which keeps code generation free of stack maps and GC-aware
+calling conventions, and in turn keeps the collector non-moving. Every thread
+running Yar code stops at allocation, loop, or blocking-operation safepoints,
+so collection continues while tasks run.
+
 ### Boolean operators are short-circuiting
 
 Status: accepted

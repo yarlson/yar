@@ -50,7 +50,8 @@ pub(crate) fn accept(raw_listener: i64, out: *mut i64) -> i32 {
     let Some(handle) = handle_registry::listener(raw_listener) else {
         return NET_CLOSED;
     };
-    let _accept = handle.accept.lock().unwrap_or_else(|err| err.into_inner());
+    let _accept =
+        super::memory::blocking(|| handle.accept.lock().unwrap_or_else(|err| err.into_inner()));
     if handle.closed.load(Ordering::Acquire) {
         return NET_CLOSED;
     }
@@ -122,7 +123,7 @@ pub(crate) fn connect(host: YarStr, port: i32, out: *mut i64) -> i32 {
         return NET_INVALID_ARG;
     };
 
-    match TcpStream::connect((host.as_str(), port)) {
+    match super::memory::blocking(|| TcpStream::connect((host.as_str(), port))) {
         Ok(stream) => {
             if let Err(err) = stream.set_nonblocking(true) {
                 return status_from_io(err);
@@ -142,7 +143,8 @@ pub(crate) fn read(raw_conn: i64, max_bytes: i32, out: *mut YarStr) -> i32 {
     if !valid_read_size(max_bytes) {
         return NET_INVALID_ARG;
     }
-    let _read = handle.read.lock().unwrap_or_else(|err| err.into_inner());
+    let _read =
+        super::memory::blocking(|| handle.read.lock().unwrap_or_else(|err| err.into_inner()));
     if handle.closed.load(Ordering::Acquire) {
         return NET_CLOSED;
     }
@@ -186,7 +188,8 @@ pub(crate) fn write(raw_conn: i64, data: YarStr, out: *mut i32) -> i32 {
         return NET_INVALID_ARG;
     }
 
-    let _write = handle.write.lock().unwrap_or_else(|err| err.into_inner());
+    let _write =
+        super::memory::blocking(|| handle.write.lock().unwrap_or_else(|err| err.into_inner()));
     if handle.closed.load(Ordering::Acquire) {
         return NET_CLOSED;
     }
@@ -241,7 +244,8 @@ pub(crate) fn shutdown_write(raw_conn: i64) -> i32 {
     let Some(handle) = handle_registry::connection(raw_conn) else {
         return NET_CLOSED;
     };
-    let _write = handle.write.lock().unwrap_or_else(|err| err.into_inner());
+    let _write =
+        super::memory::blocking(|| handle.write.lock().unwrap_or_else(|err| err.into_inner()));
     if handle.closed.load(Ordering::Acquire) {
         return NET_CLOSED;
     }
@@ -285,7 +289,7 @@ pub(crate) fn resolve(host: YarStr, port: i32, out: *mut YarNetAddr) -> i32 {
         return NET_INVALID_ARG;
     };
 
-    match (host.as_str(), port).to_socket_addrs() {
+    match super::memory::blocking(|| (host.as_str(), port).to_socket_addrs()) {
         Ok(mut addrs) => match addrs.next() {
             Some(addr) => {
                 write_out_addr(out, addr_from_socket_addr(addr));
@@ -403,7 +407,7 @@ fn sleep_for_socket(deadline: Option<Instant>, poll_delay: &mut Duration) {
         (*poll_delay).min(deadline.saturating_duration_since(Instant::now()))
     });
     if !delay.is_zero() {
-        thread::sleep(delay);
+        super::memory::blocking(|| thread::sleep(delay));
     }
     *poll_delay = poll_delay.saturating_mul(2).min(SOCKET_POLL_MAX);
 }
@@ -464,7 +468,7 @@ fn string_from_bytes(value: &[u8]) -> YarStr {
         return empty_str();
     }
 
-    let ptr = super::yar_alloc(value.len() as i64);
+    let ptr = super::memory::alloc_bytes(value.len());
     // SAFETY: ptr points to value.len() writable bytes allocated above.
     unsafe {
         ptr::copy_nonoverlapping(value.as_ptr(), ptr, value.len());

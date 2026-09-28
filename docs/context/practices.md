@@ -159,7 +159,9 @@
   bundle metadata owns the archive name and ordered native-library contract.
 - Runtime-managed allocation helpers back slices, maps, pointer-supporting
   storage, and other heap-backed features. The Rust runtime reclaims unreachable
-  blocks with a conservative non-moving collector. Allocation failure remains
+  blocks with a non-moving collector that traces the heap precisely from
+  per-allocation pointer layouts, scans thread stacks conservatively, and runs
+  while tasks are active. Allocation failure remains
   an unrecoverable runtime failure rather than a YAR `error`.
 - String-builder and streaming-file handles plus compiler-internal network IDs
   are positive process-local opaque `i64` tokens, never native addresses. The

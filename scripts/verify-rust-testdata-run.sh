@@ -128,6 +128,7 @@ while IFS= read -r fixture; do
       exit 1
     fi
   elif [ "$fixture" = "testdata/garbage_collection/main.yar" ] \
+    || [ "$fixture" = "testdata/garbage_collection_tasks/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_basic/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_channels/main.yar" ] \
     || [ "$fixture" = "testdata/concurrency_errors/main.yar" ] \

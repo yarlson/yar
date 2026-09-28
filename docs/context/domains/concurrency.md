@@ -103,17 +103,20 @@
 - The portable native-thread runtime supports Linux, macOS, and Windows GNU.
   CI executes the taskgroup, channel, share-safety, filesystem, and collection
   fixtures on Windows rather than only cross-compiling them.
-- The collector defers marking and sweeping while any spawned task result is
-  unjoined. Worker allocations remain registered, and collection resumes only
-  after every outstanding result has been joined and copied into managed
-  storage.
+- Every spawned thread registers as a collector mutator. Collection runs while
+  tasks are active: it stops every mutator at a safepoint or blocking runtime
+  operation and scans all of their stacks. Task contexts and managed result
+  slots stay explicit roots until the taskgroup is joined.
 - Task counts use checked updates; exhaustion or inconsistent decrement is a
   deterministic runtime failure rather than a wraparound.
 - The mandatory taskgroup wait consumes and reclaims its compiler-internal
   handle after taking ownership of the tasks to join.
-- Live channel buffer slots are explicit conservative roots while the managed
-  channel token remains live. Consumed slots are cleared; finalization removes
-  unreachable external state and its roots.
+- Channel buffers are managed objects referenced by the channel token and
+  traced with the element's pointer layout. Consumed slots are cleared;
+  finalization removes unreachable external channel state.
+- Blocking channel waits, task joins, and runtime resource waits count as
+  stopped for collection. A thread that wakes during a collection releases the
+  channel or resource lock before waiting for the collection to finish.
 - Runtime stdout and stderr writes are atomic per call. Fatal paths omit their
   diagnostic whenever any task is unjoined, then immediately terminate the
   whole process without waiting for output, shutdown handlers, or other tasks.

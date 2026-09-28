@@ -6,6 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::memory::StaticDescriptor;
 use crate::{YarDirEntry, YarSlice, YarStr, handle_registry};
 
 const FS_OK: i32 = 0;
@@ -22,6 +23,8 @@ const KIND_DIRECTORY: i32 = 1;
 const KIND_OTHER: i32 = 2;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static DIR_ENTRY_DESCRIPTOR: StaticDescriptor<1> =
+    StaticDescriptor::new(size_of::<YarDirEntry>(), [0]);
 
 pub(crate) fn read_file(path: YarStr, out: *mut YarStr) -> i32 {
     write_out_str(out, empty_str());
@@ -53,10 +56,6 @@ pub(crate) fn write_file(path: YarStr, data: YarStr) -> i32 {
 }
 
 pub(crate) fn read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
-    // Directory entries temporarily hold managed string pointers in a Rust Vec,
-    // outside the conservatively scanned heap. Keep collection disabled until
-    // those entries have been copied into their managed result slice.
-    let _collection_guard = super::memory::inhibit_collection();
     write_out_slice(out, empty_slice());
     let Ok(path) = path_from_yar(path) else {
         return FS_INVALID_PATH;
@@ -67,7 +66,7 @@ pub(crate) fn read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
         Err(err) => return status_from_io(err),
     };
 
-    let mut result = Vec::new();
+    let mut listed = Vec::new();
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -77,30 +76,36 @@ pub(crate) fn read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
             Ok(file_type) => file_type,
             Err(err) => return status_from_io(err),
         };
-        result.push(YarDirEntry {
-            name: string_from_bytes(&os_string_bytes(entry.file_name())),
-            is_dir: u8::from(file_type.is_dir()),
-        });
+        listed.push((os_string_bytes(entry.file_name()), file_type.is_dir()));
     }
 
-    if result.is_empty() {
+    if listed.is_empty() {
         return FS_OK;
     }
 
-    let total = result
+    let len = i32::try_from(listed.len())
+        .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid directory size\n"));
+    let total = listed
         .len()
         .checked_mul(size_of::<YarDirEntry>())
         .and_then(|size| i64::try_from(size).ok())
         .unwrap_or_else(|| super::runtime_fail(b"runtime failure: invalid directory size\n"));
-    let ptr = super::yar_alloc(total).cast::<YarDirEntry>();
-    for (idx, entry) in result.into_iter().enumerate() {
-        // SAFETY: ptr points to result.len() YarDirEntry slots allocated above.
+    let ptr =
+        super::memory::alloc(total, DIR_ENTRY_DESCRIPTOR.as_descriptor()).cast::<YarDirEntry>();
+    for (idx, (name, is_dir)) in listed.iter().enumerate() {
+        let name = string_from_bytes(name);
+        // SAFETY: ptr points to listed.len() YarDirEntry slots allocated above
+        // and stays rooted by this frame while names are allocated.
         unsafe {
-            ptr::write(ptr.add(idx), entry);
+            ptr::write(
+                ptr.add(idx),
+                YarDirEntry {
+                    name,
+                    is_dir: u8::from(*is_dir),
+                },
+            );
         }
     }
-    let len = i32::try_from(total as usize / size_of::<YarDirEntry>())
-        .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid directory size\n"));
     write_out_slice(
         out,
         YarSlice {
@@ -220,18 +225,18 @@ pub(crate) fn read_handle(raw_handle: i64, max_bytes: i32, out: *mut YarStr) -> 
     if max_bytes <= 0 {
         return FS_INVALID_ARGUMENT;
     }
-    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(file) = state.as_mut() else {
-        return FS_CLOSED;
-    };
-
     let mut buffer = vec![0; max_bytes as usize];
-    match file.read(&mut buffer) {
-        Ok(bytes_read) => {
+    let read = super::memory::blocking(|| {
+        let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+        state.as_mut().map(|file| file.read(&mut buffer))
+    });
+    match read {
+        None => FS_CLOSED,
+        Some(Ok(bytes_read)) => {
             write_out_str(out, string_from_bytes(&buffer[..bytes_read]));
             FS_OK
         }
-        Err(err) => status_from_io(err),
+        Some(Err(err)) => status_from_io(err),
     }
 }
 
@@ -247,12 +252,15 @@ pub(crate) fn write_handle(raw_handle: i64, data: YarStr, out: *mut i32) -> i32 
         return FS_INVALID_ARGUMENT;
     }
 
-    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(file) = state.as_mut() else {
+    let written = super::memory::blocking(|| {
+        let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+        state.as_mut().map(|file| file.write(data))
+    });
+    let Some(written) = written else {
         return FS_CLOSED;
     };
 
-    match file.write(data) {
+    match written {
         Ok(bytes_written) => {
             write_out_i32(out, bytes_written as i32);
             if bytes_written == data.len() {
@@ -335,7 +343,7 @@ fn string_from_bytes(value: &[u8]) -> YarStr {
         return empty_str();
     }
 
-    let ptr = super::yar_alloc(value.len() as i64);
+    let ptr = super::memory::alloc_bytes(value.len());
     // SAFETY: ptr points to value.len() writable bytes allocated above.
     unsafe {
         ptr::copy_nonoverlapping(value.as_ptr(), ptr, value.len());

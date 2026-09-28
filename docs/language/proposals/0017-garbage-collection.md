@@ -10,10 +10,18 @@ the source language.
 
 The accepted design is:
 
-- conservative
+- precise for heap objects, conservative for thread stacks
 - non-moving
-- mark-and-sweep
+- stop-the-world mark and bitmap sweep, with parallel marking on large heaps
+- active while tasks run
 - invisible to user code
+
+The first implementation scanned every byte of every block conservatively,
+kept one global block map behind a mutex, and stopped collecting whenever a
+task was unjoined. That design retained all garbage in allocation loops
+(allocas emitted inside loop bodies kept every iteration's pointers on the
+stack) and never collected in long-running servers. The revised runtime below
+replaces it.
 
 ## 2. Motivation
 
@@ -99,12 +107,29 @@ would require a separate proposal.
 - parser impact: none
 - AST / IR impact: none
 - checker impact: none
-- codegen impact: the generated native `main` wrapper already passes a
-  stack-top pointer through a reserved runtime hook, and existing heap
-  operations already lower through shared allocation helpers
-- runtime impact: high; the collector captures ABI-preserved registers, scans
-  the main stack and managed blocks conservatively, and sweeps unreachable
-  blocks
+- codegen impact: moderate
+  - every allocation passes a pointer-layout descriptor
+    `{ i64 stride, i64 count, [count x i64] offsets }` computed from the
+    compiler's own type layout; pointer-free layouts pass `null`
+  - every `alloca` is placed in the entry block, so loops reuse stack slots
+  - each loop condition polls `yar_gc_safepoint_requested` and calls
+    `yar_gc_safepoint()` when a collection is pending
+  - channel and taskgroup constructors pass their element descriptor
+- runtime impact: high
+  - 64 KiB pages with 50 size classes up to 32 KiB, page-aligned large-object
+    spans, and a two-level page map for constant-time interior-pointer lookup
+  - side live/mark bitmaps and per-slot descriptors; objects are zeroed on
+    allocation
+  - lock-free thread-local allocation from an owned page per size class
+  - every Yar thread is a registered mutator; collection stops all of them at
+    allocation, loop, or blocking-operation safepoints after spilling
+    callee-saved registers, then scans every stack conservatively
+  - heap tracing follows descriptors precisely; marking is parallel when the
+    previous live heap was at least 8 MiB
+  - sweeping swaps mark bits into live bits during the pause; empty pages are
+    released
+  - the allocation budget between collections is the larger of the live heap
+    and a configurable minimum (4 MiB by default)
 
 ## 8. Interactions
 
@@ -127,10 +152,16 @@ would require a separate proposal.
 - add region or arena-style manual lifetime tools
   - more explicit
   - too user-visible and interaction-heavy for current YAR
-- add a precise or moving collector
-  - potentially stronger long-term runtime story
-  - needs richer metadata and more implementation complexity than the current
-    compiler/runtime design warrants
+- fully precise stack maps (LLVM statepoints or a shadow stack)
+  - would allow a moving collector
+  - requires rewriting code generation around GC-aware calls; conservative
+    stacks already give precise heap tracing without that cost
+- a moving or generational collector
+  - better locality and cheaper young-object reclamation
+  - needs precise stack roots or pinning, plus write barriers in generated code
+- concurrent or incremental marking
+  - shorter pauses on large heaps
+  - needs write barriers in generated code; deferred until pause times matter
 
 ## 10. Complexity Cost
 
@@ -152,9 +183,10 @@ the runtime is still small enough to evolve deliberately.
 
 ## 12. Open Questions
 
-- should the collector stay conservative, or should future runtime work move
-  toward precise metadata?
-- does the runtime eventually need generational heuristics or other tuning?
+- do real workloads need concurrent marking or a generational nursery, which
+  would add write barriers to generated code?
+- should empty pages be returned to the OS more aggressively than the current
+  bounded free-page cache?
 - should any diagnostic or profiling hooks around GC ever become visible?
 
 ## 13. Decision
@@ -168,8 +200,18 @@ The language surface stays unchanged:
 - no finalizers
 
 The runtime reclaims unreachable heap-backed storage behind the existing
-allocation boundary. Collection is deferred while spawned results remain
-unjoined, and live channel slots are explicit roots.
+allocation boundary. Collection runs while tasks are active, traces heap
+objects precisely from compiler-emitted layouts, and scans every registered
+thread's stack conservatively. Channel buffers are managed objects reached
+through their token; task contexts and pending results are explicit roots
+until the taskgroup is joined.
+
+Implementation evidence: the runtime memory tests cover reachability, interior
+pointers, precise descriptors, finalizers, slot reuse, allocation-pressure
+collection, and scanning a blocked thread's stack; codegen tests cover
+descriptor emission, entry-block stack slots, and loop safepoint polls; the
+fixture runner executes the collection and concurrency fixtures under a 1 KiB
+budget.
 
 ## 14. Implementation Checklist
 

@@ -55,6 +55,7 @@ pub(crate) fn emit_llvm_with_options(
         interface_adapters: Vec::new(),
         interface_impls: BTreeMap::new(),
         task_wrappers: Vec::new(),
+        gc_descriptors: BTreeMap::new(),
         next_string_id: 0,
         next_task_wrapper_id: 0,
     };
@@ -70,6 +71,7 @@ struct Generator<'a> {
     interface_adapters: Vec<String>,
     interface_impls: BTreeMap<String, String>,
     task_wrappers: Vec<String>,
+    gc_descriptors: BTreeMap<(i32, Vec<i32>), String>,
     next_string_id: usize,
     next_task_wrapper_id: usize,
 }
@@ -179,8 +181,9 @@ impl Generator<'_> {
         out.push_str("declare void @yar_print(ptr, i64)\n");
         out.push_str("declare void @yar_panic(ptr, i64)\n");
         out.push_str("declare void @yar_eprint(ptr, i64)\n");
-        out.push_str("declare ptr @yar_alloc(i64)\n");
-        out.push_str("declare ptr @yar_alloc_zeroed(i64)\n");
+        out.push_str("declare ptr @yar_alloc(i64, ptr)\n");
+        out.push_str("declare void @yar_gc_safepoint()\n");
+        out.push_str("@yar_gc_safepoint_requested = external global i32\n");
         out.push_str("declare void @yar_pointer_check(ptr)\n");
         out.push_str("declare void @yar_i32_divrem_check(i32, i32)\n");
         out.push_str("declare void @yar_i64_divrem_check(i64, i64)\n");
@@ -237,10 +240,10 @@ impl Generator<'_> {
         out.push_str("declare i32 @yar_process_run(ptr, i64, i64, i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_process_run_inherit(ptr, i64, ptr, ptr)\n");
         out.push_str("declare i32 @yar_env_lookup(ptr, ptr)\n");
-        out.push_str("declare ptr @yar_taskgroup_new(i64)\n");
+        out.push_str("declare ptr @yar_taskgroup_new(i64, ptr)\n");
         out.push_str("declare void @yar_taskgroup_spawn(ptr, ptr, ptr)\n");
         out.push_str("declare void @yar_taskgroup_wait(ptr, ptr)\n");
-        out.push_str("declare ptr @yar_chan_new(i64, i32)\n");
+        out.push_str("declare ptr @yar_chan_new(i64, i32, ptr)\n");
         out.push_str("declare i32 @yar_chan_send(ptr, ptr)\n");
         out.push_str("declare i32 @yar_chan_recv(ptr, ptr)\n");
         out.push_str("declare void @yar_chan_close(ptr)\n");
@@ -252,6 +255,23 @@ impl Generator<'_> {
             out.push_str(global);
         }
         if !self.interface_globals.is_empty() {
+            out.push('\n');
+        }
+
+        for ((stride, offsets), name) in &self.gc_descriptors {
+            let words = offsets
+                .iter()
+                .map(|offset| format!("i64 {offset}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                &mut out,
+                "@{name} = private unnamed_addr constant {{ i64, i64, [{count} x i64] }} {{ i64 {stride}, i64 {count}, [{count} x i64] [{words}] }}",
+                count = offsets.len()
+            )
+            .unwrap();
+        }
+        if !self.gc_descriptors.is_empty() {
             out.push('\n');
         }
 
@@ -938,6 +958,100 @@ main.err:
         Ok(format!("{{ i32, [{payload_words} x i64] }}"))
     }
 
+    fn gc_descriptor(&mut self, element_type: &str) -> Result<String, CodegenError> {
+        let mut offsets = Vec::new();
+        self.pointer_offsets(element_type, 0, &mut offsets)?;
+        let stride = self.type_size(element_type)?;
+        Ok(self.intern_gc_descriptor(stride, offsets))
+    }
+
+    fn gc_fields_descriptor(&mut self, field_types: &[String]) -> Result<String, CodegenError> {
+        let mut offsets = Vec::new();
+        let mut size = 0_i32;
+        let mut align = 1_i32;
+        for field_type in field_types {
+            let field_align = self.type_align(field_type)?;
+            size = align_to(size, field_align)?;
+            self.pointer_offsets(field_type, size, &mut offsets)?;
+            size = size
+                .checked_add(self.type_size(field_type)?)
+                .ok_or_else(|| CodegenError::unsupported("record size overflow"))?;
+            align = align.max(field_align);
+        }
+        let stride = align_to(size, align)?;
+        Ok(self.intern_gc_descriptor(stride, offsets))
+    }
+
+    fn intern_gc_descriptor(&mut self, stride: i32, offsets: Vec<i32>) -> String {
+        if offsets.is_empty() {
+            return "null".to_string();
+        }
+        let next = self.gc_descriptors.len();
+        let name = self
+            .gc_descriptors
+            .entry((stride, offsets))
+            .or_insert_with(|| format!("yar.gc.desc.{next}"));
+        format!("@{name}")
+    }
+
+    fn pointer_offsets(
+        &self,
+        type_: &str,
+        base: i32,
+        out: &mut Vec<i32>,
+    ) -> Result<(), CodegenError> {
+        if let Some(inner) = type_.strip_prefix('!') {
+            return self.pointer_offsets(inner, base + 8, out);
+        }
+        match type_ {
+            "void" | "noreturn" | "bool" | "i32" | "i64" | "error" => return Ok(()),
+            "str" => {
+                out.push(base);
+                return Ok(());
+            }
+            _ => {}
+        }
+        if parse_slice_type(type_).is_some()
+            || parse_pointer_type(type_).is_some()
+            || parse_map_type(type_).is_some()
+            || parse_chan_type(type_).is_some()
+        {
+            out.push(base);
+            return Ok(());
+        }
+        if parse_function_type(type_).is_some() || self.info.interfaces.contains_key(type_) {
+            out.extend([base, base + 8]);
+            return Ok(());
+        }
+        if let Some((len, element_type)) = parse_array_type(type_) {
+            let element_size = self.type_size(&element_type)?;
+            for index in 0..len {
+                let index =
+                    i32::try_from(index).map_err(|_| CodegenError::unsupported("array size"))?;
+                self.pointer_offsets(&element_type, base + index * element_size, out)?;
+            }
+            return Ok(());
+        }
+        if let Some(info) = self.info.structs.get(type_) {
+            let mut offset = 0_i32;
+            for field in &info.fields {
+                offset = align_to(offset, self.type_align(&field.type_)?)?;
+                self.pointer_offsets(&field.type_, base + offset, out)?;
+                offset += self.type_size(&field.type_)?;
+            }
+            return Ok(());
+        }
+        if let Some(info) = self.info.enums.get(type_) {
+            for word in 0..self.enum_payload_words(info)? {
+                out.push(base + 8 + word * 8);
+            }
+            return Ok(());
+        }
+        Err(CodegenError::unsupported(format!(
+            "pointer layout of type {type_:?}"
+        )))
+    }
+
     fn type_size(&self, type_: &str) -> Result<i32, CodegenError> {
         if let Some(inner) = type_.strip_prefix('!') {
             if inner == "void" {
@@ -1233,7 +1347,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         )
         .unwrap();
         out.push_str("entry:\n");
-        out.push_str(&self.body);
+        out.push_str(&hoist_allocas(&self.body));
         out.push_str("}\n");
         Ok(out)
     }
@@ -1344,7 +1458,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let ctx_size = self
             .generator
             .task_wrapper_context_size(&signature.params)?;
-        let ctx = self.emit_alloc_bytes(&ctx_size.to_string(), true);
+        let ctx_descriptor = self.generator.gc_fields_descriptor(&signature.params)?;
+        let ctx = self.emit_alloc_bytes(&ctx_size.to_string(), &ctx_descriptor);
         for (idx, expression) in call.args.iter().enumerate() {
             let expected = signature.params[idx].clone();
             let value = self.emit_expression_as(expression, &expected)?;
@@ -1401,7 +1516,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let mut field_types = vec![expected_callee_type.clone()];
         field_types.extend(function_type.params.clone());
         let ctx_size = self.generator.task_wrapper_context_size(&field_types)?;
-        let ctx = self.emit_alloc_bytes(&ctx_size.to_string(), true);
+        let ctx_descriptor = self.generator.gc_fields_descriptor(&field_types)?;
+        let ctx = self.emit_alloc_bytes(&ctx_size.to_string(), &ctx_descriptor);
         self.emit_task_context_store(&ctx_type, &ctx, 0, &expected_callee_type, &callee)?;
 
         for (idx, expression) in call.args.iter().enumerate() {
@@ -1455,9 +1571,14 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         } else {
             self.type_size(&element_type)?
         };
+        let descriptor = if element_type == "void" {
+            "null".to_string()
+        } else {
+            self.generator.gc_descriptor(&element_type)?
+        };
         let handle = self.temp("taskgroup");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_taskgroup_new(i64 {elem_size})\n"
+            "  %{handle} = call ptr @yar_taskgroup_new(i64 {elem_size}, ptr {descriptor})\n"
         ));
 
         let previous = self.taskgroup.replace(TaskgroupContext {
@@ -1603,7 +1724,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
 
     fn allocate_local_slot(&mut self, name: &str, type_: &str) -> Result<String, CodegenError> {
         if self.heap_locals.contains(name) {
-            return self.emit_alloc_type(type_, false);
+            return self.emit_alloc_type(type_);
         }
 
         let llvm_type = self.llvm_type(type_)?;
@@ -1681,6 +1802,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
 
         self.body.push_str(&format!("  br label %{cond_label}\n"));
         self.start_block(&cond_label);
+        self.emit_safepoint_poll();
         if let Some(cond) = &statement.cond {
             let cond = self.emit_expression(cond)?;
             if cond.type_ != "bool" {
@@ -1726,6 +1848,25 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         self.start_block(&end_label);
         self.terminated = false;
         Ok(())
+    }
+
+    fn emit_safepoint_poll(&mut self) {
+        let requested = self.temp("gc.poll");
+        let pending = self.temp("gc.poll.pending");
+        let park_label = self.label("gc.park");
+        let resume_label = self.label("gc.resume");
+        self.body.push_str(&format!(
+            "  %{requested} = load atomic i32, ptr @yar_gc_safepoint_requested monotonic, align 4\n"
+        ));
+        self.body
+            .push_str(&format!("  %{pending} = icmp ne i32 %{requested}, 0\n"));
+        self.body.push_str(&format!(
+            "  br i1 %{pending}, label %{park_label}, label %{resume_label}\n"
+        ));
+        self.start_block(&park_label);
+        self.body.push_str("  call void @yar_gc_safepoint()\n");
+        self.body.push_str(&format!("  br label %{resume_label}\n"));
+        self.start_block(&resume_label);
     }
 
     fn emit_break(&mut self) -> Result<(), CodegenError> {
@@ -2136,7 +2277,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         }
 
         let value = self.emit_expression(expression)?;
-        let ptr = self.emit_alloc_type(&value.type_, false)?;
+        let ptr = self.emit_alloc_type(&value.type_)?;
         self.body.push_str(&format!(
             "  store {} {}, ptr {ptr}\n",
             self.llvm_type(&value.type_)?,
@@ -2380,7 +2521,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
 
         let len = literal.elements.len();
         let alloc_size = self.emit_array_alloc_size(&element_type, len)?;
-        let data = self.emit_alloc_bytes(&alloc_size, false);
+        let descriptor = self.generator.gc_descriptor(&element_type)?;
+        let data = self.emit_alloc_bytes(&alloc_size, &descriptor);
         for (idx, element) in literal.elements.iter().enumerate() {
             let value = self.emit_expression_as(element, &element_type)?;
             if value.type_ != element_type {
@@ -2456,7 +2598,13 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             "null".to_string()
         } else {
             let size = self.closure_env_size(&info.captures)?;
-            let env = self.emit_alloc_bytes(&size.to_string(), false);
+            let capture_types = info
+                .captures
+                .iter()
+                .map(|capture| capture.type_.clone())
+                .collect::<Vec<_>>();
+            let descriptor = self.generator.gc_fields_descriptor(&capture_types)?;
+            let env = self.emit_alloc_bytes(&size.to_string(), &descriptor);
             let env_type = self.closure_env_type_literal(&info.captures)?;
             for (idx, capture) in info.captures.iter().enumerate() {
                 let local = self.locals.get(&capture.name).cloned().ok_or_else(|| {
@@ -3627,9 +3775,10 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             )));
         }
         let elem_size = self.type_size(&element_type)?;
+        let descriptor = self.generator.gc_descriptor(&element_type)?;
         let handle = self.temp("chan.new");
         self.body.push_str(&format!(
-            "  %{handle} = call ptr @yar_chan_new(i64 {elem_size}, i32 {})\n",
+            "  %{handle} = call ptr @yar_chan_new(i64 {elem_size}, i32 {}, ptr {descriptor})\n",
             capacity.repr
         ));
         Ok(Value {
@@ -3826,7 +3975,8 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
             repr: format!("%{new_cap}"),
         })?;
         let alloc_size = self.emit_scaled_size(&element_type, &new_cap64)?;
-        let new_data = self.emit_alloc_bytes(&alloc_size, false);
+        let descriptor = self.generator.gc_descriptor(&element_type)?;
+        let new_data = self.emit_alloc_bytes(&alloc_size, &descriptor);
         let has_existing = self.temp("append.has_existing");
         let copy_label = self.label("append.copy");
         let ready_label = self.label("append.ready");
@@ -5162,7 +5312,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         let data = if parse_pointer_type(&value.type_).is_some() {
             value.repr
         } else {
-            let slot = self.emit_alloc_type(&value.type_, false)?;
+            let slot = self.emit_alloc_type(&value.type_)?;
             self.body.push_str(&format!(
                 "  store {} {}, ptr {slot}\n",
                 self.llvm_type(&value.type_)?,
@@ -5380,21 +5530,18 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
         Ok(format!("%{payload_ptr}"))
     }
 
-    fn emit_alloc_bytes(&mut self, size: &str, zeroed: bool) -> String {
-        let helper = if zeroed {
-            "@yar_alloc_zeroed"
-        } else {
-            "@yar_alloc"
-        };
+    fn emit_alloc_bytes(&mut self, size: &str, descriptor: &str) -> String {
         let result = self.temp("alloc");
-        self.body
-            .push_str(&format!("  %{result} = call ptr {helper}(i64 {size})\n"));
+        self.body.push_str(&format!(
+            "  %{result} = call ptr @yar_alloc(i64 {size}, ptr {descriptor})\n"
+        ));
         format!("%{result}")
     }
 
-    fn emit_alloc_type(&mut self, type_: &str, zeroed: bool) -> Result<String, CodegenError> {
+    fn emit_alloc_type(&mut self, type_: &str) -> Result<String, CodegenError> {
         let size = self.emit_type_size(type_)?;
-        Ok(self.emit_alloc_bytes(&size, zeroed))
+        let descriptor = self.generator.gc_descriptor(type_)?;
+        Ok(self.emit_alloc_bytes(&size, &descriptor))
     }
 
     fn emit_array_alloc_size(
@@ -5785,6 +5932,18 @@ fn map_key_kind(type_: &str) -> Result<i32, CodegenError> {
         "str" => Ok(3),
         other => Err(CodegenError::unsupported(format!("map key type {other:?}"))),
     }
+}
+
+fn hoist_allocas(body: &str) -> String {
+    let (allocas, rest): (Vec<&str>, Vec<&str>) = body
+        .lines()
+        .partition(|line| line.trim_start().starts_with('%') && line.contains(" = alloca "));
+    let mut out = String::with_capacity(body.len() + 1);
+    for line in allocas.into_iter().chain(rest) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 fn align_to(size: i32, align: i32) -> Result<i32, CodegenError> {
@@ -6416,6 +6575,7 @@ mod tests {
         "testdata/error_identity/main.yar",
         "testdata/field_visibility/main.yar",
         "testdata/garbage_collection/main.yar",
+        "testdata/garbage_collection_tasks/main.yar",
         "testdata/generics/main.yar",
         "testdata/generics_imports/main.yar",
         "testdata/imports_ok/main.yar",
@@ -6484,6 +6644,7 @@ mod tests {
                     | "testdata/enum_positional/main.yar"
                     | "testdata/enums/main.yar"
                     | "testdata/garbage_collection/main.yar"
+                    | "testdata/garbage_collection_tasks/main.yar"
                     | "testdata/generics/main.yar"
                     | "testdata/generics_imports/main.yar"
                     | "testdata/imports_ok/main.yar"
@@ -6680,7 +6841,10 @@ fn main() i32 {
 
         assert!(ir.contains("icmp eq ptr"), "{ir}");
         assert!(ir.contains("icmp ne ptr"), "{ir}");
-        assert!(ir.contains("call ptr @yar_chan_new(i64 4, i32 1)"), "{ir}");
+        assert!(
+            ir.contains("call ptr @yar_chan_new(i64 4, i32 1, ptr null)"),
+            "{ir}"
+        );
         assert!(!ir.contains("chan.elem_size"), "{ir}");
     }
 
@@ -6735,7 +6899,10 @@ fn main() i32 {
 "#,
         );
 
-        assert!(ir.contains("call ptr @yar_taskgroup_new(i64 8)"), "{ir}");
+        assert!(
+            ir.contains("call ptr @yar_taskgroup_new(i64 8, ptr null)"),
+            "{ir}"
+        );
         assert!(!ir.contains("taskgroup.elem_size"), "{ir}");
     }
 
@@ -6889,6 +7056,65 @@ fn main() i32 {
         let error_pointer = function_body("error_pointer");
         assert_eq!(error_pointer.matches("call ptr @yar_alloc").count(), 2);
         assert_eq!(error_pointer.matches("alloca i32").count(), 1);
+    }
+
+    #[test]
+    fn allocations_carry_pointer_layout_descriptors() {
+        let ir = emit_source(
+            r#"
+package main
+
+struct Node {
+    id i32
+    name str
+    next *Node
+}
+
+fn main() i32 {
+    node := &Node{id: 1, name: "a", next: nil}
+    numbers := []i32{1, 2}
+    if node.id + numbers[0] != 2 {
+        return 1
+    }
+    return 0
+}
+"#,
+        );
+
+        let descriptor = "@yar.gc.desc.0 = private unnamed_addr constant { i64, i64, [2 x i64] } { i64 32, i64 2, [2 x i64] [i64 8, i64 24] }";
+        assert!(ir.contains(descriptor), "{ir}");
+        assert!(ir.contains(", ptr @yar.gc.desc.0)"), "{ir}");
+        assert_eq!(ir.matches("@yar.gc.desc.").count(), 2, "{ir}");
+        assert!(ir.contains(", ptr null)"), "{ir}");
+    }
+
+    #[test]
+    fn loop_locals_use_entry_block_stack_slots_and_loops_poll_for_collection() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn main() i32 {
+    total := 0
+    for i := 0; i < 10; i = i + 1 {
+        step := i * 2
+        total = total + step
+    }
+    return total
+}
+"#,
+        );
+
+        let body = &ir[ir.find("define i32 @").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let first_branch = body.find("  br ").unwrap();
+        assert_eq!(body.matches(" = alloca ").count(), 3, "{body}");
+        assert!(!body[first_branch..].contains(" = alloca "), "{body}");
+        assert!(
+            body.contains("load atomic i32, ptr @yar_gc_safepoint_requested monotonic"),
+            "{body}"
+        );
+        assert!(body.contains("call void @yar_gc_safepoint()"), "{body}");
     }
 
     #[test]

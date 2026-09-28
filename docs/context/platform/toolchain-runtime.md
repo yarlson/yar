@@ -75,8 +75,10 @@
 - `crates/yar-runtime` is the Rust 2024 runtime crate. It builds as an `rlib`
   for tests and as a `staticlib` for the native link boundary.
 - Cargo compiles a small target-native C shim with the runtime archive. The shim
-  uses `setjmp` to expose ABI-preserved register roots to the Rust collector;
-  allocation, marking, sweeping, and runtime policy remain in Rust.
+  spills callee-saved registers into the current frame before a thread stops
+  for collection, reports the thread's outer stack boundary, and enumerates
+  readable stack subranges; allocation, marking, sweeping, and runtime policy
+  remain in Rust.
 - The Rust crate exports C ABI symbols with the existing `yar_*` names for the
   helpers it has ported. The ported surface currently includes low-level I/O,
   trap, allocation, bounds-checking, string conversion / concatenation, map,
@@ -104,14 +106,14 @@
 - Concurrency uses portable Rust native threads on Linux, macOS, and Windows
   GNU. CI executes taskgroup and channel programs on Windows in addition to
   building the target runtime bundle.
-- Conservative root capture on Windows uses the current thread's OS-reported
-  stack bounds and walks only committed, readable regions reported by
-  `VirtualQuery`; guard and inaccessible regions are never dereferenced.
+- Conservative stack scanning on Windows records each registered thread's
+  OS-reported stack limit and walks only committed, readable regions reported
+  by `VirtualQuery`; guard and inaccessible regions are never dereferenced.
   This runtime contract requires Windows 8 or newer.
 
 ## Runtime Surface
 
-- Runtime ABI 4 passes every aggregate input and output through explicit
+- Runtime ABI 5 passes every aggregate input and output through explicit
   caller-owned pointers. Generated LLVM therefore does not depend on
   target-specific aggregate argument or return conventions at the Rust/C
   boundary. Runtime calls read input slots during the call and initialize
@@ -135,22 +137,58 @@
 
 ### Allocation
 
-- `yar_gc_init_stack_top(void *stack_top)` registers the outer main-stack
-  boundary used by conservative collection.
-- `yar_gc_collect(void)` captures ABI-preserved registers, scans the main stack,
-  live channel slots, and transitively reachable managed blocks, then sweeps
-  unreachable blocks. Calls are deferred while spawned results are unjoined.
+- `yar_gc_init_stack_top(void *stack_top)` registers the main thread as a
+  collector mutator with that outer stack boundary.
+- `yar_alloc(long long size, const YarGcDescriptor *descriptor)` returns zeroed
+  collector-managed storage, may first stop at a safepoint or run a collection,
+  and traps on invalid size or allocation failure. A null descriptor marks the
+  object pointer-free; its contents are never scanned.
+- A descriptor is `{ i64 stride, i64 count, [count x i64] offsets }`. The
+  collector repeats the element layout across the whole object and treats each
+  listed word offset as a candidate pointer. Codegen emits one private constant
+  per distinct layout; the runtime keeps its own static descriptors for maps,
+  channel tokens, string arrays, and directory entries, and uses a one-word
+  layout that visits every aligned word when it does not know a layout.
+- `yar_gc_safepoint_requested` is an exported 32-bit flag. Generated loops load
+  it once per iteration and call `yar_gc_safepoint(void)` when it is non-zero.
+- `yar_gc_collect(void)` runs a full stop-the-world collection from a
+  registered thread.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
   stderr and exit status `1`.
-- `yar_alloc(long long size)` allocates initialized collector-managed storage,
-  may trigger collection when the heap target is crossed, and traps on invalid
-  size or allocation failure.
-- `yar_alloc_zeroed(long long size)` allocates zeroed runtime-managed storage
-  and traps on invalid size or allocation failure.
-- Runtime configuration may override the initial collection threshold; invalid
-  or empty values use the 1 MiB default.
-- The collector is conservative, non-moving, and recognizes exact, interior,
-  and unaligned pointer representations.
+- `YAR_GC_HEAP_TARGET_BYTES` overrides the minimum allocation budget between
+  collections; invalid or empty values use the 4 MiB default. After each
+  collection the budget becomes the larger of that minimum and the surviving
+  live bytes, so the heap may grow to about twice its live size.
+
+### Collector
+
+- The heap consists of 64 KiB pages. Objects up to 32 KiB use 50 size classes;
+  larger objects get dedicated page-aligned spans. A two-level page map
+  resolves any address, including interior pointers, to its object in constant
+  time. Pages record live and mark bits and one layout descriptor per slot
+  outside the object memory.
+- Each thread allocates from its own current page per size class without
+  locking. Pages are taken from or returned to shared lists under one heap
+  lock, and allocation pacing is counted per page rather than per object.
+- Every thread that runs Yar code is a registered mutator. A collection sets the
+  safepoint flag and waits until every mutator is stopped: at an allocation,
+  at a loop safepoint, or inside a blocking runtime operation such as a channel
+  wait, task join, socket wait, file or process I/O, or contended resource-lock
+  acquisition. Stopped threads publish the low end of their spilled frame.
+- Roots are the aligned words of every stopped thread's stack, including
+  spilled registers, plus explicit runtime roots for spawned task contexts and
+  pending task results. Heap objects are traced precisely from their
+  descriptors. Marking is parallel when the previous live heap was at least
+  8 MiB.
+- Sweeping copies mark bits into live bits per page during the pause. Empty
+  pages return to the allocator (a bounded number stay cached for reuse), and
+  freed slots are zeroed when they are reused. Finalizers run for unreachable
+  runtime objects such as channel tokens before sweeping.
+- The collector is non-moving. Conservative stack words may delay reclamation,
+  and collection timing is not user-visible.
+- Runtime code never waits for a collection to finish while holding a lock that
+  a running mutator could block on, and allocates managed memory only after
+  releasing locks that other mutators acquire outside a blocking region.
 
 ### Integer Arithmetic Runtime
 
@@ -169,13 +207,19 @@
 
 ### Concurrency Runtime
 
-- `yar_taskgroup_new(int64_t elem_size)` allocates a taskgroup handle.
+- `yar_taskgroup_new(int64_t elem_size, const YarGcDescriptor *descriptor)`
+  allocates a taskgroup handle; the descriptor describes one result element.
+- Each spawn allocates a managed result slot and roots it together with the
+  task context until the taskgroup is joined. Spawned threads register as
+  collector mutators for their lifetime.
 - `yar_taskgroup_spawn(void *group, void *entry, void *ctx)` records one task
   and starts it on a native OS thread immediately.
 - `yar_taskgroup_wait(void *group, YarSlice *out)` joins all started tasks and
   writes a runtime-managed result slice whose element order matches spawn order.
-- `yar_chan_new(int64_t elem_size, int32_t capacity)` allocates a bounded FIFO
-  channel.
+- `yar_chan_new(int64_t elem_size, int32_t capacity, const YarGcDescriptor
+  *descriptor)` allocates a bounded FIFO channel whose buffer is a managed
+  object referenced by the channel token, so buffered values are traced as
+  ordinary heap contents.
 - `yar_chan_send(void *handle, const void *value_ptr)` blocks while the channel
   buffer is full and returns a non-zero status when the channel is closed.
 - `yar_chan_recv(void *handle, void *out_ptr)` blocks while the channel is
@@ -392,8 +436,10 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
 - Slice literals, `append`, pointer composite literals, map allocations, and
   local or parameter storage used by address-taking all reuse that same
   allocation boundary.
-- The Rust runtime reclaims unreachable managed allocations. Conservative false
-  positives may delay reclamation, and collection timing is not user-visible.
+- The Rust runtime reclaims unreachable managed allocations. Conservative stack
+  words may delay reclamation, and collection timing is not user-visible.
+- Every allocation site passes the pointer layout of the allocated type, so
+  pointer-free data such as strings and scalar slices is never scanned.
 - Pointer composite literals lower by allocating storage for the pointed-to
   value and storing the literal into that storage.
 - Map creation, growth, string concatenation results, host-returned strings,

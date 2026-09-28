@@ -83,8 +83,10 @@
   allocation/copy helpers, lowering maps to opaque runtime-managed hash tables
   with typed key/value access and key-snapshot extraction, generating the
   native `main` wrapper around `yar.main`, registering its outer stack boundary
-  for conservative collection, and declaring the shared runtime allocation
-  helpers used by heap-backed features.
+  for conservative stack scanning, emitting one pointer-layout descriptor per
+  distinct allocated layout, placing every stack slot in the entry block,
+  polling the collector safepoint flag at each loop condition, and declaring
+  the shared runtime allocation helpers used by heap-backed features.
 - `stdlib/packages` contains the standard library written in Yar. The Rust
   package loader embeds those files behind the reserved `std/...` namespace.
 
@@ -149,9 +151,11 @@
   before semantic analysis while preserving every field's visibility.
 - Heap allocation support is modeled as runtime helper calls and trap behavior
   rather than as part of the explicit source-level `error` system.
-- The generated native `main` wrapper passes a stack-top pointer to the reserved
-  runtime GC hook before user `yar.main()` executes. The current Rust runtime's
-  hook is a no-op.
+- The generated native `main` wrapper passes a stack-top pointer to
+  `yar_gc_init_stack_top` before user `yar.main()` executes, which registers
+  the main thread with the collector.
+- Codegen hoists every `alloca` into the function entry block, so loop
+  iterations reuse fixed stack slots instead of growing the stack.
 - Pointer-taking of locals and parameters is implemented conservatively by
   storing local slots in runtime-managed storage so returned or retained
   addresses stay valid without a separate escape-analysis pass.
