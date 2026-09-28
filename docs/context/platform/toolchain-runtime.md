@@ -149,8 +149,9 @@
   per distinct layout; the runtime keeps its own static descriptors for maps,
   channel tokens, string arrays, and directory entries, and uses a one-word
   layout that visits every aligned word when it does not know a layout.
-- `yar_gc_safepoint_requested` is an exported 32-bit flag. Generated loops load
-  it once per iteration and call `yar_gc_safepoint(void)` when it is non-zero.
+- `yar_gc_safepoint_requested` is an exported 32-bit flag. Generated functions
+  load it on entry and once per loop iteration, and call
+  `yar_gc_safepoint(void)` when it is non-zero.
 - `yar_gc_collect(void)` runs a full stop-the-world collection from a
   registered thread.
 - `yar_trap_oom(void)` terminates with `runtime failure: out of memory` on
@@ -172,9 +173,9 @@
   lock, and allocation pacing is counted per page rather than per object.
 - Every thread that runs Yar code is a registered mutator. A collection sets the
   safepoint flag and waits until every mutator is stopped: at an allocation,
-  at a loop safepoint, or inside a blocking runtime operation such as a channel
-  wait, task join, socket wait, file or process I/O, or contended resource-lock
-  acquisition. Stopped threads publish the low end of their spilled frame.
+  at a function-entry or loop safepoint, or inside a blocking runtime operation
+  such as a channel wait, task join, socket wait, file or process I/O, or
+  contended resource-lock acquisition. Stopped threads publish the low end of their spilled frame.
 - Roots are the aligned words of every stopped thread's stack, including
   spilled registers, plus explicit runtime roots for spawned task contexts and
   pending task results. Heap objects are traced precisely from their

@@ -32,7 +32,7 @@ pub(crate) fn read_file(path: YarStr, out: *mut YarStr) -> i32 {
         return FS_INVALID_PATH;
     };
 
-    match fs::read(path) {
+    match super::memory::blocking(|| fs::read(path)) {
         Ok(bytes) => {
             write_out_str(out, string_from_bytes(&bytes));
             FS_OK
@@ -49,7 +49,7 @@ pub(crate) fn write_file(path: YarStr, data: YarStr) -> i32 {
         return FS_INVALID_ARGUMENT;
     };
 
-    match fs::write(path, data) {
+    match super::memory::blocking(|| fs::write(path, data)) {
         Ok(()) => FS_OK,
         Err(err) => status_from_io(err),
     }
@@ -61,23 +61,10 @@ pub(crate) fn read_dir(path: YarStr, out: *mut YarSlice) -> i32 {
         return FS_INVALID_PATH;
     };
 
-    let entries = match fs::read_dir(path) {
-        Ok(entries) => entries,
+    let listed = match super::memory::blocking(|| list_dir(path)) {
+        Ok(listed) => listed,
         Err(err) => return status_from_io(err),
     };
-
-    let mut listed = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => return status_from_io(err),
-        };
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(err) => return status_from_io(err),
-        };
-        listed.push((os_string_bytes(entry.file_name()), file_type.is_dir()));
-    }
 
     if listed.is_empty() {
         return FS_OK;
@@ -123,7 +110,7 @@ pub(crate) fn stat(path: YarStr, kind_out: *mut i32) -> i32 {
         return FS_INVALID_PATH;
     };
 
-    match fs::metadata(path) {
+    match super::memory::blocking(|| fs::metadata(path)) {
         Ok(metadata) => {
             let kind = if metadata.is_file() {
                 KIND_FILE
@@ -147,7 +134,7 @@ pub(crate) fn mkdir_all(path: YarStr) -> i32 {
         return FS_INVALID_PATH;
     }
 
-    match fs::create_dir_all(path) {
+    match super::memory::blocking(|| fs::create_dir_all(path)) {
         Ok(()) => FS_OK,
         Err(err) => status_from_io(err),
     }
@@ -158,17 +145,18 @@ pub(crate) fn remove_all(path: YarStr) -> i32 {
         return FS_INVALID_PATH;
     };
 
-    match fs::metadata(&path) {
-        Ok(metadata) => {
-            let result = if metadata.is_dir() {
-                fs::remove_dir_all(path)
-            } else {
-                fs::remove_file(path)
-            };
-            result.map_or_else(status_from_io, |_| FS_OK)
-        }
+    match super::memory::blocking(|| remove_path(path)) {
+        Ok(()) => FS_OK,
         Err(err) if err.kind() == io::ErrorKind::NotFound => FS_OK,
         Err(err) => status_from_io(err),
+    }
+}
+
+fn remove_path(path: PathBuf) -> io::Result<()> {
+    if fs::metadata(&path)?.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
     }
 }
 
@@ -196,7 +184,7 @@ pub(crate) fn temp_dir(prefix: YarStr, out: *mut YarStr) -> i32 {
         let mut name = os_string_from_bytes(prefix.to_vec());
         name.push(format!("{pid}-{nanos}-{counter}"));
         let path = base.join(name);
-        match fs::create_dir(&path) {
+        match super::memory::blocking(|| fs::create_dir(&path)) {
             Ok(()) => {
                 write_out_str(out, string_from_path(path));
                 return FS_OK;
@@ -277,8 +265,9 @@ pub(crate) fn close_handle(raw_handle: i64) -> i32 {
     let Some(handle) = handle_registry::remove_file(raw_handle) else {
         return FS_CLOSED;
     };
-    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    if state.take().is_none() {
+    let file =
+        super::memory::blocking(|| handle.lock().unwrap_or_else(|err| err.into_inner()).take());
+    if file.is_none() {
         return FS_CLOSED;
     }
     FS_OK
@@ -295,14 +284,14 @@ fn open(path: YarStr, out: *mut i64, mode: OpenMode) -> i32 {
         return FS_INVALID_PATH;
     };
 
-    let file = match mode {
+    let file = super::memory::blocking(|| match mode {
         OpenMode::Read => File::open(path),
         OpenMode::Write => OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(path),
-    };
+    });
 
     match file {
         Ok(file) => {
@@ -311,6 +300,18 @@ fn open(path: YarStr, out: *mut i64, mode: OpenMode) -> i32 {
         }
         Err(err) => status_from_io(err),
     }
+}
+
+fn list_dir(path: PathBuf) -> io::Result<Vec<(Vec<u8>, bool)>> {
+    let mut listed = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        listed.push((
+            os_string_bytes(entry.file_name()),
+            entry.file_type()?.is_dir(),
+        ));
+    }
+    Ok(listed)
 }
 
 fn path_from_yar(value: YarStr) -> Result<PathBuf, ()> {

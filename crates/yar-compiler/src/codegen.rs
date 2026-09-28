@@ -1324,6 +1324,7 @@ impl<'a, 'g> FunctionEmitter<'a, 'g> {
                 .push_str(&format!("  store {llvm_type} {register}, ptr {slot}\n"));
             self.locals.insert(param.name, Local { type_, ptr: slot });
         }
+        self.emit_safepoint_poll();
 
         for statement in &self.body_block.stmts {
             self.emit_statement(statement)?;
@@ -7180,6 +7181,34 @@ fn main() i32 {
         let first_branch = body.find("  br ").unwrap();
         assert_eq!(body.matches(" = alloca ").count(), 3, "{body}");
         assert!(!body[first_branch..].contains(" = alloca "), "{body}");
+        assert!(
+            body.contains("load atomic i32, ptr @yar_gc_safepoint_requested monotonic"),
+            "{body}"
+        );
+        assert!(body.contains("call void @yar_gc_safepoint()"), "{body}");
+    }
+
+    #[test]
+    fn functions_without_loops_poll_for_collection_on_entry() {
+        let ir = emit_source(
+            r#"
+package main
+
+fn fib(n i32) i32 {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn main() i32 {
+    return fib(10)
+}
+"#,
+        );
+
+        let body = &ir[ir.find("define i32 @yar.fib(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
         assert!(
             body.contains("load atomic i32, ptr @yar_gc_safepoint_requested monotonic"),
             "{body}"

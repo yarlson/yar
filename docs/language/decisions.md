@@ -187,8 +187,8 @@ Codegen passes each allocation's pointer layout, so the runtime traces heap
 objects precisely and never scans pointer-free data. Thread stacks stay
 conservative, which keeps code generation free of stack maps and GC-aware
 calling conventions, and in turn keeps the collector non-moving. Every thread
-running Yar code stops at allocation, loop, or blocking-operation safepoints,
-so collection continues while tasks run.
+running Yar code stops at allocation, function-entry, loop, or
+blocking-operation safepoints, so collection continues while tasks run.
 
 ### Boolean operators are short-circuiting
 

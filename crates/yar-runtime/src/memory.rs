@@ -382,6 +382,55 @@ mod tests {
         worker.join().unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn stop_the_world_does_not_wait_for_blocked_file_reads() {
+        run_isolated("memory::tests::blocked_file_read_probe");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocked_file_read_probe() {
+        if !is_probe("memory::tests::blocked_file_read_probe") {
+            return;
+        }
+        let mut stack_top = 0_u8;
+        init_main_thread(&mut stack_top);
+        let fifo = std::env::temp_dir().join(format!("yar-gc-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_file(&fifo);
+        let created = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(created.success(), "mkfifo failed");
+
+        let (reading, read_started) = std::sync::mpsc::channel();
+        let reader_path = fifo.to_str().unwrap().to_owned();
+        let reader = std::thread::spawn(move || {
+            let mut reader_top = 0_u8;
+            let _registration = register_current_thread(std::hint::black_box(&mut reader_top));
+            let path = crate::YarStr {
+                ptr: reader_path.as_ptr().cast_mut(),
+                len: reader_path.len() as i64,
+            };
+            let mut contents = crate::YarStr {
+                ptr: ptr::null_mut(),
+                len: 0,
+            };
+            reading.send(()).unwrap();
+            crate::filesystem::read_file(path, &mut contents)
+        });
+        read_started.recv().unwrap();
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            eprintln!("collection waited for a thread blocked in a file read");
+            std::process::exit(1);
+        });
+
+        collect();
+
+        std::fs::write(&fifo, "x").unwrap();
+        assert_eq!(reader.join().unwrap(), 0);
+        std::fs::remove_file(&fifo).unwrap();
+    }
+
     #[test]
     fn allocation_pressure_triggers_collection() {
         run_isolated("memory::tests::allocation_pressure_probe");

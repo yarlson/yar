@@ -85,7 +85,8 @@
   native `main` wrapper around `yar.main`, registering its outer stack boundary
   for conservative stack scanning, emitting one pointer-layout descriptor per
   distinct allocated layout, placing every stack slot in the entry block,
-  polling the collector safepoint flag at each loop condition, and declaring
+  polling the collector safepoint flag at each function entry and loop
+  condition, and declaring
   the shared runtime allocation helpers used by heap-backed features.
 - `stdlib/packages` contains the standard library written in Yar. The Rust
   package loader embeds those files behind the reserved `std/...` namespace.
