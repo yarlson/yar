@@ -79,6 +79,9 @@ fn main() !i32 {
     if apply([]i32{1}, double) != 101 {
         return 7
     }
+    if double(1) != 101 {
+        return 9
+    }
 
     pick := second
     if pick(1, 8) != 8 {

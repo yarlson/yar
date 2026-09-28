@@ -1195,6 +1195,9 @@ impl<'a> PackageLowerer<'a> {
         }
 
         if let Expression::Ident(ident) = callee {
+            if self.local_is_visible(&ident.name) {
+                return Expression::Ident(ident.clone());
+            }
             if ident.name == "main" && package.id == self.graph.entry {
                 return Expression::Ident(ident.clone());
             }
