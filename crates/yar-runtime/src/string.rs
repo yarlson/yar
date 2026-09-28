@@ -36,7 +36,7 @@ pub(crate) fn concat(a_ptr: *const u8, a_len: i64, b_ptr: *const u8, b_len: i64)
         };
     }
 
-    let ptr = super::yar_alloc(len as i64);
+    let ptr = super::memory::alloc_bytes(len);
     // SAFETY: ptr points to len writable bytes allocated above. The source
     // slices are live for the duration of this call.
     unsafe {
@@ -59,7 +59,7 @@ pub(crate) fn from_owned(value: String) -> YarStr {
     }
 
     let bytes = value.as_bytes();
-    let ptr = super::yar_alloc(bytes.len() as i64);
+    let ptr = super::memory::alloc_bytes(bytes.len());
     // SAFETY: ptr points to bytes.len() writable bytes allocated above.
     unsafe {
         ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());

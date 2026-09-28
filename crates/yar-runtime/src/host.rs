@@ -8,6 +8,7 @@ use yar_process_control::{
     CaptureLimits, Deadline, ProcessError, output_with_control, status_with_control,
 };
 
+use crate::memory::StaticDescriptor;
 use crate::{YarProcessResult, YarSlice, YarStr};
 
 const HOST_OK: i32 = 0;
@@ -23,6 +24,7 @@ const MAX_PROCESS_TIMEOUT_MILLISECONDS: i64 = 86_400_000;
 const MAX_CAPTURE_BYTES: i64 = 67_108_864;
 
 static ARGS: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+static STR_DESCRIPTOR: StaticDescriptor<1> = StaticDescriptor::new(size_of::<YarStr>(), [0]);
 
 pub(crate) fn set_args(argc: i32, argv: *mut *mut c_char) {
     let args = ARGS.get_or_init(|| Mutex::new(Vec::new()));
@@ -60,7 +62,7 @@ pub(crate) fn process_args(out: *mut YarSlice) {
     let Some(args) = ARGS.get() else {
         return;
     };
-    let values = args.lock().unwrap_or_else(|err| err.into_inner());
+    let values = args.lock().unwrap_or_else(|err| err.into_inner()).clone();
     if values.is_empty() {
         return;
     }
@@ -70,7 +72,7 @@ pub(crate) fn process_args(out: *mut YarSlice) {
         .checked_mul(size_of::<YarStr>())
         .and_then(|size| i64::try_from(size).ok())
         .unwrap_or_else(|| super::runtime_fail(b"runtime failure: invalid argv size\n"));
-    let ptr = super::yar_alloc_zeroed(total).cast::<YarStr>();
+    let ptr = super::memory::alloc(total, STR_DESCRIPTOR.as_descriptor()).cast::<YarStr>();
 
     for (idx, value) in values.iter().enumerate() {
         // SAFETY: ptr points to values.len() YarStr slots allocated above.
@@ -145,11 +147,14 @@ pub(crate) fn process_run(
 
     let mut command = Command::new(&args[0]);
     command.args(&args[1..]);
-    match output_with_control(command, deadline, capture_limits, || {
-        // A live call keeps the managed channel token rooted. If the registry
-        // invariant is nevertheless lost, fail closed and cancel the child.
-        super::concurrency::cancellation_requested(cancel).unwrap_or(true)
-    }) {
+    let output = super::memory::blocking(|| {
+        output_with_control(command, deadline, capture_limits, || {
+            // A live call keeps the managed channel token rooted. If the registry
+            // invariant is nevertheless lost, fail closed and cancel the child.
+            super::concurrency::cancellation_requested(cancel).unwrap_or(true)
+        })
+    });
+    match output {
         Ok(output) => {
             let std::process::Output {
                 status,
@@ -200,9 +205,12 @@ pub(crate) fn process_run_inherit(
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    match status_with_control(command, deadline, || {
-        super::concurrency::cancellation_requested(cancel).unwrap_or(true)
-    }) {
+    let status = super::memory::blocking(|| {
+        status_with_control(command, deadline, || {
+            super::concurrency::cancellation_requested(cancel).unwrap_or(true)
+        })
+    });
+    match status {
         Ok(status) => {
             // SAFETY: out is an out-pointer from generated code.
             unsafe {
@@ -309,7 +317,7 @@ fn string_from_bytes(value: &[u8]) -> YarStr {
         return empty_str();
     }
 
-    let ptr = super::yar_alloc(value.len() as i64);
+    let ptr = super::memory::alloc_bytes(value.len());
     // SAFETY: ptr points to value.len() writable bytes allocated above.
     unsafe {
         ptr::copy_nonoverlapping(value.as_ptr(), ptr, value.len());

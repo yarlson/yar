@@ -141,18 +141,18 @@ pub extern "C" fn yar_pointer_check(pointer: *const u8) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_alloc(size: i64) -> *mut u8 {
-    memory::alloc(size, false)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn yar_alloc_zeroed(size: i64) -> *mut u8 {
-    memory::alloc(size, true)
+pub extern "C" fn yar_alloc(size: i64, descriptor: *const memory::Descriptor) -> *mut u8 {
+    memory::alloc(size, descriptor)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn yar_gc_init_stack_top(stack_top: *mut u8) {
-    memory::init_stack_top(stack_top);
+    memory::init_main_thread(stack_top);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn yar_gc_safepoint() {
+    memory::safepoint();
 }
 
 #[unsafe(no_mangle)]
@@ -161,8 +161,11 @@ pub extern "C" fn yar_gc_collect() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_taskgroup_new(elem_size: i64) -> *mut u8 {
-    concurrency::taskgroup_new(elem_size)
+pub extern "C" fn yar_taskgroup_new(
+    elem_size: i64,
+    descriptor: *const memory::Descriptor,
+) -> *mut u8 {
+    concurrency::taskgroup_new(elem_size, descriptor)
 }
 
 #[unsafe(no_mangle)]
@@ -177,8 +180,12 @@ pub extern "C" fn yar_taskgroup_wait(group: *mut u8, out: *mut YarSlice) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn yar_chan_new(elem_size: i64, capacity: i32) -> *mut u8 {
-    concurrency::chan_new(elem_size, capacity)
+pub extern "C" fn yar_chan_new(
+    elem_size: i64,
+    capacity: i32,
+    descriptor: *const memory::Descriptor,
+) -> *mut u8 {
+    concurrency::chan_new(elem_size, capacity, descriptor)
 }
 
 #[unsafe(no_mangle)]
@@ -273,8 +280,8 @@ pub extern "C" fn yar_str_from_byte(value: i32, out: *mut YarStr) {
         runtime_fail(b"runtime failure: byte value out of range\n");
     }
 
-    let ptr = yar_alloc(1);
-    // SAFETY: yar_alloc returned one writable byte or terminated.
+    let ptr = memory::alloc_bytes(1);
+    // SAFETY: alloc_bytes returned one writable byte or terminated.
     unsafe {
         ptr::write(ptr, value as u8);
     }
@@ -729,7 +736,7 @@ mod tests {
     fn fatal_worker_terminates_the_process_without_waiting_for_other_tasks() {
         const CHILD_ENV: &str = "YAR_TEST_FATAL_WORKER";
         if std::env::var_os(CHILD_ENV).is_some() {
-            let group = yar_taskgroup_new(0);
+            let group = yar_taskgroup_new(0, ptr::null());
             yar_taskgroup_spawn(group, parked_task as *mut u8, ptr::null_mut());
             yar_taskgroup_spawn(group, fatal_task as *mut u8, ptr::null_mut());
             let _: YarSlice = abi_out(|out| yar_taskgroup_wait(group, out));
@@ -750,7 +757,7 @@ mod tests {
         const CHILD_ENV: &str = "YAR_TEST_FATAL_STDERR_CONTENTION";
         if std::env::var_os(CHILD_ENV).is_some() {
             let _stderr_guard = STDERR_WRITE.lock().unwrap_or_else(|err| err.into_inner());
-            let group = yar_taskgroup_new(0);
+            let group = yar_taskgroup_new(0, ptr::null());
             yar_taskgroup_spawn(group, fatal_task as *mut u8, ptr::null_mut());
             loop {
                 std::thread::park();
@@ -861,7 +868,7 @@ mod tests {
             .checked_mul(size_of::<YarStr>())
             .and_then(|size| i64::try_from(size).ok())
             .expect("test slice size should fit");
-        let ptr = yar_alloc_zeroed(total).cast::<YarStr>();
+        let ptr = memory::alloc_words(total as usize).cast::<YarStr>();
         for (idx, value) in values.iter().enumerate() {
             unsafe {
                 ptr::write(ptr.add(idx), string::from_owned((*value).to_owned()));
@@ -876,7 +883,7 @@ mod tests {
 
     #[test]
     fn zeroed_allocation_returns_writable_zeroed_memory() {
-        let ptr = yar_alloc_zeroed(8);
+        let ptr = yar_alloc(8, ptr::null());
         assert!(!ptr.is_null());
 
         let bytes = unsafe { std::slice::from_raw_parts_mut(ptr, 8) };
@@ -1993,7 +2000,7 @@ mod tests {
 
     #[test]
     fn taskgroup_helpers_run_tasks_and_preserve_spawn_order() {
-        let group = yar_taskgroup_new(size_of::<i32>() as i64);
+        let group = yar_taskgroup_new(size_of::<i32>() as i64, ptr::null());
         assert!(!group.is_null());
 
         let mut first = 2_i32;
@@ -2019,7 +2026,7 @@ mod tests {
 
     #[test]
     fn taskgroup_helpers_support_void_results() {
-        let group = yar_taskgroup_new(0);
+        let group = yar_taskgroup_new(0, ptr::null());
         let counter = std::sync::atomic::AtomicI32::new(0);
 
         yar_taskgroup_spawn(
@@ -2046,7 +2053,7 @@ mod tests {
 
     #[test]
     fn channel_helpers_are_fifo_and_report_closed() {
-        let handle = yar_chan_new(size_of::<i32>() as i64, 2);
+        let handle = yar_chan_new(size_of::<i32>() as i64, 2, ptr::null());
         assert!(!handle.is_null());
 
         let first = 7_i32;
@@ -2090,7 +2097,7 @@ mod tests {
             1
         );
 
-        let handle = yar_chan_new(size_of::<i32>() as i64, 1);
+        let handle = yar_chan_new(size_of::<i32>() as i64, 1, ptr::null());
         assert_eq!(
             yar_chan_send(handle, (&first as *const i32).cast::<u8>()),
             0
@@ -2127,7 +2134,7 @@ mod tests {
             },
         };
 
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         assert_eq!(
             yar_process_run(&argv, 5_000, 1024, 1024, cancel, &mut out),
             0
@@ -2143,7 +2150,7 @@ mod tests {
         let argv = runtime_slice(&["/bin/sh", "-c", "exit 3"]);
         let mut exit_code = 0_i32;
 
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         assert_eq!(
             yar_process_run_inherit(&argv, 5_000, cancel, &mut exit_code),
             0
@@ -2154,7 +2161,7 @@ mod tests {
     #[test]
     fn process_run_inherit_honors_preclosed_cancellation_before_launch() {
         let argv = runtime_slice(&["yar-command-that-must-not-launch"]);
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         yar_chan_close(cancel);
         let mut exit_code = 9_i32;
 
@@ -2169,7 +2176,7 @@ mod tests {
     #[test]
     fn process_run_inherit_honors_timeout() {
         let argv = runtime_slice(&["/bin/sh", "-c", "sleep 30"]);
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         let mut exit_code = 9_i32;
 
         assert_eq!(
@@ -2194,7 +2201,7 @@ mod tests {
             },
         };
 
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         assert_eq!(
             yar_process_run(&argv, 5_000, 1024, 1024, cancel, &mut out),
             3
@@ -2209,7 +2216,7 @@ mod tests {
             stdout: string::from_owned("stale stdout".to_owned()),
             stderr: string::from_owned("stale stderr".to_owned()),
         };
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
 
         for (timeout, stdout, stderr) in [
             (0, 0, 0),
@@ -2243,14 +2250,14 @@ mod tests {
             yar_process_run(&argv, 1, 0, 0, ptr::null_mut(), &mut out),
             3
         );
-        let wrong_channel = yar_chan_new(size_of::<i64>() as i64, 1);
+        let wrong_channel = yar_chan_new(size_of::<i64>() as i64, 1, ptr::null());
         assert_eq!(yar_process_run(&argv, 1, 0, 0, wrong_channel, &mut out), 3);
     }
 
     #[test]
     fn process_run_maps_a_preclosed_cancellation() {
         let argv = runtime_slice(&["yar-command-that-must-not-launch"]);
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         yar_chan_close(cancel);
         let mut out = YarProcessResult {
             exit_code: 9,
@@ -2270,7 +2277,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn process_run_maps_timeout_and_output_limit() {
-        let cancel = yar_chan_new(size_of::<bool>() as i64, 1);
+        let cancel = yar_chan_new(size_of::<bool>() as i64, 1, ptr::null());
         let mut out = YarProcessResult {
             exit_code: 0,
             stdout: YarStr {

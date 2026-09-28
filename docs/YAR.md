@@ -141,9 +141,11 @@ Heap-backed values use runtime-managed storage.
 - user code does not manually free memory
 - there is no `gc()` builtin or `free(...)` operation
 - allocation failure is an unrecoverable runtime failure, not a YAR `error`
-- the Rust runtime may reclaim unreachable managed storage during allocation
-- collection is conservative and non-moving; programs cannot observe or depend
-  on its exact timing
+- the Rust runtime may reclaim unreachable managed storage during allocation,
+  at loop iterations, or while other tasks run
+- collection is non-moving; heap objects are traced precisely and stacks are
+  scanned conservatively, so an integer on a stack may keep an object alive
+  longer, and programs cannot observe or depend on collection timing
 
 ## Generics
 

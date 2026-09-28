@@ -1,367 +1,174 @@
-use std::alloc::{self, Layout};
-use std::cell::Cell;
+mod heap;
+mod mutators;
+
 use std::collections::BTreeMap;
 use std::ffi::c_void;
-use std::mem;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
-const HEADER_SIZE: usize = mem::size_of::<usize>();
-const ALIGN: usize = mem::align_of::<usize>();
-const DEFAULT_HEAP_TARGET: usize = 1024 * 1024;
+pub(crate) use mutators::{blocking, register_current_thread, safepoint, wait};
 
-thread_local! {
-    static STACK_TOP: Cell<usize> = const { Cell::new(0) };
-    static COLLECTION_INHIBIT: Cell<usize> = const { Cell::new(0) };
+const DEFAULT_MINIMUM_BUDGET: usize = 4 * 1024 * 1024;
+
+static CONFIGURE: Once = Once::new();
+static MINIMUM_BUDGET: OnceLock<usize> = OnceLock::new();
+static ROOTS: Mutex<BTreeMap<usize, usize>> = Mutex::new(BTreeMap::new());
+
+#[repr(C)]
+pub struct Descriptor {
+    stride: u64,
+    count: u64,
 }
 
-static HEAP: OnceLock<Mutex<Heap>> = OnceLock::new();
-static COLLECTING: AtomicBool = AtomicBool::new(false);
+#[repr(C)]
+pub(crate) struct StaticDescriptor<const N: usize> {
+    stride: u64,
+    count: u64,
+    offsets: [u64; N],
+}
 
-type RootVisitor = extern "C" fn(usize, *mut c_void);
+impl<const N: usize> StaticDescriptor<N> {
+    pub(crate) const fn new(stride: usize, offsets: [u64; N]) -> Self {
+        Self {
+            stride: stride as u64,
+            count: N as u64,
+            offsets,
+        }
+    }
+
+    pub(crate) fn as_descriptor(&'static self) -> *const Descriptor {
+        (self as *const Self).cast()
+    }
+}
+
+pub(crate) static EVERY_WORD: StaticDescriptor<1> = StaticDescriptor::new(size_of::<usize>(), [0]);
+
+type RangeVisitor = extern "C" fn(usize, usize, *mut c_void);
 
 unsafe extern "C" {
-    fn yar_gc_visit_stack_and_registers(
-        stack_top: *const u8,
-        visitor: RootVisitor,
+    fn yar_gc_for_each_readable_range(
+        low: usize,
+        high: usize,
+        visitor: RangeVisitor,
         context: *mut c_void,
     );
 }
 
-#[derive(Clone, Copy)]
-struct AllocationLayout {
-    layout: Layout,
-    logical_size: usize,
-    physical_size: usize,
+pub(crate) fn init_main_thread(stack_top: *mut u8) {
+    std::mem::forget(register_current_thread(stack_top));
 }
 
-struct Block {
-    base: usize,
-    physical_size: usize,
-    layout: Layout,
-    marked: bool,
-    finalizer: Option<fn(*mut u8)>,
-}
-
-struct Heap {
-    blocks: BTreeMap<usize, Block>,
-    live_bytes: usize,
-    target: usize,
-    minimum_target: usize,
-    collections: usize,
-}
-
-impl Heap {
-    fn new(target: usize) -> Self {
-        let target = target.max(1);
-        Self {
-            blocks: BTreeMap::new(),
-            live_bytes: 0,
-            target,
-            minimum_target: target,
-            collections: 0,
-        }
-    }
-
-    fn allocate(
-        &mut self,
-        allocation: AllocationLayout,
-        finalizer: Option<fn(*mut u8)>,
-    ) -> Option<*mut u8> {
-        // Managed bytes are always initialized before the block enters the heap
-        // registry. Conservative traversal may inspect padding or a partially
-        // populated aggregate during a later nested allocation.
-        let base = unsafe { alloc::alloc_zeroed(allocation.layout) };
-        if base.is_null() {
-            return None;
-        }
-
-        // SAFETY: allocation.layout reserves HEADER_SIZE followed by at least
-        // one payload byte, and base is aligned for usize.
-        let payload = unsafe {
-            ptr::write(base.cast::<usize>(), allocation.logical_size);
-            base.add(HEADER_SIZE)
-        };
-        let payload_address = payload as usize;
-        let old = self.blocks.insert(
-            payload_address,
-            Block {
-                base: base as usize,
-                physical_size: allocation.physical_size,
-                layout: allocation.layout,
-                marked: false,
-                finalizer,
-            },
-        );
-        if old.is_some() {
-            super::runtime_fail(b"runtime failure: collector metadata corrupted\n");
-        }
-        self.live_bytes = self
-            .live_bytes
-            .checked_add(allocation.physical_size)
-            .unwrap_or_else(|| super::runtime_fail(b"runtime failure: invalid allocation size\n"));
-        self.grow_target_for_allocation();
-        Some(payload)
-    }
-
-    fn grow_target_for_allocation(&mut self) {
-        if self.live_bytes <= self.target {
-            return;
-        }
-        self.target = self.live_bytes.saturating_mul(2).max(self.minimum_target);
-    }
-
-    fn mark_candidate(&mut self, candidate: usize, queue: &mut Vec<usize>) {
-        let Some((&payload, block)) = self.blocks.range_mut(..=candidate).next_back() else {
-            return;
-        };
-        let Some(end) = payload.checked_add(block.physical_size) else {
-            return;
-        };
-        if candidate >= end || block.marked {
-            return;
-        }
-        block.marked = true;
-        queue.push(payload);
-    }
-
-    fn mark_bytes(&mut self, bytes: &[u8], queue: &mut Vec<usize>) {
-        let word_size = mem::size_of::<usize>();
-        if bytes.len() < word_size {
-            return;
-        }
-        for offset in 0..=bytes.len() - word_size {
-            let mut word = [0_u8; mem::size_of::<usize>()];
-            word.copy_from_slice(&bytes[offset..offset + word_size]);
-            let candidate = usize::from_ne_bytes(word);
-            if candidate != 0 {
-                self.mark_candidate(candidate, queue);
-            }
-        }
-    }
-
-    fn trace(&mut self, queue: &mut Vec<usize>) {
-        while let Some(payload) = queue.pop() {
-            let Some(physical_size) = self.blocks.get(&payload).map(|block| block.physical_size)
-            else {
-                continue;
-            };
-            // SAFETY: every managed block is zero-initialized before registry
-            // insertion and remains allocated until sweep, which starts only
-            // after traversal completes.
-            let bytes = unsafe { std::slice::from_raw_parts(payload as *const u8, physical_size) };
-            self.mark_bytes(bytes, queue);
-        }
-    }
-
-    fn sweep(&mut self) {
-        let unreachable = self
-            .blocks
-            .iter()
-            .filter_map(|(&payload, block)| (!block.marked).then_some(payload))
-            .collect::<Vec<_>>();
-        for payload in unreachable {
-            let block = self.blocks.remove(&payload).unwrap_or_else(|| {
-                super::runtime_fail(b"runtime failure: collector metadata corrupted\n")
-            });
-            self.live_bytes -= block.physical_size;
-            if let Some(finalizer) = block.finalizer {
-                finalizer(payload as *mut u8);
-            }
-            // SAFETY: base and layout are the exact pair returned by alloc_zeroed
-            // for this block, and the block has been removed from the registry.
-            unsafe { alloc::dealloc(block.base as *mut u8, block.layout) };
-        }
-        for block in self.blocks.values_mut() {
-            block.marked = false;
-        }
-        self.collections = self.collections.saturating_add(1);
-        self.target = self.live_bytes.saturating_mul(2).max(self.minimum_target);
-    }
-
-    #[cfg(test)]
-    fn collect_candidates(&mut self, candidates: &[usize]) {
-        let mut queue = Vec::new();
-        for &candidate in candidates {
-            self.mark_candidate(candidate, &mut queue);
-        }
-        self.trace(&mut queue);
-        self.sweep();
-    }
-}
-
-impl Drop for Heap {
-    fn drop(&mut self) {
-        for block in self.blocks.values() {
-            if let Some(finalizer) = block.finalizer {
-                finalizer((block.base + HEADER_SIZE) as *mut u8);
-            }
-            // SAFETY: test-owned heaps drop each still-registered allocation
-            // exactly once with its original layout.
-            unsafe { alloc::dealloc(block.base as *mut u8, block.layout) };
-        }
-    }
-}
-
-struct Marker<'a> {
-    heap: &'a mut Heap,
-    queue: Vec<usize>,
-}
-
-pub(crate) struct CollectionGuard;
-
-impl Drop for CollectionGuard {
-    fn drop(&mut self) {
-        let depth = COLLECTION_INHIBIT.get();
-        if depth == 0 {
-            super::runtime_fail(b"runtime failure: collector guard corrupted\n");
-        }
-        COLLECTION_INHIBIT.set(depth - 1);
-    }
-}
-
-impl Marker<'_> {
-    fn visit(&mut self, candidate: usize) {
-        self.heap.mark_candidate(candidate, &mut self.queue);
-    }
-}
-
-extern "C" fn visit_root(candidate: usize, context: *mut c_void) {
-    if context.is_null() {
-        return;
-    }
-    // SAFETY: collect passes a live Marker pointer to the synchronous C root
-    // visitor and does not access the marker until the visitor returns.
-    let marker = unsafe { &mut *context.cast::<Marker<'_>>() };
-    marker.visit(candidate);
-}
-
-pub(crate) fn init_stack_top(stack_top: *mut u8) {
-    STACK_TOP.set(stack_top as usize);
-}
-
-pub(crate) fn inhibit_collection() -> CollectionGuard {
-    let depth = COLLECTION_INHIBIT
-        .get()
-        .checked_add(1)
-        .unwrap_or_else(|| super::runtime_fail(b"runtime failure: collector guard corrupted\n"));
-    COLLECTION_INHIBIT.set(depth);
-    CollectionGuard
-}
-
-pub(crate) fn alloc(size: i64, _zeroed: bool) -> *mut u8 {
-    alloc_with_finalizer(size, None)
-}
-
-pub(crate) fn alloc_finalized(size: i64, finalizer: fn(*mut u8)) -> *mut u8 {
-    alloc_with_finalizer(size, Some(finalizer))
-}
-
-fn alloc_with_finalizer(size: i64, finalizer: Option<fn(*mut u8)>) -> *mut u8 {
-    let allocation = allocation_layout(size);
-    maybe_collect(allocation.physical_size);
-    if let Some(payload) = heap()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .allocate(allocation, finalizer)
-    {
-        return payload;
-    }
-
-    collect();
-    heap()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .allocate(allocation, finalizer)
-        .unwrap_or_else(|| super::yar_trap_oom())
-}
-
-pub(crate) fn collect() {
-    if super::concurrency::unjoined_tasks() != 0 || COLLECTION_INHIBIT.get() != 0 {
-        return;
-    }
-    let stack_top = STACK_TOP.get();
-    if stack_top == 0
-        || COLLECTING
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-    {
-        return;
-    }
-
-    let external_roots = super::concurrency::channel_root_snapshots();
-    let mut heap = heap().lock().unwrap_or_else(|err| err.into_inner());
-    let mut marker = Marker {
-        heap: &mut heap,
-        queue: Vec::new(),
-    };
-
-    // SAFETY: stack_top was registered by the generated main wrapper on this
-    // thread. The C shim captures ABI-preserved registers and visits the live
-    // byte range between its current frame and that outer marker synchronously.
-    unsafe {
-        yar_gc_visit_stack_and_registers(
-            stack_top as *const u8,
-            visit_root,
-            (&mut marker as *mut Marker<'_>).cast::<c_void>(),
-        );
-    }
-    for roots in &external_roots {
-        marker.heap.mark_bytes(roots, &mut marker.queue);
-    }
-    marker.heap.trace(&mut marker.queue);
-    marker.heap.sweep();
-    COLLECTING.store(false, Ordering::SeqCst);
-}
-
-fn maybe_collect(incoming_size: usize) {
-    if super::concurrency::unjoined_tasks() != 0
-        || STACK_TOP.get() == 0
-        || COLLECTION_INHIBIT.get() != 0
-    {
-        return;
-    }
-    let should_collect = {
-        let heap = heap().lock().unwrap_or_else(|err| err.into_inner());
-        heap.live_bytes
-            .checked_add(incoming_size)
-            .is_none_or(|required| required > heap.target)
-    };
-    if should_collect {
-        collect();
-    }
-}
-
-fn heap() -> &'static Mutex<Heap> {
-    HEAP.get_or_init(|| Mutex::new(Heap::new(configured_heap_target())))
-}
-
-fn configured_heap_target() -> usize {
-    std::env::var("YAR_GC_HEAP_TARGET_BYTES")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or(DEFAULT_HEAP_TARGET)
-}
-
-fn allocation_layout(size: i64) -> AllocationLayout {
+pub(crate) fn alloc(size: i64, descriptor: *const Descriptor) -> *mut u8 {
     if size < 0 {
         super::runtime_fail(b"runtime failure: invalid allocation size\n");
     }
-    let logical_size = usize::try_from(size)
+    let size = usize::try_from(size)
         .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid allocation size\n"));
-    let physical_size = logical_size.max(1);
-    let total_size = HEADER_SIZE
-        .checked_add(physical_size)
-        .unwrap_or_else(|| super::runtime_fail(b"runtime failure: invalid allocation size\n"));
-    let layout = Layout::from_size_align(total_size, ALIGN)
-        .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid allocation size\n"));
-    AllocationLayout {
-        layout,
-        logical_size,
-        physical_size,
+    allocate(size, descriptor)
+}
+
+pub(crate) fn alloc_bytes(size: usize) -> *mut u8 {
+    allocate(size, std::ptr::null())
+}
+
+pub(crate) fn alloc_words(size: usize) -> *mut u8 {
+    allocate(size, EVERY_WORD.as_descriptor())
+}
+
+pub(crate) fn alloc_finalized(
+    size: usize,
+    descriptor: *const Descriptor,
+    finalizer: fn(*mut u8),
+) -> *mut u8 {
+    let object = allocate(size, descriptor);
+    heap::register_finalizer(object, finalizer);
+    object
+}
+
+pub(crate) fn add_root(object: *mut u8) {
+    *lock_roots().entry(object as usize).or_insert(0) += 1;
+}
+
+pub(crate) fn remove_root(object: *mut u8) {
+    let mut roots = lock_roots();
+    let Some(count) = roots.get_mut(&(object as usize)) else {
+        super::runtime_fail(b"runtime failure: collector root registry corrupted\n");
+    };
+    *count -= 1;
+    if *count == 0 {
+        roots.remove(&(object as usize));
+    }
+}
+
+pub(crate) fn collect() {
+    mutators::stop_the_world(|stacks| {
+        let mut collection = heap::Collection::begin();
+        for stack in stacks {
+            scan_stack(&mut collection, stack.low, stack.high);
+        }
+        for &root in lock_roots().keys() {
+            collection.add_root(root);
+        }
+        collection.finish(minimum_budget());
+    });
+}
+
+fn allocate(size: usize, descriptor: *const Descriptor) -> *mut u8 {
+    CONFIGURE.call_once(|| heap::set_minimum_budget(minimum_budget()));
+    safepoint();
+    if heap::collection_due() {
+        collect();
+    }
+    if let Some(object) = heap::allocate(size, descriptor) {
+        return object;
+    }
+    collect();
+    heap::allocate(size, descriptor).unwrap_or_else(|| super::yar_trap_oom())
+}
+
+fn scan_stack(collection: &mut heap::Collection<'_>, low: usize, high: usize) {
+    extern "C" fn visit(low: usize, high: usize, context: *mut c_void) {
+        // SAFETY: scan_stack passes a live Collection for this synchronous call.
+        let collection = unsafe { &mut *context.cast::<heap::Collection<'_>>() };
+        collection.add_conservative_range(low, high);
+    }
+    // SAFETY: [low, high) is the stopped thread's live stack; the shim visits
+    // only readable subranges synchronously.
+    unsafe {
+        yar_gc_for_each_readable_range(
+            low,
+            high,
+            visit,
+            (collection as *mut heap::Collection<'_>).cast(),
+        );
+    }
+}
+
+fn minimum_budget() -> usize {
+    *MINIMUM_BUDGET.get_or_init(configured_minimum_budget)
+}
+
+fn configured_minimum_budget() -> usize {
+    std::env::var("YAR_GC_HEAP_TARGET_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|&value| value > 0)
+        .unwrap_or(DEFAULT_MINIMUM_BUDGET)
+}
+
+fn lock_roots() -> MutexGuard<'static, BTreeMap<usize, usize>> {
+    ROOTS.lock().unwrap_or_else(|err| err.into_inner())
+}
+
+impl Descriptor {
+    unsafe fn layout(descriptor: *const Self) -> (usize, &'static [u64]) {
+        // SAFETY: the caller passes a complete descriptor; its offsets
+        // immediately follow the two header words in the repr(C) layout.
+        unsafe {
+            let stride = (*descriptor).stride as usize;
+            let count = (*descriptor).count as usize;
+            let offsets = descriptor.cast::<u64>().add(2);
+            (stride, std::slice::from_raw_parts(offsets, count))
+        }
     }
 }
 
@@ -369,127 +176,236 @@ fn allocation_layout(size: i64) -> AllocationLayout {
 mod tests {
     use super::*;
     use std::process::Command;
-    use std::sync::atomic::AtomicUsize;
+    use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar};
 
-    static FINALIZED_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+    const PROBE_ENV: &str = "YAR_GC_TEST_PROBE";
+    static FINALIZED: AtomicUsize = AtomicUsize::new(0);
+    static SECOND_WORD: StaticDescriptor<1> = StaticDescriptor::new(16, [8]);
 
-    fn count_finalized_block(_payload: *mut u8) {
-        FINALIZED_BLOCKS.fetch_add(1, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn finalizes_an_unreachable_block_exactly_once_before_reclaiming_it() {
-        let finalized_before = FINALIZED_BLOCKS.load(Ordering::SeqCst);
-        let mut heap = Heap::new(64);
-        heap.allocate(
-            allocation_layout(8),
-            Some(count_finalized_block as fn(*mut u8)),
-        )
-        .unwrap();
-
-        heap.collect_candidates(&[]);
-
-        assert!(heap.blocks.is_empty());
-        assert_eq!(
-            FINALIZED_BLOCKS.load(Ordering::SeqCst),
-            finalized_before + 1
-        );
-        drop(heap);
-        assert_eq!(
-            FINALIZED_BLOCKS.load(Ordering::SeqCst),
-            finalized_before + 1
-        );
-    }
-
-    #[test]
-    fn retains_interior_and_unaligned_transitive_roots_then_reclaims_them() {
-        let mut heap = Heap::new(64);
-        let parent = heap.allocate(allocation_layout(32), None).unwrap();
-        let child = heap.allocate(allocation_layout(8), None).unwrap();
-        // Store the child pointer at offset one to model packed map buckets.
-        unsafe {
-            ptr::copy_nonoverlapping(
-                (child as usize).to_ne_bytes().as_ptr(),
-                parent.add(1),
-                mem::size_of::<usize>(),
-            );
-        }
-
-        heap.collect_candidates(&[parent as usize + 7]);
-        assert_eq!(heap.blocks.len(), 2);
-
-        heap.collect_candidates(&[]);
-        assert!(heap.blocks.is_empty());
-        assert_eq!(heap.live_bytes, 0);
-        assert_eq!(heap.collections, 2);
-    }
-
-    #[test]
-    fn rejects_header_and_one_past_end_as_roots() {
-        let mut heap = Heap::new(64);
-        let payload = heap.allocate(allocation_layout(8), None).unwrap();
-        heap.collect_candidates(&[payload as usize - 1, payload as usize + 8]);
-        assert!(heap.blocks.is_empty());
-    }
-
-    #[test]
-    fn zero_sized_allocations_have_one_retainable_payload_byte() {
-        let mut heap = Heap::new(1);
-        let payload = heap.allocate(allocation_layout(0), None).unwrap();
-        heap.collect_candidates(&[payload as usize]);
-        assert_eq!(heap.blocks.len(), 1);
-        assert_eq!(heap.live_bytes, 1);
-        heap.collect_candidates(&[]);
-        assert!(heap.blocks.is_empty());
-    }
-
-    #[test]
-    fn automatic_collection_reclaims_in_an_isolated_runtime() {
+    fn run_isolated(probe: &str) {
         let output = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "memory::tests::automatic_collection_probe",
-                "--nocapture",
-            ])
-            .env("YAR_GC_TEST_PROBE", "1")
+            .args(["--exact", probe, "--nocapture"])
+            .env(PROBE_ENV, probe)
             .env("YAR_GC_HEAP_TARGET_BYTES", "1024")
             .output()
             .unwrap();
-
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            output.status.success(),
-            "stdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
+            output.status.success() && stdout.contains("1 passed"),
+            "stdout: {stdout}\nstderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
 
+    fn is_probe(probe: &str) -> bool {
+        std::env::var(PROBE_ENV).is_ok_and(|value| value == probe)
+    }
+
+    fn collect_from(roots: &[*mut u8]) {
+        let mut collection = heap::Collection::begin();
+        for &root in roots {
+            collection.add_root(root as usize);
+        }
+        collection.finish(1);
+    }
+
+    fn store_word(object: *mut u8, offset: usize, value: *mut u8) {
+        // SAFETY: tests store into words inside objects they allocated.
+        unsafe { object.add(offset).cast::<usize>().write(value as usize) };
+    }
+
+    fn count_finalization(_object: *mut u8) {
+        FINALIZED.fetch_add(1, Ordering::SeqCst);
+    }
+
     #[test]
-    fn automatic_collection_probe() {
-        if std::env::var_os("YAR_GC_TEST_PROBE").is_none() {
+    fn reclaims_unrooted_objects_and_keeps_transitively_reachable_ones() {
+        run_isolated("memory::tests::reachability_probe");
+    }
+
+    #[test]
+    fn reachability_probe() {
+        if !is_probe("memory::tests::reachability_probe") {
             return;
         }
+        let parent = alloc_words(32);
+        let child = alloc_bytes(8);
+        let garbage = alloc_bytes(8);
+        store_word(parent, 8, child);
 
+        collect_from(&[parent]);
+
+        assert!(heap::is_live(parent as usize));
+        assert!(heap::is_live(child as usize));
+        assert!(!heap::is_live(garbage as usize));
+    }
+
+    #[test]
+    fn interior_pointers_retain_their_enclosing_object() {
+        run_isolated("memory::tests::interior_pointer_probe");
+    }
+
+    #[test]
+    fn interior_pointer_probe() {
+        if !is_probe("memory::tests::interior_pointer_probe") {
+            return;
+        }
+        let small = alloc_bytes(64);
+        let large = alloc_bytes(3 * heap::PAGE_SIZE);
+
+        // SAFETY: both offsets lie inside the allocated objects.
+        let interior = unsafe { [small.add(63), large.add(2 * heap::PAGE_SIZE + 5)] };
+        collect_from(&interior);
+
+        assert!(heap::is_live(small as usize));
+        assert!(heap::is_live(large as usize));
+    }
+
+    #[test]
+    fn descriptors_limit_tracing_to_declared_pointer_words() {
+        run_isolated("memory::tests::descriptor_probe");
+    }
+
+    #[test]
+    fn descriptor_probe() {
+        if !is_probe("memory::tests::descriptor_probe") {
+            return;
+        }
+        let elements = allocate(32, SECOND_WORD.as_descriptor());
+        let ignored = alloc_bytes(8);
+        let first_traced = alloc_bytes(8);
+        let second_traced = alloc_bytes(8);
+        store_word(elements, 0, ignored);
+        store_word(elements, 8, first_traced);
+        store_word(elements, 24, second_traced);
+        let bytes = alloc_bytes(8);
+        let behind_bytes = alloc_bytes(8);
+        store_word(bytes, 0, behind_bytes);
+
+        collect_from(&[elements, bytes]);
+
+        assert!(heap::is_live(first_traced as usize));
+        assert!(heap::is_live(second_traced as usize));
+        assert!(!heap::is_live(ignored as usize));
+        assert!(!heap::is_live(behind_bytes as usize));
+    }
+
+    #[test]
+    fn finalizers_run_once_when_their_object_becomes_unreachable() {
+        run_isolated("memory::tests::finalizer_probe");
+    }
+
+    #[test]
+    fn finalizer_probe() {
+        if !is_probe("memory::tests::finalizer_probe") {
+            return;
+        }
+        let kept = alloc_finalized(8, ptr::null(), count_finalization);
+        alloc_finalized(8, ptr::null(), count_finalization);
+
+        collect_from(&[kept]);
+        assert_eq!(FINALIZED.load(Ordering::SeqCst), 1);
+        collect_from(&[kept]);
+        assert_eq!(FINALIZED.load(Ordering::SeqCst), 1);
+
+        collect_from(&[]);
+        assert_eq!(FINALIZED.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn reclaimed_slots_are_reused_zeroed() {
+        run_isolated("memory::tests::reuse_probe");
+    }
+
+    #[test]
+    fn reuse_probe() {
+        if !is_probe("memory::tests::reuse_probe") {
+            return;
+        }
+        let first = alloc_bytes(16);
+        // SAFETY: first points to 16 writable bytes.
+        unsafe { first.write_bytes(0xAB, 16) };
+        collect_from(&[]);
+
+        let reused = alloc_bytes(16);
+
+        assert_eq!(reused, first);
+        // SAFETY: reused points to 16 readable bytes.
+        assert_eq!(unsafe { std::slice::from_raw_parts(reused, 16) }, &[0; 16]);
+    }
+
+    #[test]
+    fn stop_the_world_scans_the_stacks_of_blocked_threads() {
+        run_isolated("memory::tests::blocked_thread_probe");
+    }
+
+    #[test]
+    fn blocked_thread_probe() {
+        if !is_probe("memory::tests::blocked_thread_probe") {
+            return;
+        }
         let mut stack_top = 0_u8;
-        init_stack_top(&mut stack_top);
-        let survivor = super::super::yar_alloc_zeroed(32);
+        init_main_thread(&mut stack_top);
+        let signal = Arc::new((Mutex::new(0_usize), Condvar::new()));
+        let worker_signal = Arc::clone(&signal);
+        let worker = std::thread::spawn(move || {
+            let mut worker_top = 0_u8;
+            let _registration = register_current_thread(std::hint::black_box(&mut worker_top));
+            let object = std::hint::black_box(alloc_bytes(8));
+            let (lock, changed) = &*worker_signal;
+            let mut state = lock.lock().unwrap();
+            *state = object as usize;
+            changed.notify_all();
+            while *state != 0 {
+                state = wait(changed, lock, state);
+            }
+            std::hint::black_box(object);
+        });
+        let (lock, changed) = &*signal;
+        let object = {
+            let mut state = lock.lock().unwrap();
+            while *state == 0 {
+                state = changed.wait(state).unwrap();
+            }
+            let object = *state;
+            *state = 1;
+            object
+        };
+
+        collect();
+
+        assert!(heap::is_live(object));
+        *lock.lock().unwrap() = 0;
+        changed.notify_all();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn allocation_pressure_triggers_collection() {
+        run_isolated("memory::tests::allocation_pressure_probe");
+    }
+
+    #[test]
+    fn allocation_pressure_probe() {
+        if !is_probe("memory::tests::allocation_pressure_probe") {
+            return;
+        }
+        let mut stack_top = 0_u8;
+        init_main_thread(&mut stack_top);
+        let survivor = std::hint::black_box(alloc_bytes(32));
+        // SAFETY: survivor points to 32 writable bytes.
         unsafe { survivor.write(73) };
 
-        const ALLOCATIONS: usize = 512;
-        const ALLOCATION_SIZE: usize = 256;
-        for value in 0..ALLOCATIONS {
-            let garbage = super::super::yar_alloc(ALLOCATION_SIZE as i64);
-            unsafe { garbage.write(value as u8) };
-            std::hint::black_box(garbage);
+        for _ in 0..4096 {
+            std::hint::black_box(alloc_bytes(256));
         }
 
+        let (collections, live_bytes) = heap::stats();
+        assert!(collections > 0, "automatic collection never ran");
+        assert!(live_bytes < 4096 * 256, "live bytes {live_bytes}");
+        // SAFETY: survivor stays rooted by this frame.
         assert_eq!(unsafe { survivor.read() }, 73);
-        let heap = heap().lock().unwrap_or_else(|err| err.into_inner());
-        assert!(heap.collections > 0, "automatic collection never ran");
-        assert!(
-            heap.live_bytes < ALLOCATIONS * ALLOCATION_SIZE,
-            "automatic collection did not reduce live bytes: {}",
-            heap.live_bytes
-        );
     }
 }

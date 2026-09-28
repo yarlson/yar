@@ -1,6 +1,6 @@
 format = 1
 target = "aarch64-apple-darwin"
-runtime_abi = 4
+runtime_abi = 5
 compiler_compatibility = 1
 archive = "libyar_runtime.a"
 

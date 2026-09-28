@@ -1,5 +1,6 @@
 use std::ptr;
 
+use crate::memory::{self, StaticDescriptor};
 use crate::{YarSlice, YarStr};
 
 const INIT_CAP: i32 = 8;
@@ -7,6 +8,9 @@ const LOAD_NUM: i64 = 3;
 const LOAD_DEN: i64 = 4;
 
 const KEY_STR: i32 = 3;
+const SLOT_ALIGN: i32 = size_of::<usize>() as i32;
+
+static MAP_DESCRIPTOR: StaticDescriptor<1> = StaticDescriptor::new(size_of::<RuntimeMap>(), [0]);
 
 #[repr(C)]
 struct RuntimeMap {
@@ -15,6 +19,7 @@ struct RuntimeMap {
     cap: i32,
     key_size: i32,
     value_size: i32,
+    value_offset: i32,
     bucket_size: i32,
     key_kind: i32,
 }
@@ -24,14 +29,17 @@ pub(crate) fn new(key_kind: i32, key_size: i32, value_size: i32) -> *mut u8 {
         super::runtime_fail(b"runtime failure: invalid map layout\n");
     }
 
-    let Some(bucket_size) = 1_i32
-        .checked_add(key_size)
-        .and_then(|size| size.checked_add(value_size))
+    let Some((value_offset, bucket_size)) = aligned_slot_end(SLOT_ALIGN, key_size)
+        .and_then(|value_offset| Some((value_offset, aligned_slot_end(value_offset, value_size)?)))
     else {
         super::runtime_fail(b"runtime failure: invalid map layout\n");
     };
 
-    let map = super::yar_alloc_zeroed(size_of::<RuntimeMap>() as i64).cast::<RuntimeMap>();
+    let map = memory::alloc(
+        size_of::<RuntimeMap>() as i64,
+        MAP_DESCRIPTOR.as_descriptor(),
+    )
+    .cast::<RuntimeMap>();
     // SAFETY: map points to writable runtime-managed memory sized for RuntimeMap.
     unsafe {
         ptr::write(
@@ -42,6 +50,7 @@ pub(crate) fn new(key_kind: i32, key_size: i32, value_size: i32) -> *mut u8 {
                 cap: INIT_CAP,
                 key_size,
                 value_size,
+                value_offset,
                 bucket_size,
                 key_kind,
             },
@@ -78,7 +87,7 @@ pub(crate) fn get(map_ptr: *mut u8, key: *const u8, value_out: *mut u8) -> i32 {
             return 0;
         }
         ptr::copy_nonoverlapping(
-            bucket.add(1 + (*map).key_size as usize),
+            bucket.add((*map).value_offset as usize),
             value_out,
             (*map).value_size as usize,
         );
@@ -129,8 +138,8 @@ pub(crate) fn delete(map_ptr: *mut u8, key: *const u8) {
             (*map).count -= 1;
             insert_existing(
                 map,
-                saved.as_ptr().add(1),
-                saved.as_ptr().add(1 + (*map).key_size as usize),
+                saved.as_ptr().add(SLOT_ALIGN as usize),
+                saved.as_ptr().add((*map).value_offset as usize),
             );
             idx = (idx + 1) & mask;
         }
@@ -156,7 +165,7 @@ pub(crate) fn keys(map_ptr: *mut u8) -> YarSlice {
         }
 
         let total_size = i64::from((*map).count) * i64::from((*map).key_size);
-        let out = super::yar_alloc(total_size);
+        let out = memory::alloc_words(total_size as usize);
         let mut copied = 0_i32;
         for idx in 0..(*map).cap {
             let bucket = bucket_at(map, idx);
@@ -164,7 +173,7 @@ pub(crate) fn keys(map_ptr: *mut u8) -> YarSlice {
                 continue;
             }
             ptr::copy_nonoverlapping(
-                bucket.add(1),
+                bucket.add(SLOT_ALIGN as usize),
                 out.add((copied * (*map).key_size) as usize),
                 (*map).key_size as usize,
             );
@@ -188,7 +197,14 @@ fn checked_map(map_ptr: *mut u8) -> *mut RuntimeMap {
 
 fn alloc_entries(cap: i32, bucket_size: i32) -> *mut u8 {
     let total_size = i64::from(cap) * i64::from(bucket_size);
-    super::yar_alloc_zeroed(total_size)
+    memory::alloc_words(total_size as usize)
+}
+
+fn aligned_slot_end(offset: i32, size: i32) -> Option<i32> {
+    offset
+        .checked_add(size)?
+        .checked_add(SLOT_ALIGN - 1)
+        .map(|end| end / SLOT_ALIGN * SLOT_ALIGN)
 }
 
 unsafe fn grow(map: *mut RuntimeMap) {
@@ -206,7 +222,11 @@ unsafe fn grow(map: *mut RuntimeMap) {
             if *bucket == 0 {
                 continue;
             }
-            insert_existing(map, bucket.add(1), bucket.add(1 + (*map).key_size as usize));
+            insert_existing(
+                map,
+                bucket.add(SLOT_ALIGN as usize),
+                bucket.add((*map).value_offset as usize),
+            );
         }
     }
 }
@@ -216,12 +236,16 @@ unsafe fn insert_existing(map: *mut RuntimeMap, key: *const u8, value: *const u8
     unsafe {
         if !found {
             *bucket = 1;
-            ptr::copy_nonoverlapping(key, bucket.add(1), (*map).key_size as usize);
+            ptr::copy_nonoverlapping(
+                key,
+                bucket.add(SLOT_ALIGN as usize),
+                (*map).key_size as usize,
+            );
             (*map).count += 1;
         }
         ptr::copy_nonoverlapping(
             value,
-            bucket.add(1 + (*map).key_size as usize),
+            bucket.add((*map).value_offset as usize),
             (*map).value_size as usize,
         );
     }
@@ -238,7 +262,7 @@ unsafe fn find_slot(map: *mut RuntimeMap, key: *const u8) -> (*mut u8, bool) {
             if *bucket == 0 {
                 return (bucket, false);
             }
-            if keys_equal(map, bucket.add(1), key) {
+            if keys_equal(map, bucket.add(SLOT_ALIGN as usize), key) {
                 return (bucket, true);
             }
         }

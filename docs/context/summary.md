@@ -58,7 +58,7 @@
 - Sort `[]str`, `[]i32`, and `[]i64` in place through the stdlib `sort` package.
 - Support loops and branch-based control flow, including short-circuit boolean logic.
 - Expose one runtime-managed allocation boundary for slices, maps, pointers, and other heap-backed features.
-- Reclaim unreachable managed heap storage with a conservative non-moving collector; no user-visible lifetime or deallocation syntax exists.
+- Reclaim unreachable managed heap storage with a non-moving, parallel-marking collector that traces heap objects precisely, scans every task stack conservatively, and collects while tasks run; no user-visible lifetime or deallocation syntax exists.
 - Read and write text files, inspect directories, create temporary directories, and manipulate host paths from Yar programs.
 - Stream file and TCP connection data through shared `io.Reader`, `io.Writer`, and `io.Closer` interfaces.
 - Serve bounded HTTP/1.1 connections with strict incremental framing, fixed

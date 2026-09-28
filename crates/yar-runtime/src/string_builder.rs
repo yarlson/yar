@@ -40,21 +40,22 @@ pub(crate) fn string(handle: i64) -> YarStr {
     let Some(handle) = handle_registry::string_builder(handle) else {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
     };
-    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(builder) = state.as_mut() else {
-        super::runtime_fail(b"runtime failure: invalid string builder\n");
+    let contents = {
+        let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
+        let Some(builder) = state.as_mut() else {
+            super::runtime_fail(b"runtime failure: invalid string builder\n");
+        };
+        std::mem::take(builder)
     };
-    let value = copy_to_runtime_string(builder);
-    builder.clear();
-    value
+    copy_to_runtime_string(&contents)
 }
 
 pub(crate) fn finish(handle: i64) -> YarStr {
     let Some(handle) = handle_registry::remove_string_builder(handle) else {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
     };
-    let mut state = handle.lock().unwrap_or_else(|err| err.into_inner());
-    let Some(builder) = state.take() else {
+    let contents = handle.lock().unwrap_or_else(|err| err.into_inner()).take();
+    let Some(builder) = contents else {
         super::runtime_fail(b"runtime failure: invalid string builder\n");
     };
     copy_to_runtime_string(&builder)
@@ -80,7 +81,7 @@ fn copy_to_runtime_string(builder: &[u8]) -> YarStr {
 
     let len = i64::try_from(builder.len())
         .unwrap_or_else(|_| super::runtime_fail(b"runtime failure: invalid string length\n"));
-    let buf = super::yar_alloc(len);
+    let buf = super::memory::alloc_bytes(builder.len());
     // SAFETY: buf points to builder.len() writable bytes allocated above.
     unsafe {
         ptr::copy_nonoverlapping(builder.as_ptr(), buf, builder.len());

@@ -120,10 +120,12 @@ $ yar run squares.yar
 - Structured concurrency uses `taskgroup` for scoped spawning and `chan[T]`
   for bounded FIFO communication.
 - The runtime owns heap allocation and reclaims unreachable managed storage
-  with a conservative non-moving collector. There is no manual `free` or
-  user-visible collection API.
-- `YAR_GC_HEAP_TARGET_BYTES` overrides the initial 1 MiB collection threshold;
-  it is primarily a runtime-testing and tuning control.
+  with a non-moving collector. It traces heap objects precisely, scans thread
+  stacks conservatively, marks in parallel on large heaps, and keeps
+  collecting while tasks run. There is no manual `free` or user-visible
+  collection API.
+- `YAR_GC_HEAP_TARGET_BYTES` overrides the minimum 4 MiB allocation budget
+  between collections; it is primarily a runtime-testing and tuning control.
 - The compiler produces LLVM IR and native executables through `clang`.
   There is no interpreter and no VM.
 - The standard library is written in Yar and compiled through the same pipeline
