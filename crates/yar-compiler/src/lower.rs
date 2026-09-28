@@ -827,7 +827,13 @@ impl<'a> PackageLowerer<'a> {
         type_params: Option<&BTreeSet<String>>,
     ) -> Expression {
         match expr {
-            Expression::Ident(expr) => Expression::Ident(expr.clone()),
+            Expression::Ident(expr) => {
+                if self.local_is_visible(&expr.name) {
+                    return Expression::Ident(expr.clone());
+                }
+                self.function_value(package, &expr.name, &expr.name_pos)
+                    .unwrap_or_else(|| Expression::Ident(expr.clone()))
+            }
             Expression::Int(expr) => Expression::Int(expr.clone()),
             Expression::Char(expr) => Expression::Char(expr.clone()),
             Expression::String(expr) => Expression::String(expr.clone()),
@@ -888,6 +894,9 @@ impl<'a> PackageLowerer<'a> {
             })),
             Expression::Selector(expr) => {
                 if let Some(rewritten) = self.rewrite_enum_case_selector(package, expr) {
+                    return rewritten;
+                }
+                if let Some(rewritten) = self.rewrite_imported_function_value(package, expr) {
                     return rewritten;
                 }
                 if let Some(rewritten) = self.rewrite_imported_error(package, expr) {
@@ -992,6 +1001,105 @@ impl<'a> PackageLowerer<'a> {
             }
             Expression::Missing(pos) => Expression::Missing(pos.clone()),
         }
+    }
+
+    fn rewrite_imported_function_value(
+        &mut self,
+        package: &Package,
+        expr: &SelectorExpr,
+    ) -> Option<Expression> {
+        let Expression::Ident(qualifier) = &expr.inner else {
+            return None;
+        };
+        if self.local_is_visible(&qualifier.name) {
+            return None;
+        }
+        let target = self.import_target(package, &qualifier.name)?;
+        let visibility = *self.functions.get(&target.id)?.get(&expr.name)?;
+        if !visibility.exported {
+            self.diag.add(
+                expr.name_pos.clone(),
+                format!(
+                    "package {:?} does not export function {:?}",
+                    target.name, expr.name
+                ),
+            );
+        } else if let Some(value) = self.function_value(target, &expr.name, &expr.name_pos) {
+            return Some(value);
+        }
+        Some(Expression::Ident(Box::new(IdentExpr {
+            name: expr.name.clone(),
+            name_pos: expr.name_pos.clone(),
+        })))
+    }
+
+    fn function_value(
+        &mut self,
+        owner: &Package,
+        name: &str,
+        pos: &Position,
+    ) -> Option<Expression> {
+        if name == "main" && owner.id == self.graph.entry {
+            return None;
+        }
+        let decl = owner
+            .functions
+            .iter()
+            .find(|decl| decl.receiver.is_none() && decl.name == name)?;
+        let return_type = decl.return_type.to_string();
+        if !decl.type_params.is_empty() || return_type == "noreturn" {
+            let kind = if return_type == "noreturn" {
+                "noreturn"
+            } else {
+                "generic"
+            };
+            self.diag.add(
+                pos.clone(),
+                format!("{kind} function {name:?} cannot be used as a value"),
+            );
+            return None;
+        }
+        let call = Expression::Call(Box::new(CallExpr {
+            callee: Expression::Ident(Box::new(IdentExpr {
+                name: canonical_decl_name(&self.graph.entry, owner, name),
+                name_pos: pos.clone(),
+            })),
+            args: (0..decl.params.len())
+                .map(|index| {
+                    Expression::Ident(Box::new(IdentExpr {
+                        name: forwarded_param_name(index),
+                        name_pos: pos.clone(),
+                    }))
+                })
+                .collect(),
+        }));
+        let body = if return_type == "void" && !decl.return_is_bang {
+            Statement::Expr(Box::new(ExprStmt { expr: call }))
+        } else {
+            Statement::Return(Box::new(ReturnStmt {
+                return_pos: pos.clone(),
+                value: Some(call),
+            }))
+        };
+        Some(Expression::FunctionLiteral(Box::new(FunctionLiteralExpr {
+            fn_pos: pos.clone(),
+            enclosing_function: String::new(),
+            params: self
+                .lower_params(owner, &decl.params, None)
+                .into_iter()
+                .enumerate()
+                .map(|(index, param)| Param {
+                    name: forwarded_param_name(index),
+                    ..param
+                })
+                .collect(),
+            return_type: self.rewrite_type_ref(owner, &decl.return_type, None),
+            return_is_bang: decl.return_is_bang,
+            body: BlockStmt {
+                lbrace: pos.clone(),
+                stmts: vec![body],
+            },
+        })))
     }
 
     fn rewrite_local_error(&mut self, package: &Package, expr: &ErrorLiteral) -> Expression {
@@ -1281,7 +1389,7 @@ impl<'a> PackageLowerer<'a> {
             .is_some_and(|decl| decl.exported)
     }
 
-    fn import_target(&self, package: &Package, import_name: &str) -> Option<&Package> {
+    fn import_target(&self, package: &Package, import_name: &str) -> Option<&'a Package> {
         let id = self.imports.get(&package.id)?.get(import_name)?;
         self.graph.packages.get(id)
     }
@@ -1298,6 +1406,10 @@ impl<'a> PackageLowerer<'a> {
             .rev()
             .any(|scope| scope.contains(name))
     }
+}
+
+fn forwarded_param_name(index: usize) -> String {
+    format!("arg{index}")
 }
 
 fn selector_path(expr: &Expression) -> Option<(Vec<String>, Vec<Position>)> {
@@ -1515,6 +1627,58 @@ error HiddenFailure
             messages.contains(&"package \"dependency\" does not declare error \"UnknownFailure\"")
         );
         assert!(messages.contains(&"error \"UnknownLocal\" is not declared in package \"main\""));
+    }
+
+    #[test]
+    fn rejects_function_values_that_cannot_be_forwarded() {
+        let entry_id = PackageId::default();
+        let dependency_id = PackageId {
+            source: SourceId::Path {
+                manifest_path: "/tmp/dependency/yar.toml".to_owned(),
+            },
+            subpath: String::new(),
+        };
+        let (entry_program, entry_diagnostics) = parse(
+            r#"package main
+
+import "dependency"
+
+fn pick[T](value T) T { return value }
+fn stop() noreturn { panic("stop") }
+
+fn main() i32 {
+    hidden := dependency.hidden
+    generic := pick
+    halt := stop
+    return 0
+}
+"#,
+        );
+        let (dependency_program, dependency_diagnostics) = parse(
+            r#"package dependency
+
+fn hidden() i32 { return 1 }
+"#,
+        );
+        assert_eq!(entry_diagnostics, Vec::new());
+        assert_eq!(dependency_diagnostics, Vec::new());
+
+        let graph =
+            graph_with_dependency(entry_id, dependency_id, entry_program, dependency_program);
+        let (_, diagnostics) = lower_package_graph(&graph);
+        let messages = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages,
+            vec![
+                "package \"dependency\" does not export function \"hidden\"",
+                "generic function \"pick\" cannot be used as a value",
+                "noreturn function \"stop\" cannot be used as a value",
+            ]
+        );
     }
 
     fn graph_with_dependency(

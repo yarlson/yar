@@ -1278,8 +1278,9 @@ any architecture without dedicated assembly.
 ### GC modifications for multi-task scanning
 
 This subsection records the deferred M:N scheduler design, not shipped runtime
-behavior. The current native-thread baseline defers collection while any
-spawned result is unjoined; it does not pause or scan worker threads.
+behavior. The native-thread baseline now collects while tasks run by stopping
+every registered thread and scanning its stack; proposal 0017 records that
+collector design.
 
 **Deferred M:N decision**: follow the Boehm GC multi-thread model —
 stop-the-world across all OS threads, scan all task stacks, then resume.

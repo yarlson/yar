@@ -60,6 +60,43 @@ fn parse_absolute_target(target str) !str {
     return authority
 }
 
+fn target_path(target str) str {
+    path := target
+    if len(target) > 0 && target[0] != '/' && target != "*" {
+        path = absolute_target_path(target)
+    }
+    query := strings.index(path, "?")
+    if query >= 0 {
+        return path[0:query]
+    }
+    return path
+}
+
+fn absolute_target_path(target str) str {
+    colon := strings.index(target, ":")
+    remainder := target[colon + 1:]
+    if !strings.has_prefix(remainder, "//") {
+        return remainder
+    }
+    for i := 2; i < len(remainder); i += 1 {
+        if remainder[i] == '/' {
+            return remainder[i:]
+        }
+        if remainder[i] == '?' {
+            return "/" + remainder[i:]
+        }
+    }
+    return "/"
+}
+
+fn target_query(target str) str {
+    query := strings.index(target, "?")
+    if query < 0 {
+        return ""
+    }
+    return target[query + 1:]
+}
+
 fn valid_origin_target(target str) bool {
     return valid_path_query(target, true)
 }

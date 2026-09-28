@@ -958,6 +958,10 @@ fn mark_stdlib_metadata(import_path: &str, program: &mut Program) {
                     | "set_write_deadline_after"
                     | "resolve"
             ),
+            "time" => matches!(
+                function.name.as_str(),
+                "now_unix_nanoseconds" | "instant_nanoseconds" | "sleep_nanoseconds"
+            ),
             _ => false,
         };
     }
@@ -991,8 +995,16 @@ fn stdlib_entries(import_path: &str) -> Option<&'static [(&'static str, &'static
                 "response.yar",
                 include_str!("../../../stdlib/packages/http/response.yar"),
             ),
+            (
+                "router.yar",
+                include_str!("../../../stdlib/packages/http/router.yar"),
+            ),
         ]),
         "io" => Some(&[("io.yar", include_str!("../../../stdlib/packages/io/io.yar"))]),
+        "json" => Some(&[(
+            "json.yar",
+            include_str!("../../../stdlib/packages/json/json.yar"),
+        )]),
         "net" => Some(&[(
             "net.yar",
             include_str!("../../../stdlib/packages/net/net.yar"),
@@ -1020,6 +1032,14 @@ fn stdlib_entries(import_path: &str) -> Option<&'static [(&'static str, &'static
         "testing" => Some(&[(
             "testing.yar",
             include_str!("../../../stdlib/packages/testing/testing.yar"),
+        )]),
+        "time" => Some(&[(
+            "time.yar",
+            include_str!("../../../stdlib/packages/time/time.yar"),
+        )]),
+        "url" => Some(&[(
+            "url.yar",
+            include_str!("../../../stdlib/packages/url/url.yar"),
         )]),
         "utf8" => Some(&[(
             "utf8.yar",

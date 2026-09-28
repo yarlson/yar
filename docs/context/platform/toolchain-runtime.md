@@ -407,6 +407,21 @@ long long b_len, YarStr *out)` allocates and writes a new string containing the
   operation-local timeouts. Windows runtime bundles include `ws2_32` in the
   Rust static library's ordered native-library contract.
 
+### Time Runtime
+
+- `yar_time_now_unix_nanoseconds(int64_t *out)` reads the wall clock as signed
+  Unix nanoseconds and returns status `0`, or `1` when the value does not fit
+  `i64`. A null output pointer is a runtime failure.
+- `yar_time_instant_nanoseconds(void)` returns monotonic nanoseconds since a
+  process-local origin that is initialized thread-safely on first use; range
+  exhaustion terminates with `runtime failure: monotonic clock range
+  exhausted`.
+- `yar_time_sleep_nanoseconds(int64_t nanoseconds)` blocks the calling native
+  thread for at least the span and returns `0`, or `2` for a negative span.
+- Status codes map in code generation to `time.Overflow` and
+  `time.InvalidArgument`. The implementation uses Rust `SystemTime`,
+  `Instant`, and `thread::sleep`.
+
 ### Map Runtime
 
 - `yar_map_new(int32_t key_kind, int32_t key_size, int32_t value_size)`

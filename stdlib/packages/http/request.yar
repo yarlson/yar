@@ -2,6 +2,7 @@ package http
 
 import "std/net"
 import "std/strings"
+import "std/url"
 
 pub struct Header {
     pub name str
@@ -13,6 +14,7 @@ pub struct Request {
     pub target str
     pub headers []Header
     pub body str
+    pub path_values []url.Param
 }
 
 struct HeadRead {
@@ -64,6 +66,14 @@ pub fn (r Request) header_values(name str) ![]str {
         }
     }
     return values
+}
+
+pub fn (r Request) path() str {
+    return target_path(r.target)
+}
+
+pub fn (r Request) query() !url.Query {
+    return url.parse_query(target_query(r.target))
 }
 
 fn read_request(conn net.Conn, limits Limits) !Request {

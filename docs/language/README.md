@@ -55,7 +55,7 @@ their status does not prove implementation.
 | 0021 | [Cross-Platform Build and Runtime](proposals/0021-cross-platform-build.md) | accepted | implemented |
 | 0022 | [Dependency Management](proposals/0022-dependency-management.md) | accepted | implemented |
 | 0023 | [TCP Networking](proposals/0023-tcp-networking.md) | accepted | implemented |
-| 0024 | [Time Values and UTC](proposals/0024-time.md) | proposed | not started |
+| 0024 | [Time Values and UTC](proposals/0024-time.md) | accepted | implemented |
 | 0025 | [Structured Concurrency](proposals/0025-concurrency.md) | accepted | implemented |
 | 0026 | [Bounded HTTP/1.1 Server](proposals/0026-http-server.md) | accepted | implemented |
 | 0027 | [HTTP Routing](proposals/0027-http-routing.md) | withdrawn | removed |
@@ -63,3 +63,7 @@ their status does not prove implementation.
 | 0029 | [Struct Field Visibility and Package-Owned Construction](proposals/0029-struct-field-visibility.md) | accepted | implemented |
 | 0030 | [Package-Owned Error Declarations and Identity](proposals/0030-package-owned-errors.md) | accepted | implemented |
 | 0031 | [Package-Relative Implicit Zero Initialization](proposals/0031-implicit-zero-initialization.md) | accepted | implemented |
+| 0032 | [Named Functions as Values](proposals/0032-named-function-values.md) | accepted | implemented |
+| 0033 | [URL Encoding and Query Parsing](proposals/0033-url-package.md) | accepted | implemented |
+| 0034 | [HTTP Routing on the Bounded Server](proposals/0034-http-routing.md) | accepted | implemented |
+| 0035 | [JSON Values](proposals/0035-json-package.md) | accepted | implemented |

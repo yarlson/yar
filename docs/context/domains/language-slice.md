@@ -120,6 +120,9 @@
   types are not supported.
 - Function literals declare explicit parameter and return types.
 - Function literals capture outer locals lexically by value.
+- Non-generic, non-`noreturn` top-level functions (and exported `pkg.name`
+  functions) are values; package lowering rewrites each reference into a
+  capture-free forwarding literal. Locals shadow function names.
 - Captured outer locals are readable inside closures but are not assignable
   through the closure body in the current implementation.
 - Methods are allowed only on named local struct types or pointers to named
@@ -328,8 +331,8 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 ## Standard Library Surface
 
 - Embedded stdlib packages currently include `strings`, `utf8`, `conv`, `sort`,
-  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, and
-  `testing`.
+  `path`, `fs`, `io`, `process`, `env`, `stdio`, `net`, `http`, `url`,
+  `json`, `time`, and `testing`.
 - `sort` currently still provides in-place ascending helpers:
   `strings([]str)`, `i32s([]i32)`, and `i64s([]i64)`.
 - `path` is pure Yar code and provides `clean`, `join`, `dir`, `base`, and
@@ -362,7 +365,13 @@ package (`conv.byte_to_str`, `conv.to_i64`, `conv.to_i32`).
 - `http` provides bounded HTTP/1.1 server connections over `net`. The package
   incrementally parses strict request framing, applies fixed exchange
   deadlines, validates response headers, and leaves accept loops and
-  concurrency explicit in user code.
+  concurrency explicit in user code. Its router adds method-aware path
+  patterns with decoded parameters, `404`/`405` handling, and conflict checks.
+- `url` provides percent-encoding and ordered form-query parsing.
+- `json` provides a public `Value` enum with strict parsing, validated compact
+  encoding, and typed accessors.
+- `time` provides nominal wall-clock, monotonic, and duration values, checked
+  arithmetic, sleep, strict UTC calendar conversion, and RFC 3339 text.
 - Host process/environment failures surface through ordinary `error` values
   using stable names: `NotFound`, `PermissionDenied`, `InvalidArgument`, and
   `IO`.

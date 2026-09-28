@@ -120,6 +120,8 @@
   indices, dereferences, and map elements.
 - Methods are syntax over ordinary functions with an explicit receiver
   parameter.
+- Named function values lower in `lower.rs` to capture-free forwarding
+  literals, so the checker and codegen only handle closures.
 - Function literals have explicit function types and lower to closure values
   carrying a code pointer plus an optional captured environment.
 - `taskgroup` is an expression, `spawn` is a statement valid only inside a

@@ -16,18 +16,6 @@ deferred, or withdrawn rationale, use [`decisions.md`](decisions.md) and the
 - Implemented or removed work leaves this roadmap; history remains in proposals,
   decisions, and version control.
 
-## Active proposed work
-
-### Time values and UTC
-
-Proposal [0024](proposals/0024-time.md) explores distinct timestamp, monotonic
-instant, and duration values with a deliberately small UTC-first standard
-library. It remains proposed and not started.
-
-Before acceptance it must retain clear type separation, platform semantics,
-overflow behavior, textual formats, and tests that do not depend on mutable
-process-global timezone state.
-
 ## Future candidates
 
 These are possible directions, not commitments:
@@ -41,8 +29,8 @@ These are possible directions, not commitments:
   smaller data-modeling feature cannot solve the same programs;
 - richer data modeling only when concrete programs expose a gap not solved by
   current structs, enums, interfaces, and generics;
-- HTTP routing, clients, TLS, keep-alive, or streaming bodies only through
-  separate proposals grounded in the bounded server connection API;
+- HTTP clients, TLS, keep-alive, or streaming bodies only through separate
+  proposals grounded in the bounded server connection API;
 - additional standard-library capabilities driven by real compiler or tooling
   pressure;
 - carefully scoped diagnostics and developer-experience improvements.

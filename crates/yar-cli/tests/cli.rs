@@ -1424,6 +1424,120 @@ fn main() !i32 {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn todo_api_example_serves_json_crud_over_http() {
+    use std::net::TcpListener;
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let dir = temp_dir("yar-cli-todo-api");
+    let runtime_bundle = build_runtime_bundle(&dir);
+    let program = dir.join("todo-api");
+    let build = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args([
+            "build",
+            repo_root()
+                .join("examples/todo_api/main.yar")
+                .to_str()
+                .unwrap(),
+            "-o",
+            program.to_str().unwrap(),
+        ])
+        .env("YAR_RUNTIME_BUNDLE", &runtime_bundle)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let child = Command::new(&program)
+        .env("PORT", port.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _child = TestChild::new(child);
+
+    let exchange = |method: &str, path: &str, body: &str| {
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        http_exchange(port, &[request.as_bytes()], Duration::ZERO)
+    };
+    let expect = |method: &str, path: &str, body: &str, status: &str, response_body: &str| {
+        let response = exchange(method, path, body);
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status} \r\n")),
+            "{method} {path}: {response:?}"
+        );
+        assert!(
+            response.ends_with(&format!("\r\n\r\n{response_body}")),
+            "{method} {path}: {response:?}"
+        );
+    };
+
+    expect("GET", "/todos", "", "200", "[]");
+    expect(
+        "POST",
+        "/todos",
+        r#"{"title":"write docs"}"#,
+        "201",
+        r#"{"id":1,"title":"write docs","done":false}"#,
+    );
+    expect(
+        "POST",
+        "/todos",
+        r#"{"title":"ship é"}"#,
+        "201",
+        "{\"id\":2,\"title\":\"ship \u{e9}\",\"done\":false}",
+    );
+    expect(
+        "POST",
+        "/todos",
+        r#"{"name":"x"}"#,
+        "400",
+        r#"{"error":"body must be {\"title\": \"...\"}"}"#,
+    );
+    expect(
+        "PATCH",
+        "/todos/1",
+        r#"{"done":true}"#,
+        "200",
+        r#"{"id":1,"title":"write docs","done":true}"#,
+    );
+    expect("DELETE", "/todos/2", "", "204", "");
+    expect(
+        "DELETE",
+        "/todos/2",
+        "",
+        "404",
+        r#"{"error":"todo not found"}"#,
+    );
+    expect(
+        "GET",
+        "/todos",
+        "",
+        "200",
+        r#"[{"id":1,"title":"write docs","done":true}]"#,
+    );
+    expect("GET", "/todos/abc", "", "400", r#"{"error":"invalid id"}"#);
+    expect("GET", "/missing", "", "404", "");
+
+    let not_allowed = exchange("PUT", "/todos", "");
+    assert!(
+        not_allowed.starts_with("HTTP/1.1 405 \r\n")
+            && not_allowed.contains("\r\nallow: GET, HEAD, POST\r\n"),
+        "{not_allowed:?}"
+    );
+}
+
 #[test]
 fn http_opaque_values_cannot_be_fabricated_outside_the_package() {
     let dir = temp_dir("yar-cli-http-private-values");
@@ -1463,6 +1577,45 @@ fn main() i32 {
             )),
             "stderr: {stderr}"
         );
+    }
+}
+
+#[test]
+fn time_domains_cannot_be_mixed_or_forged() {
+    let dir = temp_dir("yar-cli-time-domains");
+    let source = dir.join("main.yar");
+    fs::write(
+        &source,
+        r#"package main
+
+import "std/time"
+
+fn main() !i32 {
+    start := time.instant()
+    stamp := time.now()?
+    time.sleep(stamp)?
+    span := time.instant_difference(start, stamp)?
+    forged := time.Timestamp{}
+    var zero time.Duration
+    return 0
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_yar"))
+        .args(["check", source.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for message in [
+        "argument 1 to \"time.sleep\" must be time.Duration, got time.Timestamp",
+        "argument 2 to \"time.instant_difference\" must be time.Instant, got time.Timestamp",
+        "struct literal for \"time.Timestamp\" is not allowed outside package \"time\" because it has package-private fields",
+        "local \"zero\" requires an initializer because type \"time.Duration\" has no accessible zero value",
+    ] {
+        assert!(stderr.contains(message), "stderr: {stderr}");
     }
 }
 
